@@ -12,6 +12,9 @@ public enum JukeBoxSetting
     CacheSizeGb,
     ShowFps,
     PreferredMirror,
+    RenderChart,
+    PlayHitSounds,
+    BackgroundDim,
 }
 
 public enum UiLayout
@@ -35,5 +38,8 @@ public class JukeBoxConfigManager : IniConfigManager<JukeBoxSetting>
         SetDefault(JukeBoxSetting.CacheSizeGb, 10.0);
         SetDefault(JukeBoxSetting.ShowFps, false);
         SetDefault(JukeBoxSetting.PreferredMirror, MirrorSource.Auto);
+        SetDefault(JukeBoxSetting.RenderChart, false);
+        SetDefault(JukeBoxSetting.PlayHitSounds, false);
+        SetDefault(JukeBoxSetting.BackgroundDim, 0.3, 0.0, 1.0);
     }
 }

@@ -69,6 +69,7 @@ public partial class NowPlayingBar : CompositeDrawable
     private bool settingProgress;
 
     private ProgressSliderBar progressBar = null!;
+    private DifficultySwitcher difficultySwitcher = null!;
     private IconButton playPauseButton = null!;
     private SpriteText statusText = null!;
     private SpriteText titleText = null!;
@@ -86,6 +87,11 @@ public partial class NowPlayingBar : CompositeDrawable
     /// a real mouse drag over it and observe its <c>Current</c>/<see cref="Drawable.IsDragged"/>.
     /// </summary>
     internal ProgressSliderBar ProgressBar => progressBar;
+
+    /// <summary>
+    /// Test-only access to the difficulty switcher (JukeBox.Game.Tests has InternalsVisibleTo).
+    /// </summary>
+    internal DifficultySwitcher DifficultySwitcher => difficultySwitcher;
 
     [BackgroundDependencyLoader]
     private void load()
@@ -176,6 +182,7 @@ public partial class NowPlayingBar : CompositeDrawable
                                 Font = FontUsage.Default.With(size: Theme.CaptionTextSize),
                                 Colour = Theme.TextTertiary,
                             },
+                            difficultySwitcher = new DifficultySwitcher(),
                         }
                     },
                     new FillFlowContainer

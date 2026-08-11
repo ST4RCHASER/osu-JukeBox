@@ -30,6 +30,12 @@ public partial class NowPlayingScreen : Screen
     // completes is allowed to swap in.
     private int generation;
 
+    // The (set, difficulty) pair the most recent rebuild was requested for — Current and
+    // SelectedOsuFile change as a pair on track swap, so without this the screen would rebuild
+    // the same visual stack twice back to back.
+    private CachedBeatmapSet? requestedSet;
+    private string? requestedOsuFile;
+
     [BackgroundDependencyLoader]
     private void load()
     {
@@ -39,20 +45,41 @@ public partial class NowPlayingScreen : Screen
     protected override void LoadComplete()
     {
         base.LoadComplete();
-        playbackController.Current.BindValueChanged(onCurrentChanged, true);
+        playbackController.Current.BindValueChanged(_ => rebuild(), true);
+        playbackController.SelectedOsuFile.BindValueChanged(_ => rebuild());
     }
 
-    private void onCurrentChanged(ValueChangedEvent<CachedBeatmapSet?> change)
+    private void rebuild()
     {
+        // BindValueChanged registrations on the controller's bindables outlive this screen (the
+        // controller is app-lifetime); once the screen is disposed its callbacks must be inert.
+        if (IsDisposed)
+            return;
+
+        var set = playbackController.Current.Value;
+
+        // A SelectedOsuFile value from another set (transient state mid-swap, or stale) falls
+        // back to the set's own preferred difficulty.
+        string? selected = playbackController.SelectedOsuFile.Value;
+        string? file = set != null && selected != null && set.OsuFiles.Contains(selected)
+            ? selected
+            : set?.PreferredOsuFile;
+
+        if (set == requestedSet && file == requestedOsuFile)
+            return;
+
+        requestedSet = set;
+        requestedOsuFile = file;
+
         int myGeneration = ++generation;
 
-        if (change.NewValue == null)
+        if (set == null)
         {
             swapIn(myGeneration, null);
             return;
         }
 
-        var visuals = new BeatmapVisuals(change.NewValue, playbackController.PlaybackClock)
+        var visuals = new BeatmapVisuals(set, playbackController.PlaybackClock, file)
         {
             RelativeSizeAxes = Axes.Both,
         };

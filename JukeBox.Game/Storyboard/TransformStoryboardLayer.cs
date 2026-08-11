@@ -51,6 +51,7 @@ public partial class TransformStoryboardLayer : CompositeDrawable
     public override bool RemoveCompletedTransforms => false;
 
     private readonly CachedBeatmapSet set;
+    private readonly string? osuFile;
 
     private TextureStore textures = null!;
     private ElementContainer? elements;
@@ -61,9 +62,13 @@ public partial class TransformStoryboardLayer : CompositeDrawable
     // Misses are cached too (as null) so a missing texture doesn't re-pay the chain.
     private readonly Dictionary<string, Texture?> textureCache = new();
 
-    public TransformStoryboardLayer(CachedBeatmapSet set)
+    /// <param name="set">The beatmap set to render the storyboard of.</param>
+    /// <param name="osuFile">The specific difficulty's .osu file whose storyboard events should
+    /// merge with the .osb (defaults to <see cref="CachedBeatmapSet.PreferredOsuFile"/>).</param>
+    public TransformStoryboardLayer(CachedBeatmapSet set, string? osuFile = null)
     {
         this.set = set;
+        this.osuFile = osuFile ?? set.PreferredOsuFile;
     }
 
     [BackgroundDependencyLoader]
@@ -79,7 +84,7 @@ public partial class TransformStoryboardLayer : CompositeDrawable
 
         try
         {
-            objects = StoryboardLoader.Load(set.OsbFile, set.PreferredOsuFile);
+            objects = StoryboardLoader.Load(set.OsbFile, osuFile);
         }
         catch (Exception ex)
         {

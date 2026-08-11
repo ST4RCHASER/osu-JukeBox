@@ -19,6 +19,15 @@ namespace JukeBox.Game.Playback;
 public partial class PlaybackController : Component
 {
     public readonly Bindable<CachedBeatmapSet?> Current = new();
+
+    /// <summary>
+    /// The .osu file (difficulty) whose visuals/chart/hitsounds should be shown for
+    /// <see cref="Current"/>. Reset to the set's <see cref="CachedBeatmapSet.PreferredOsuFile"/>
+    /// on every successful <see cref="PlayAsync"/> swap; changed by
+    /// <see cref="SwitchDifficultyAsync"/> without interrupting playback.
+    /// </summary>
+    public readonly Bindable<string?> SelectedOsuFile = new();
+
     public readonly BindableDouble Volume = new(1) { MinValue = 0, MaxValue = 1 };
 
     // Stable across the controller's lifetime: consumers hold onto this reference while the
@@ -40,6 +49,11 @@ public partial class PlaybackController : Component
     private GameHost host { get; set; } = null!;
 
     private Track? currentTrack;
+
+    // Absolute path of the audio file currentTrack was loaded from. Needed by
+    // SwitchDifficultyAsync to decide whether a difficulty switch actually changes audio —
+    // after a switch this can differ from Current.Value.AudioFile.
+    private string? currentAudioPath;
 
     // The TrackStore created for currentTrack, kept only so it can be disposed alongside the
     // track it produced on the next swap. AudioManager.GetTrackStore retains every store it
@@ -112,7 +126,9 @@ public partial class PlaybackController : Component
 
             currentTrack = track;
             currentStore = store;
+            currentAudioPath = set.AudioFile;
             Current.Value = set;
+            SelectedOsuFile.Value = set.PreferredOsuFile;
 
             // AddAdjustment multiplies the track's own (default 1) volume by ours on every
             // change, including immediately — no separate initial-value assignment needed.
@@ -125,6 +141,104 @@ public partial class PlaybackController : Component
             previousTrack?.Dispose();
             previousStore?.Dispose();
 
+            swapped.SetResult(true);
+        });
+
+        return await swapped.Task.ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Switches the selected difficulty of the currently playing set WITHOUT restarting playback:
+    /// the clock keeps running, so visuals rebuilt off <see cref="SelectedOsuFile"/> continue at
+    /// the current time. When the new difficulty uses a different AudioFilename, the new track is
+    /// loaded and seeked to the previous position (pause state preserved).
+    /// </summary>
+    public async Task<bool> SwitchDifficultyAsync(string osuPath)
+    {
+        var set = Current.Value;
+        if (set == null || !set.OsuFiles.Contains(osuPath))
+            return false;
+
+        // Resolve the difficulty's audio file (metadata was captured at cache-load time).
+        string? newAudio = null;
+        var diff = set.Difficulties.Find(d => d.Path == osuPath);
+
+        if (diff?.AudioFilename != null)
+        {
+            string candidate = Path.Combine(Path.GetDirectoryName(osuPath) ?? set.Directory, diff.AudioFilename);
+            if (File.Exists(candidate))
+                newAudio = candidate;
+        }
+
+        // Same audio (or no resolvable audio — keep whatever's playing): just retarget visuals.
+        if (newAudio == null || string.Equals(Path.GetFullPath(newAudio), currentAudioPath != null ? Path.GetFullPath(currentAudioPath) : null, StringComparison.OrdinalIgnoreCase))
+        {
+            var selected = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            Schedule(() =>
+            {
+                bool stillCurrent = Current.Value == set;
+                if (stillCurrent)
+                    SelectedOsuFile.Value = osuPath;
+                selected.SetResult(stillCurrent);
+            });
+            return await selected.Task.ConfigureAwait(false);
+        }
+
+        // Different audio: load the new track and continue at the same position.
+        int myGeneration = Interlocked.Increment(ref generation);
+
+        string directory = Path.GetDirectoryName(newAudio) ?? set.Directory;
+        string fileName = Path.GetFileName(newAudio);
+
+        var (store, track) = await Task.Run(() =>
+        {
+            var s = audio.GetTrackStore(new StorageBackedResourceStore(new NativeStorage(directory, host)));
+            return (store: s, track: s.Get(fileName));
+        }).ConfigureAwait(false);
+
+        if (track == null)
+        {
+            store.Dispose();
+            return false;
+        }
+
+        var swapped = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        Schedule(() =>
+        {
+            // A newer PlayAsync/SwitchDifficultyAsync happened while loading — drop this one.
+            if (myGeneration != Volatile.Read(ref generation) || Current.Value != set)
+            {
+                track.Dispose();
+                store.Dispose();
+                swapped.SetResult(false);
+                return;
+            }
+
+            double resumeTime = decoupledClock.CurrentTime;
+            bool wasRunning = decoupledClock.IsRunning;
+
+            var previousTrack = currentTrack;
+            var previousStore = currentStore;
+
+            currentTrack = track;
+            currentStore = store;
+            currentAudioPath = newAudio;
+
+            track.AddAdjustment(AdjustableProperty.Volume, Volume);
+            track.Completed += () => Schedule(() => TrackCompleted?.Invoke());
+
+            decoupledClock.ChangeSource(track);
+            decoupledClock.Seek(resumeTime);
+            if (wasRunning)
+                decoupledClock.Start();
+            else
+                decoupledClock.Stop();
+
+            previousTrack?.Dispose();
+            previousStore?.Dispose();
+
+            SelectedOsuFile.Value = osuPath;
             swapped.SetResult(true);
         });
 

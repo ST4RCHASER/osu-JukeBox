@@ -95,16 +95,31 @@ public class BeatmapCache
 
         foreach (string osuFile in osuFiles)
         {
-            OsuFileInfo info = OsuFileScanner.Scan(osuFile);
-            if (info.Mode == 0)
+            OsuFileInfo info;
+
+            try
+            {
+                info = OsuFileScanner.Scan(osuFile);
+            }
+            catch (Exception ex)
+            {
+                Logger.Error(ex, $"BeatmapCache: failed to scan '{osuFile}', skipping difficulty");
+                continue;
+            }
+
+            set.Difficulties.Add(new DifficultyInfo
+            {
+                Path = osuFile,
+                Version = string.IsNullOrEmpty(info.Version) ? Path.GetFileNameWithoutExtension(osuFile) : info.Version,
+                Mode = info.Mode,
+                AudioFilename = info.AudioFilename,
+            });
+
+            if (preferred == null || (preferredInfo!.Mode != 0 && info.Mode == 0))
             {
                 preferred = osuFile;
                 preferredInfo = info;
-                break;
             }
-
-            preferred ??= osuFile;
-            preferredInfo ??= info;
         }
 
         set.PreferredOsuFile = preferred;
