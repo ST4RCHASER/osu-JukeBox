@@ -41,6 +41,12 @@ public partial class PlaybackController : Component
 
     private Track? currentTrack;
 
+    // The TrackStore created for currentTrack, kept only so it can be disposed alongside the
+    // track it produced on the next swap. AudioManager.GetTrackStore retains every store it
+    // hands out on the audio thread until disposed — never disposing this would leak one store
+    // per song played, forever, for the app's whole lifetime.
+    private ITrackStore? currentStore;
+
     // Arbitrates overlapping PlayAsync calls: each call claims the next generation at entry
     // (synchronously, before the async load), and only the call whose generation is still
     // current when its load finishes is allowed to swap in its track. This guarantees the
@@ -54,26 +60,40 @@ public partial class PlaybackController : Component
     }
 
     // virtual: lets JukeboxTest inject a genuinely-throwing test double (PlaybackController's own
-    // real failure paths return silently rather than throw — see TestSceneJukebox — so this is
+    // real failure paths return false rather than throw — see TestSceneJukebox — so this is
     // the only realistic seam for a test that exercises Jukebox's unhandled-exception guard).
-    public virtual async Task PlayAsync(CachedBeatmapSet set)
+    //
+    // Returns whether playback was actually started: false when there's no audio file to play,
+    // or the track failed to load (e.g. an unsupported/corrupt audio file) — either way Jukebox
+    // must not treat the round as a success, or it wedges silently with nothing playing and
+    // TrackCompleted never firing again.
+    public virtual async Task<bool> PlayAsync(CachedBeatmapSet set)
     {
         if (set.AudioFile == null)
-            return;
+            return false;
 
         int myGeneration = Interlocked.Increment(ref generation);
 
         string directory = set.Directory;
         string fileName = Path.GetFileName(set.AudioFile);
 
-        var track = await Task.Run(() =>
+        var (store, track) = await Task.Run(() =>
         {
-            var store = audio.GetTrackStore(new StorageBackedResourceStore(new NativeStorage(directory, host)));
-            return store.Get(fileName);
+            var s = audio.GetTrackStore(new StorageBackedResourceStore(new NativeStorage(directory, host)));
+            return (store: s, track: s.Get(fileName));
         }).ConfigureAwait(false);
 
         if (track == null)
-            return;
+        {
+            store.Dispose();
+            return false;
+        }
+
+        // Bridges the scheduled swap (which must run on the update thread) back to this async
+        // call's caller: the load succeeding isn't enough to report success — whether this call's
+        // track actually became current (vs. being dropped by a newer overlapping call) is only
+        // known once the scheduled callback below runs.
+        var swapped = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         Schedule(() =>
         {
@@ -82,12 +102,16 @@ public partial class PlaybackController : Component
             if (myGeneration != Volatile.Read(ref generation))
             {
                 track.Dispose();
+                store.Dispose();
+                swapped.SetResult(false);
                 return;
             }
 
-            var previous = currentTrack;
+            var previousTrack = currentTrack;
+            var previousStore = currentStore;
 
             currentTrack = track;
+            currentStore = store;
             Current.Value = set;
 
             // AddAdjustment multiplies the track's own (default 1) volume by ours on every
@@ -98,8 +122,13 @@ public partial class PlaybackController : Component
             decoupledClock.ChangeSource(track);
             decoupledClock.Start();
 
-            previous?.Dispose();
+            previousTrack?.Dispose();
+            previousStore?.Dispose();
+
+            swapped.SetResult(true);
         });
+
+        return await swapped.Task.ConfigureAwait(false);
     }
 
     public void TogglePause()
@@ -122,5 +151,6 @@ public partial class PlaybackController : Component
     {
         base.Dispose(isDisposing);
         currentTrack?.Dispose();
+        currentStore?.Dispose();
     }
 }
