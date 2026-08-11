@@ -115,7 +115,14 @@ public partial class QueuePanel : CompositeDrawable
         // by LoadComplete.
         X = panel_width;
 
-        queue.Items.BindCollectionChanged((_, _) => rebuildRows(), true);
+        // Scheduled rather than rebuilding inline: CollectionChanged fires synchronously on
+        // whatever thread mutated queue.Items, and rebuildRows() mutates rowsFlow's
+        // InternalChildren, which the framework only allows on the update thread. Every current
+        // mutator of Items is expected to already be on the update thread (see Jukebox's
+        // onUpdateThread), but Schedule is safe to call from any thread and a no-op-cost
+        // same-thread defer when we're already on it — this is defense-in-depth so a future or
+        // overlooked off-thread mutation degrades to a deferred rebuild instead of crashing.
+        queue.Items.BindCollectionChanged((_, _) => Schedule(rebuildRows), true);
     }
 
     /// <summary>
