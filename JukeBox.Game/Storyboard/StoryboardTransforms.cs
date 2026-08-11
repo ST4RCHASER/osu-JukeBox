@@ -2,7 +2,7 @@
 
 // Command→transform compilation adapted from osu!lazer (ppy/osu, MIT licence):
 // osu.Game/Storyboards/StoryboardSprite.cs (ApplyTransforms) and
-// osu.Game/Storyboards/Commands/* (per-command transform generation).
+// osu.Game/Storyboards/Commands/* (per-command transform generation, StoryboardLoopingGroup).
 // Copyright (c) ppy Pty Ltd <contact@ppy.sh>. Licensed under the MIT Licence.
 
 using System;
@@ -10,9 +10,11 @@ using System.Collections.Generic;
 using System.Linq;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Colour;
+using osu.Framework.Graphics.Transforms;
 using osuTK;
 using ReOsuStoryboardPlayer.Core.Base;
 using ReOsuStoryboardPlayer.Core.Commands;
+using ReOsuStoryboardPlayer.Core.Commands.Group;
 
 namespace JukeBox.Game.Storyboard;
 
@@ -36,6 +38,15 @@ public interface IStoryboardDrawable : IDrawable
 public static class StoryboardTransforms
 {
     /// <summary>
+    /// A command occurrence to compile: a plain timeline command plays once at its own StartTime;
+    /// a loop sub-command plays at loopStart + relative StartTime and repeats via the framework's
+    /// transform-loop support (lazer's StoryboardLoopingGroup pattern — O(1) storage per
+    /// sub-command no matter how large the iteration count, so a hostile "L,0,2000000000" costs
+    /// nothing beyond a single set of transforms).
+    /// </summary>
+    private readonly record struct Entry(Command Command, double StartTime, double LoopPause, int LoopIterations);
+
+    /// <summary>
     /// Lazer's "apply initial values then transforms" pattern (StoryboardSprite.ApplyTransforms):
     /// commands are applied in chronological order (keeps the framework's per-property transform
     /// list append-only, avoiding O(n²) inserts), and the first command of each property also
@@ -46,19 +57,55 @@ public static class StoryboardTransforms
     public static void ApplyTransforms<T>(T drawable, StoryboardObject obj)
         where T : Drawable, IStoryboardDrawable
     {
-        // Loop timelines: with Setting.EnableLoopCommandUnrolling the loop's iterations were
-        // already materialized into the plain per-event timelines at parse time; the residual
-        // LoopCommand wrapper in CommandMap[Event.Loop] is a no-op shell. Trigger timelines are
-        // unsupported (skipped, same as the previous renderer) — counted/logged by the layer.
-        var commands = obj.CommandMap
-            .Where(p => p.Key != Event.Loop && p.Key != Event.Trigger)
-            .SelectMany(p => p.Value)
-            .OrderBy(c => c.StartTime); // stable: equal StartTimes keep SortedDictionary event order
+        var entries = new List<Entry>();
+
+        foreach (var pair in obj.CommandMap)
+        {
+            switch (pair.Key)
+            {
+                // Trigger timelines are unsupported (skipped, same as the previous renderer) —
+                // counted/logged by the layer.
+                case Event.Trigger:
+                    continue;
+
+                // Loops: Core (with unrolling off) keeps the LoopCommand in CommandMap[Loop] with
+                // its sub-timelines normalized at parse to iteration-relative times (min start 0;
+                // CostTime = one iteration's length; the loop's own StartTime absorbed the
+                // offset). Each sub-command becomes ONE set of transforms starting at its
+                // first-iteration absolute time, repeated with a framework transform-loop whose
+                // period is CostTime (pause = CostTime - command duration), lazer-style.
+                case Event.Loop:
+                    foreach (var loop in pair.Value.OfType<LoopCommand>())
+                    {
+                        int iterations = Math.Max(1, loop.LoopCount);
+
+                        foreach (var subTimeline in loop.SubCommands.Values)
+                        {
+                            foreach (var sub in subTimeline)
+                                entries.Add(new Entry(sub, (double)loop.StartTime + sub.StartTime,
+                                    Math.Max(0, loop.CostTime - Duration(sub)), iterations));
+                        }
+                    }
+
+                    continue;
+
+                default:
+                    // Note: with unrolling off, Core also inserts internal LoopSubTimelineCommand
+                    // wrappers into the per-event timelines; they extend Command directly (not the
+                    // concrete Value/State command types), so the compile switch below ignores
+                    // them — the loop's real sub-commands are compiled from CommandMap[Loop].
+                    foreach (var cmd in pair.Value)
+                        entries.Add(new Entry(cmd, cmd.StartTime, 0, 1));
+                    continue;
+            }
+        }
 
         var appliedProperties = new HashSet<string>();
 
-        foreach (var command in commands)
+        foreach (var entry in entries.OrderBy(e => e.StartTime)) // stable: ties keep event order
         {
+            var command = entry.Command;
+
             switch (command)
             {
                 // M — Core keeps it a single Vector command; decompose to X/Y here (like lazer's
@@ -70,10 +117,10 @@ public static class StoryboardTransforms
                     if (appliedProperties.Add(nameof(drawable.Y)))
                         drawable.Y = m.StartValue.Y;
 
-                    using (drawable.BeginAbsoluteSequence(m.StartTime))
+                    using (drawable.BeginAbsoluteSequence(entry.StartTime))
                     {
-                        drawable.MoveToX(m.StartValue.X).Then().MoveToX(m.EndValue.X, Duration(m), Ease(m));
-                        drawable.MoveToY(m.StartValue.Y).Then().MoveToY(m.EndValue.Y, Duration(m), Ease(m));
+                        ApplyLoop(entry, drawable.MoveToX(m.StartValue.X).Then().MoveToX(m.EndValue.X, Duration(m), Ease(m)));
+                        ApplyLoop(entry, drawable.MoveToY(m.StartValue.Y).Then().MoveToY(m.EndValue.Y, Duration(m), Ease(m)));
                     }
 
                     break;
@@ -82,24 +129,24 @@ public static class StoryboardTransforms
                     if (appliedProperties.Add(nameof(drawable.X)))
                         drawable.X = mx.StartValue;
 
-                    using (drawable.BeginAbsoluteSequence(mx.StartTime))
-                        drawable.MoveToX(mx.StartValue).Then().MoveToX(mx.EndValue, Duration(mx), Ease(mx));
+                    using (drawable.BeginAbsoluteSequence(entry.StartTime))
+                        ApplyLoop(entry, drawable.MoveToX(mx.StartValue).Then().MoveToX(mx.EndValue, Duration(mx), Ease(mx)));
                     break;
 
                 case MoveYCommand my:
                     if (appliedProperties.Add(nameof(drawable.Y)))
                         drawable.Y = my.StartValue;
 
-                    using (drawable.BeginAbsoluteSequence(my.StartTime))
-                        drawable.MoveToY(my.StartValue).Then().MoveToY(my.EndValue, Duration(my), Ease(my));
+                    using (drawable.BeginAbsoluteSequence(entry.StartTime))
+                        ApplyLoop(entry, drawable.MoveToY(my.StartValue).Then().MoveToY(my.EndValue, Duration(my), Ease(my)));
                     break;
 
                 case FadeCommand f:
                     if (appliedProperties.Add(nameof(drawable.Alpha)))
                         drawable.Alpha = f.StartValue;
 
-                    using (drawable.BeginAbsoluteSequence(f.StartTime))
-                        drawable.FadeTo(f.StartValue).Then().FadeTo(f.EndValue, Duration(f), Ease(f));
+                    using (drawable.BeginAbsoluteSequence(entry.StartTime))
+                        ApplyLoop(entry, drawable.FadeTo(f.StartValue).Then().FadeTo(f.EndValue, Duration(f), Ease(f)));
                     break;
 
                 // S and V both target the single VectorScale property, mirroring Core where both
@@ -110,10 +157,10 @@ public static class StoryboardTransforms
                     if (appliedProperties.Add(nameof(IStoryboardDrawable.VectorScale)))
                         drawable.VectorScale = new Vector2(s.StartValue);
 
-                    using (drawable.BeginAbsoluteSequence(s.StartTime))
+                    using (drawable.BeginAbsoluteSequence(entry.StartTime))
                     {
-                        drawable.TransformTo(nameof(IStoryboardDrawable.VectorScale), new Vector2(s.StartValue)).Then()
-                                .TransformTo(nameof(IStoryboardDrawable.VectorScale), new Vector2(s.EndValue), Duration(s), Ease(s));
+                        ApplyLoop(entry, drawable.TransformTo(nameof(IStoryboardDrawable.VectorScale), new Vector2(s.StartValue)).Then()
+                                                 .TransformTo(nameof(IStoryboardDrawable.VectorScale), new Vector2(s.EndValue), Duration(s), Ease(s)));
                     }
 
                     break;
@@ -122,10 +169,10 @@ public static class StoryboardTransforms
                     if (appliedProperties.Add(nameof(IStoryboardDrawable.VectorScale)))
                         drawable.VectorScale = new Vector2(v.StartValue.X, v.StartValue.Y);
 
-                    using (drawable.BeginAbsoluteSequence(v.StartTime))
+                    using (drawable.BeginAbsoluteSequence(entry.StartTime))
                     {
-                        drawable.TransformTo(nameof(IStoryboardDrawable.VectorScale), new Vector2(v.StartValue.X, v.StartValue.Y)).Then()
-                                .TransformTo(nameof(IStoryboardDrawable.VectorScale), new Vector2(v.EndValue.X, v.EndValue.Y), Duration(v), Ease(v));
+                        ApplyLoop(entry, drawable.TransformTo(nameof(IStoryboardDrawable.VectorScale), new Vector2(v.StartValue.X, v.StartValue.Y)).Then()
+                                                 .TransformTo(nameof(IStoryboardDrawable.VectorScale), new Vector2(v.EndValue.X, v.EndValue.Y), Duration(v), Ease(v)));
                     }
 
                     break;
@@ -135,10 +182,10 @@ public static class StoryboardTransforms
                     if (appliedProperties.Add(nameof(drawable.Rotation)))
                         drawable.Rotation = MathHelper.RadiansToDegrees(r.StartValue);
 
-                    using (drawable.BeginAbsoluteSequence(r.StartTime))
+                    using (drawable.BeginAbsoluteSequence(entry.StartTime))
                     {
-                        drawable.RotateTo(MathHelper.RadiansToDegrees(r.StartValue)).Then()
-                                .RotateTo(MathHelper.RadiansToDegrees(r.EndValue), Duration(r), Ease(r));
+                        ApplyLoop(entry, drawable.RotateTo(MathHelper.RadiansToDegrees(r.StartValue)).Then()
+                                                 .RotateTo(MathHelper.RadiansToDegrees(r.EndValue), Duration(r), Ease(r)));
                     }
 
                     break;
@@ -149,10 +196,10 @@ public static class StoryboardTransforms
                     if (appliedProperties.Add(nameof(drawable.Colour)))
                         drawable.Colour = ToColour4(c.StartValue);
 
-                    using (drawable.BeginAbsoluteSequence(c.StartTime))
+                    using (drawable.BeginAbsoluteSequence(entry.StartTime))
                     {
-                        drawable.TransformTo(nameof(drawable.Colour), (ColourInfo)ToColour4(c.StartValue)).Then()
-                                .TransformTo(nameof(drawable.Colour), (ColourInfo)ToColour4(c.EndValue), Duration(c), Ease(c));
+                        ApplyLoop(entry, drawable.TransformTo(nameof(drawable.Colour), (ColourInfo)ToColour4(c.StartValue)).Then()
+                                                 .TransformTo(nameof(drawable.Colour), (ColourInfo)ToColour4(c.EndValue), Duration(c), Ease(c)));
                     }
 
                     break;
@@ -165,21 +212,21 @@ public static class StoryboardTransforms
                     if (appliedProperties.Add(nameof(IStoryboardDrawable.FlipH)) && isPermanent(command))
                         drawable.FlipH = true;
 
-                    applyStateTransforms(drawable, command, nameof(IStoryboardDrawable.FlipH), true, isPermanent(command));
+                    applyStateTransforms(drawable, entry, nameof(IStoryboardDrawable.FlipH), true, isPermanent(command));
                     break;
 
                 case VerticalFlipCommand:
                     if (appliedProperties.Add(nameof(IStoryboardDrawable.FlipV)) && isPermanent(command))
                         drawable.FlipV = true;
 
-                    applyStateTransforms(drawable, command, nameof(IStoryboardDrawable.FlipV), true, isPermanent(command));
+                    applyStateTransforms(drawable, entry, nameof(IStoryboardDrawable.FlipV), true, isPermanent(command));
                     break;
 
                 case AdditiveBlendCommand:
                     if (appliedProperties.Add(nameof(drawable.Blending)) && isPermanent(command))
                         drawable.Blending = BlendingParameters.Additive;
 
-                    applyStateTransforms(drawable, command, nameof(drawable.Blending),
+                    applyStateTransforms(drawable, entry, nameof(drawable.Blending),
                         BlendingParameters.Additive,
                         isPermanent(command) ? BlendingParameters.Additive : BlendingParameters.Inherit);
                     break;
@@ -188,18 +235,31 @@ public static class StoryboardTransforms
 
         static bool isPermanent(Command command) => command.StartTime == command.EndTime;
 
-        static void applyStateTransforms<TValue>(T drawable, Command command, string property, TValue startValue, TValue endValue)
+        static void applyStateTransforms<TValue>(T drawable, Entry entry, string property, TValue startValue, TValue endValue)
         {
-            using (drawable.BeginAbsoluteSequence(command.StartTime))
+            using (drawable.BeginAbsoluteSequence(entry.StartTime))
             {
-                drawable.TransformTo(property, startValue)
-                        .Delay(Duration(command))
-                        .TransformTo(property, endValue);
+                ApplyLoop(entry, drawable.TransformTo(property, startValue)
+                                         .Delay(Duration(entry.Command))
+                                         .TransformTo(property, endValue));
             }
         }
     }
 
-    private static double Duration(Command c) => Math.Max(0, c.EndTime - c.StartTime);
+    /// <summary>
+    /// Wraps a compiled command sequence in a framework transform-loop when it came from an "L"
+    /// loop (lazer's StoryboardLoopingCommand.ApplyTransforms): the pause tops the sequence up to
+    /// one full iteration period, and the framework replays it <paramref name="entry"/>.LoopIterations
+    /// times by evaluation (Transform.LoopCount) — no per-iteration allocation.
+    /// </summary>
+    private static void ApplyLoop<T>(Entry entry, TransformSequence<T> sequence)
+        where T : Drawable, IStoryboardDrawable
+    {
+        if (entry.LoopIterations > 1)
+            sequence.Loop(entry.LoopPause, entry.LoopIterations);
+    }
+
+    private static double Duration(Command c) => Math.Max(0, (double)c.EndTime - c.StartTime);
 
     /// <summary>
     /// Core's EasingTypes is a verbatim copy of osu!framework's Easing (same source, same

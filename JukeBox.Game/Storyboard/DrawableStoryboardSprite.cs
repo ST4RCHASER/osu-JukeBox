@@ -119,7 +119,11 @@ internal partial class DrawableStoryboardSprite : Sprite, IStoryboardDrawable
         Depth = -obj.Z;
 
         LifetimeStart = obj.FrameStartTime;
-        LifetimeEnd = obj.FrameEndTime;
+        // Clamp: a hostile loop count can int-overflow Core's FrameEndTime computation
+        // (StartTime + CostTime * LoopCount) into the negative; a lifetime that ends before it
+        // starts simply never becomes alive (matching the old renderer, whose updater also never
+        // admitted such objects).
+        LifetimeEnd = Math.Max(obj.FrameStartTime, obj.FrameEndTime);
 
         Position = new Vector2(obj.Postion.X, obj.Postion.Y);
         Rotation = MathHelper.RadiansToDegrees(obj.Rotate);

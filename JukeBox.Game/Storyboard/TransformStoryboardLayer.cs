@@ -146,7 +146,12 @@ public partial class TransformStoryboardLayer : CompositeDrawable
             switch (obj)
             {
                 case StoryboardAnimation anim:
-                    elements.AddElement(new DrawableStoryboardAnimation(anim, this));
+                    // Same missing-texture rule as sprites: if not a single frame resolves, the
+                    // animation can never show anything — and a zero-frame TextureAnimation is an
+                    // unguarded framework exception, so gate before construction. Lookups are
+                    // memoized and the drawable re-uses them, so the probe costs nothing extra.
+                    if (hasAnyFrame(anim))
+                        elements.AddElement(new DrawableStoryboardAnimation(anim, this));
                     break;
 
                 default:
@@ -157,6 +162,24 @@ public partial class TransformStoryboardLayer : CompositeDrawable
                     break;
             }
         }
+    }
+
+    /// <summary>
+    /// Whether at least one of the animation's frame textures resolves (bounded by
+    /// <see cref="DrawableStoryboardAnimation.MaxFrames"/> so a hostile FrameCount can't turn
+    /// this probe into a hang).
+    /// </summary>
+    private bool hasAnyFrame(StoryboardAnimation anim)
+    {
+        int frameCount = Math.Min(anim.FrameCount, DrawableStoryboardAnimation.MaxFrames);
+
+        for (int i = 0; i < frameCount; i++)
+        {
+            if (GetTexture(anim.FrameBaseImagePath + i + anim.FrameFileExtension) != null)
+                return true;
+        }
+
+        return false;
     }
 
     /// <summary>
