@@ -9,13 +9,13 @@
             "request": "launch",
             "program": "dotnet",
             "args": [
-                "${workspaceRoot}/JukeBox.Game.Tests/bin/Debug/net8.0/JukeBox.Game.Tests.dll",
+                "${workspaceRoot}/JukeBox.Game.Tests/bin/Debug/net10.0/JukeBox.Game.Tests.dll",
             ],
             "cwd": "${workspaceRoot}",
             "preLaunchTask": "Build (Tests, Debug)",
             "linux": {
                 "env": {
-                    "LD_LIBRARY_PATH": "${workspaceRoot}/JukeBox.Game.Tests/bin/Debug/net8.0:${env:LD_LIBRARY_PATH}"
+                    "LD_LIBRARY_PATH": "${workspaceRoot}/JukeBox.Game.Tests/bin/Debug/net10.0:${env:LD_LIBRARY_PATH}"
                 }
             },
             "console": "internalConsole"
@@ -26,13 +26,13 @@
             "request": "launch",
             "program": "dotnet",
             "args": [
-                "${workspaceRoot}/JukeBox.Game.Tests/bin/Release/net8.0/JukeBox.Game.Tests.dll",
+                "${workspaceRoot}/JukeBox.Game.Tests/bin/Release/net10.0/JukeBox.Game.Tests.dll",
             ],
             "cwd": "${workspaceRoot}",
             "preLaunchTask": "Build (Tests, Release)",
             "linux": {
                 "env": {
-                    "LD_LIBRARY_PATH": "${workspaceRoot}/JukeBox.Game.Tests/bin/Release/net8.0:${env:LD_LIBRARY_PATH}"
+                    "LD_LIBRARY_PATH": "${workspaceRoot}/JukeBox.Game.Tests/bin/Release/net10.0:${env:LD_LIBRARY_PATH}"
                 }
             },
             "console": "internalConsole"
@@ -43,13 +43,13 @@
             "request": "launch",
             "program": "dotnet",
             "args": [
-                "${workspaceRoot}/JukeBox.Desktop/bin/Debug/net8.0/JukeBox.dll",
+                "${workspaceRoot}/JukeBox.Desktop/bin/Debug/net10.0/JukeBox.dll",
             ],
             "cwd": "${workspaceRoot}",
             "preLaunchTask": "Build (Desktop, Debug)",
             "linux": {
                 "env": {
-                    "LD_LIBRARY_PATH": "${workspaceRoot}/JukeBox.Desktop/bin/Debug/net8.0:${env:LD_LIBRARY_PATH}"
+                    "LD_LIBRARY_PATH": "${workspaceRoot}/JukeBox.Desktop/bin/Debug/net10.0:${env:LD_LIBRARY_PATH}"
                 }
             },
             "console": "internalConsole"
@@ -60,13 +60,13 @@
             "request": "launch",
             "program": "dotnet",
             "args": [
-                "${workspaceRoot}/JukeBox.Desktop/bin/Debug/net8.0/JukeBox.dll",
+                "${workspaceRoot}/JukeBox.Desktop/bin/Debug/net10.0/JukeBox.dll",
             ],
             "cwd": "${workspaceRoot}",
             "preLaunchTask": "Build (Desktop, Release)",
             "linux": {
                 "env": {
-                    "LD_LIBRARY_PATH": "${workspaceRoot}/JukeBox.Desktop/bin/Debug/net8.0:${env:LD_LIBRARY_PATH}"
+                    "LD_LIBRARY_PATH": "${workspaceRoot}/JukeBox.Desktop/bin/Debug/net10.0:${env:LD_LIBRARY_PATH}"
                 }
             },
             "console": "internalConsole"
