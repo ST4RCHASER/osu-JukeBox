@@ -2,6 +2,7 @@
 
 using System.IO;
 using JukeBox.Game.Configuration;
+using JukeBox.Game.Online;
 using JukeBox.Game.UI;
 using NUnit.Framework;
 using osu.Framework.Allocation;
@@ -33,9 +34,10 @@ namespace JukeBox.Game.Tests.Visual
         [SetUpSteps]
         public void SetUpSteps()
         {
-            AddStep("reset ShowFps and create overlay", () =>
+            AddStep("reset ShowFps/PreferredMirror and create overlay", () =>
             {
                 config.SetValue(JukeBoxSetting.ShowFps, false);
+                config.SetValue(JukeBoxSetting.PreferredMirror, MirrorSource.Auto);
                 Child = overlay = new SettingsOverlay();
             });
         }
@@ -86,6 +88,30 @@ namespace JukeBox.Game.Tests.Visual
             });
 
             AddAssert("checkbox starts checked", () => overlay.ShowFpsCheckbox.Current.Value);
+        }
+
+        [Test]
+        public void ChangingMirrorDropdownUpdatesConfigValue()
+        {
+            AddStep("show overlay", () => overlay.Show());
+            AddAssert("config starts Auto", () => config.Get<MirrorSource>(JukeBoxSetting.PreferredMirror) == MirrorSource.Auto);
+            AddAssert("dropdown starts Auto", () => overlay.MirrorDropdown.Current.Value == MirrorSource.Auto);
+
+            AddStep("select Catboy in dropdown", () => overlay.MirrorDropdown.Current.Value = MirrorSource.Catboy);
+
+            AddAssert("config bindable updated to Catboy", () => config.Get<MirrorSource>(JukeBoxSetting.PreferredMirror) == MirrorSource.Catboy);
+        }
+
+        [Test]
+        public void ConfigStartingWithNonAutoMirrorSelectsItOnCreation()
+        {
+            AddStep("set PreferredMirror to OsuDirect then recreate overlay", () =>
+            {
+                config.SetValue(JukeBoxSetting.PreferredMirror, MirrorSource.OsuDirect);
+                Child = overlay = new SettingsOverlay();
+            });
+
+            AddAssert("dropdown starts OsuDirect", () => overlay.MirrorDropdown.Current.Value == MirrorSource.OsuDirect);
         }
     }
 }

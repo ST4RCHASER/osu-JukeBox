@@ -77,11 +77,12 @@ namespace JukeBox.Game
 
             Resources.AddStore(new DllResourceStore(typeof(JukeBoxResources).Assembly));
 
-            var mirror = new MirrorChain(new NerinyanMirror(http), new CatboyMirror(http), new OsuDirectMirror(http));
-            dependencies.CacheAs<IBeatmapMirror>(mirror);
-
             var config = new JukeBoxConfigManager(Host.Storage);
             dependencies.Cache(config);
+
+            var mirror = new SwitchableMirror(new NerinyanMirror(http), new CatboyMirror(http), new OsuDirectMirror(http),
+                config.GetBindable<MirrorSource>(JukeBoxSetting.PreferredMirror));
+            dependencies.CacheAs<IBeatmapMirror>(mirror);
 
             var cache = new BeatmapCache(Host.Storage.GetFullPath("cache"), mirror, config.Get<bool>(JukeBoxSetting.NoVideoDownloads));
             dependencies.Cache(cache);
