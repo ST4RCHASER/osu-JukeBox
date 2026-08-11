@@ -180,6 +180,18 @@ namespace JukeBox.Game.Tests.Visual
         }
 
         [Test]
+        public void BarShowsAndClearsStatusText()
+        {
+            AddStep("set Status", () => jukebox.Status.Value = "Downloading Something…");
+            AddUntilStep("status shown", () => bar.ChildrenOfType<osu.Framework.Graphics.Sprites.SpriteText>()
+                .Any(t => t.Text.ToString() == "Downloading Something…"));
+
+            AddStep("clear Status", () => jukebox.Status.Value = null);
+            AddUntilStep("status cleared", () => bar.ChildrenOfType<osu.Framework.Graphics.Sprites.SpriteText>()
+                .All(t => t.Text.ToString() != "Downloading Something…"));
+        }
+
+        [Test]
         public void QueuePanelShowsRowsAfterEnqueue()
         {
             AddAssert("starts empty", () => panel.RowCount == 0);

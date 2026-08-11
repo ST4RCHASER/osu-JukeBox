@@ -7,7 +7,6 @@ using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Shapes;
 using osu.Framework.Graphics.Sprites;
-using osu.Framework.Graphics.UserInterface;
 using osuTK;
 using osuTK.Graphics;
 
@@ -133,7 +132,7 @@ public partial class QueuePanel : CompositeDrawable
     private partial class QueueRow : CompositeDrawable
     {
         private readonly BeatmapSetInfo set;
-        private readonly BasicButton removeButton;
+        private readonly IconButton removeButton;
 
         public QueueRow(BeatmapSetInfo set, System.Action onRemove)
         {
@@ -151,12 +150,12 @@ public partial class QueuePanel : CompositeDrawable
                     Font = FontUsage.Default.With(size: 14),
                     Text = $"{set.DisplayTitle} — {set.DisplayArtist}",
                 },
-                removeButton = new BasicButton
+                removeButton = new IconButton
                 {
                     Anchor = Anchor.CentreRight,
                     Origin = Anchor.CentreRight,
                     Size = new Vector2(24, 24),
-                    Text = "✕",
+                    Icon = FontAwesome.Solid.Times,
                     Action = onRemove,
                 }
             };
