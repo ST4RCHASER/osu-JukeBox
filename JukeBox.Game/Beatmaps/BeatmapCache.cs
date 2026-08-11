@@ -2,12 +2,14 @@
 
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using JukeBox.Game.Online;
+using osu.Framework.Logging;
 
 namespace JukeBox.Game.Beatmaps;
 
@@ -41,7 +43,12 @@ public class BeatmapCache
         {
             string dir = Path.Combine(root, setId.ToString());
             if (IsCached(setId))
+            {
+                // Touch the dir's mtime on every cache hit so EvictToLimit's LRU ordering
+                // reflects last-played time, not last-downloaded time.
+                Directory.SetLastWriteTimeUtc(dir, DateTime.UtcNow);
                 return LoadFromDirectory(setId, dir);
+            }
 
             string tmpOsz = Path.Combine(root, $"{setId}.osz.part");
             Directory.CreateDirectory(root);
@@ -118,4 +125,59 @@ public class BeatmapCache
 
         return set;
     }
+
+    /// <summary>
+    /// Deletes cached set directories, least-recently-played first (by directory mtime, which
+    /// <see cref="GetAsync"/> touches on every cache hit), until the total cache size is at or
+    /// under <paramref name="maxBytes"/>. Directories whose set id is in
+    /// <paramref name="protectedIds"/> (e.g. the currently playing or queued sets) are never
+    /// deleted, even if they're the least-recently-played.
+    /// </summary>
+    public void EvictToLimit(long maxBytes, IReadOnlyCollection<int> protectedIds)
+    {
+        if (!Directory.Exists(root))
+            return;
+
+        var candidates = new List<(int SetId, string Dir, long Size, DateTime MTime)>();
+        long total = 0;
+
+        foreach (string dir in Directory.EnumerateDirectories(root))
+        {
+            string name = Path.GetFileName(dir);
+
+            // Skip non-set directories: in-progress extractions and anything not a plain set id.
+            if (!int.TryParse(name, out int setId) || name.EndsWith(".extracting", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            long size = dirSize(dir);
+            total += size;
+            candidates.Add((setId, dir, size, Directory.GetLastWriteTimeUtc(dir)));
+        }
+
+        if (total <= maxBytes)
+            return;
+
+        foreach (var candidate in candidates.OrderBy(c => c.MTime))
+        {
+            if (total <= maxBytes)
+                break;
+
+            if (protectedIds.Contains(candidate.SetId))
+                continue;
+
+            try
+            {
+                Directory.Delete(candidate.Dir, true);
+                total -= candidate.Size;
+                Logger.Log($"BeatmapCache: evicted set {candidate.SetId} ({candidate.Size / (1024.0 * 1024.0):F1} MB) to stay under cache limit");
+            }
+            catch (Exception ex)
+            {
+                Logger.Error(ex, $"BeatmapCache: failed to evict set {candidate.SetId}");
+            }
+        }
+    }
+
+    private static long dirSize(string dir)
+        => Directory.EnumerateFiles(dir, "*", osu_enum_options).Sum(f => new FileInfo(f).Length);
 }
