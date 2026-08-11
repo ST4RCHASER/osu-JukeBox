@@ -24,7 +24,10 @@ namespace JukeBox.Game.Screens;
 /// <see cref="JukeBoxSetting.UiLayout"/>. Typing a printable character (with no modifiers held,
 /// and nothing else already consuming the key — e.g. the search box itself when focused) opens
 /// the search overlay via <see cref="SearchOverlay.ShowWithInitialChar"/>; Tab or the corner
-/// button toggles the layout.
+/// "layout" button toggles the layout. In the fullscreen layout, the queue drawer (permanently
+/// docked and always visible in Split) is otherwise unreachable, so Ctrl+Q or the corner "queue"
+/// button toggles it there — Ctrl+Q rather than a bare letter so it doesn't collide with the
+/// type-anywhere-to-search behaviour above (which explicitly excludes Ctrl/Alt/Super combinations).
 /// </summary>
 public partial class MainScreen : Screen
 {
@@ -74,7 +77,22 @@ public partial class MainScreen : Screen
                 RelativeSizeAxes = Axes.Both,
                 Child = visualsStack = new ScreenStack { RelativeSizeAxes = Axes.Both },
             },
-            FullscreenLayoutContainer = new Container { RelativeSizeAxes = Axes.Both },
+            FullscreenLayoutContainer = new Container
+            {
+                RelativeSizeAxes = Axes.Both,
+                // Lives directly in FullscreenLayoutContainer (not reparented on layout switch
+                // like search/queuePanel) so it's automatically hidden and non-interactive
+                // whenever Split is active, via this container's own Alpha toggle in applyLayout.
+                Child = new BasicButton
+                {
+                    Anchor = Anchor.TopRight,
+                    Origin = Anchor.TopRight,
+                    Position = new Vector2(-8, 44),
+                    Size = new Vector2(96, 28),
+                    Text = "queue",
+                    Action = () => queuePanel.ToggleVisibility(),
+                },
+            },
             SplitLayoutContainer = new Container
             {
                 RelativeSizeAxes = Axes.Y,
@@ -132,6 +150,17 @@ public partial class MainScreen : Screen
         if (e.Key == Key.Tab)
         {
             toggleLayout();
+            return true;
+        }
+
+        if (e.ControlPressed && e.Key == Key.Q && !e.AltPressed && !e.SuperPressed)
+        {
+            // Only meaningful in the fullscreen layout — Split keeps the drawer permanently
+            // docked/expanded via applyLayout's own SetShown(true), and toggling it here as well
+            // would fight that (and slide it using panel_width, which doesn't match its relative
+            // Split geometry).
+            if (uiLayout.Value == UiLayout.FullscreenOverlay)
+                queuePanel.ToggleVisibility();
             return true;
         }
 
@@ -205,6 +234,11 @@ public partial class MainScreen : Screen
             queuePanel.Origin = Anchor.TopRight;
             queuePanel.RelativeSizeAxes = Axes.Y;
             queuePanel.Width = queue_panel_width;
+            // Split's branch above sets Height to a 0.3f *relative* fraction (RelativeSizeAxes
+            // includes Y there). RelativeSizeAxes switching back to Y-only here does NOT reset
+            // that stored Height back to full — without this, a Split -> Fullscreen round trip
+            // leaves the drawer permanently stuck at 30% height.
+            queuePanel.Height = 1f;
             queuePanel.SetShown(false);
         }
     }

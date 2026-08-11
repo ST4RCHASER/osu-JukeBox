@@ -16,6 +16,7 @@ using NUnit.Framework;
 using osu.Framework.Allocation;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
+using osu.Framework.Graphics.UserInterface;
 using osu.Framework.Screens;
 using osu.Framework.Testing;
 using osuTK.Input;
@@ -131,6 +132,62 @@ namespace JukeBox.Game.Tests.Visual
 
             AddStep("press escape", () => InputManager.Key(Key.Escape));
             AddAssert("search overlay still visible (docked)", () => screen.ChildrenOfType<SearchOverlay>().Single().State.Value == Visibility.Visible);
+        }
+
+        // Regression test for the queue drawer being unreachable in the fullscreen layout:
+        // QueuePanel.ToggleVisibility previously had no caller at all outside the layout switch
+        // (which only ever forces it open in Split via SetShown). Both new entry points — the
+        // Ctrl+Q hotkey and the corner "queue" button — must actually reach it while fullscreen.
+        [Test]
+        public void QueueDrawerReachableViaHotkeyAndButtonInFullscreenLayout()
+        {
+            QueuePanel panel = null!;
+            AddStep("grab queue panel", () => panel = screen.ChildrenOfType<QueuePanel>().Single());
+
+            AddAssert("starts off-screen (hidden) in fullscreen layout", () => panel.X > 0);
+
+            AddStep("press ctrl+q", () =>
+            {
+                InputManager.PressKey(Key.ControlLeft);
+                InputManager.Key(Key.Q);
+                InputManager.ReleaseKey(Key.ControlLeft);
+            });
+            AddUntilStep("panel slid into view", () => panel.X == 0);
+
+            AddStep("press ctrl+q again", () =>
+            {
+                InputManager.PressKey(Key.ControlLeft);
+                InputManager.Key(Key.Q);
+                InputManager.ReleaseKey(Key.ControlLeft);
+            });
+            AddUntilStep("panel slid back out", () => panel.X > 0);
+
+            AddStep("click the corner queue button",
+                () => screen.ChildrenOfType<BasicButton>().Single(b => b.Text == "queue").TriggerClick());
+            AddUntilStep("panel visible again", () => panel.X == 0);
+        }
+
+        // Regression test for the Height bug: applyLayout's Split branch sets QueuePanel.Height to
+        // a 0.3f *relative* fraction; its fullscreen branch restored RelativeSizeAxes but, before
+        // the fix, never reset that stored Height back to full — leaving the drawer stuck at 30%
+        // height after any Split -> Fullscreen round trip.
+        [Test]
+        public void QueuePanelGeometryRestoredAfterSplitFullscreenRoundTrip()
+        {
+            QueuePanel panel = null!;
+            AddStep("grab queue panel", () => panel = screen.ChildrenOfType<QueuePanel>().Single());
+
+            AddAssert("starts full height in fullscreen layout", () => panel.Height == 1f);
+
+            AddStep("switch to split layout", () => InputManager.Key(Key.Tab));
+            AddUntilStep("split shown", () => screen.SplitLayoutContainer.Alpha == 1);
+            AddAssert("split layout sets 30% relative height", () => panel.Height == 0.3f);
+
+            AddStep("switch back to fullscreen layout", () => InputManager.Key(Key.Tab));
+            AddUntilStep("fullscreen shown", () => screen.FullscreenLayoutContainer.Alpha == 1);
+
+            AddAssert("height restored to full", () => panel.Height == 1f);
+            AddAssert("relative axes restored to Y-only", () => panel.RelativeSizeAxes == Axes.Y);
         }
 
         // Never exercised (queue stays empty and the mirror returns no candidates, so
