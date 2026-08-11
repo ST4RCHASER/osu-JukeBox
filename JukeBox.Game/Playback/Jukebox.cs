@@ -1,7 +1,6 @@
 #nullable enable
 
 using System;
-using System.Threading;
 using System.Threading.Tasks;
 using JukeBox.Game.Beatmaps;
 using JukeBox.Game.Online;
@@ -26,12 +25,17 @@ public partial class Jukebox : Component
     private readonly BeatmapCache cache;
     private readonly PlaybackController playback;
 
-    // Reentrancy guard: TrackCompleted, SkipCurrent and Start can all race to call Advance
-    // concurrently (e.g. a manual skip landing right as the track naturally completes). Rather
-    // than queueing overlapping requests, a plain 0/1 flag makes an Advance call that finds one
-    // already in flight a no-op — the in-flight run will itself pick up whatever the queue looks
-    // like by the time it gets there, so nothing is lost, only coalesced.
-    private int advancing;
+    // Reentrancy guard with latest-wins coalescing, mirroring the arbitration approach
+    // PlaybackController uses for overlapping PlayAsync calls: TrackCompleted, SkipCurrent and
+    // Start can all race to call Advance while one is already in flight (most importantly, a
+    // manual skip landing mid-download). Rather than dropping that request, `pendingAdvance`
+    // records it; the in-flight round runs one more round immediately after finishing instead of
+    // releasing the guard, so multiple overlapping requests coalesce into exactly one extra
+    // round (not one per request) and none are lost. Both fields are only ever read/written
+    // inside `advanceLock`, and the lock is never held across an `await`.
+    private readonly object advanceLock = new();
+    private bool advancing;
+    private bool pendingAdvance;
 
     public Jukebox(MusicQueue queue, RadioService radio, BeatmapCache cache, PlaybackController playback)
     {
@@ -83,58 +87,87 @@ public partial class Jukebox : Component
     /// </summary>
     internal Task AdvanceAsync()
     {
-        if (Interlocked.CompareExchange(ref advancing, 1, 0) != 0)
-            return Task.CompletedTask;
+        lock (advanceLock)
+        {
+            if (advancing)
+            {
+                // A round is already in flight — record that one more is wanted once it
+                // finishes, instead of running (or losing) this request now.
+                pendingAdvance = true;
+                return Task.CompletedTask;
+            }
 
-        return advanceCoreAsync();
+            advancing = true;
+        }
+
+        return advanceLoopAsync();
     }
 
-    private async Task advanceCoreAsync()
+    private async Task advanceLoopAsync()
     {
-        try
+        while (true)
         {
-            while (true)
+            await advanceRoundAsync().ConfigureAwait(false);
+
+            lock (advanceLock)
             {
-                BeatmapSetInfo? next = queue.PopNext() ?? await radio.PickRandomAsync().ConfigureAwait(false);
-
-                if (next == null)
+                if (pendingAdvance)
                 {
-                    Schedule(() => LastError.Value = "No tracks available; retrying radio shortly.");
-                    Scheduler.AddDelayed(() => AdvanceAsync(), radio_retry_delay_ms);
-                    return;
-                }
-
-                CachedBeatmapSet cached;
-
-                try
-                {
-                    cached = await cache.GetAsync(next.Id).ConfigureAwait(false);
-                }
-                catch (Exception ex)
-                {
-                    // LastError is sticky (not cleared on a later success) — it reports the most
-                    // recent failure encountered while conducting, not "current status".
-                    string message = $"Failed to load '{next.DisplayTitle}': {ex.Message}";
-                    Schedule(() => LastError.Value = message);
+                    // A request coalesced while this round ran — consume it and run one more
+                    // round without releasing the guard in between (so a request arriving in
+                    // that gap can't be missed).
+                    pendingAdvance = false;
                     continue;
                 }
 
-                await playback.PlayAsync(cached).ConfigureAwait(false);
-
-                // Fire-and-forget prefetch of the new queue head, so it's likely already cached
-                // by the time we get to it.
-                if (queue.Items.Count > 0)
-                {
-                    int headId = queue.Items[0].Id;
-                    _ = cache.GetAsync(headId);
-                }
-
+                advancing = false;
                 return;
             }
         }
-        finally
+    }
+
+    private async Task advanceRoundAsync()
+    {
+        // Cleared once per round (not per pop-attempt below) so a round that eventually
+        // succeeds ends with no stale error, while a failure encountered along the way to that
+        // success is still visible for the rest of the round (see the failing-set test).
+        Schedule(() => LastError.Value = null);
+
+        while (true)
         {
-            Volatile.Write(ref advancing, 0);
+            BeatmapSetInfo? next = queue.PopNext() ?? await radio.PickRandomAsync().ConfigureAwait(false);
+
+            if (next == null)
+            {
+                Schedule(() => LastError.Value = "No tracks available; retrying radio shortly.");
+                Scheduler.AddDelayed(() => AdvanceAsync(), radio_retry_delay_ms);
+                return;
+            }
+
+            CachedBeatmapSet cached;
+
+            try
+            {
+                cached = await cache.GetAsync(next.Id).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                string message = $"Failed to load '{next.DisplayTitle}': {ex.Message}";
+                Schedule(() => LastError.Value = message);
+                continue;
+            }
+
+            await playback.PlayAsync(cached).ConfigureAwait(false);
+
+            // Fire-and-forget prefetch of the new queue head, so it's likely already cached
+            // by the time we get to it.
+            if (queue.Items.Count > 0)
+            {
+                int headId = queue.Items[0].Id;
+                _ = cache.GetAsync(headId);
+            }
+
+            return;
         }
     }
 }
