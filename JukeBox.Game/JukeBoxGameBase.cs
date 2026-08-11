@@ -1,4 +1,3 @@
-using System;
 using System.Net.Http;
 using JukeBox.Game.Beatmaps;
 using JukeBox.Game.Configuration;
@@ -12,7 +11,6 @@ using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Performance;
 using osu.Framework.IO.Stores;
 using osuTK;
-using CoreSetting = ReOsuStoryboardPlayer.Setting;
 
 namespace JukeBox.Game
 {
@@ -67,14 +65,6 @@ namespace JukeBox.Game
         [BackgroundDependencyLoader]
         private void load()
         {
-            // Core defaults to a serial storyboard update (UpdateThreadCount=1); its parallel
-            // path only activates once UpdateThreadCount > 1 AND the active object count clears
-            // Setting.ParallelUpdateObjectsLimitCount. Particle-heavy storyboards can have
-            // thousands of active objects per frame, so opt into Core's own supported parallel
-            // path (also exposed as a CLI flag by the reference player) rather than leaving every
-            // storyboard on the single-threaded default.
-            CoreSetting.UpdateThreadCount = Math.Max(1, Environment.ProcessorCount - 1);
-
             Resources.AddStore(new DllResourceStore(typeof(JukeBoxResources).Assembly));
 
             var config = new JukeBoxConfigManager(Host.Storage);
