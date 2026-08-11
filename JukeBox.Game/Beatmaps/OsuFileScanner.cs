@@ -14,12 +14,15 @@ public class OsuFileInfo
     public string? BackgroundFilename;
     public string? VideoFilename;
     public double VideoOffsetMs;
+
+    /// <summary>[Metadata] Version — the difficulty name (e.g. "Easy", "Insane").</summary>
+    public string? Version;
 }
 
 public class OsuFileScanner
 {
-    // Reads [General] (AudioFilename, Mode, WidescreenStoryboard) and [Events]
-    // (background "0,0,\"bg.jpg\"" and video "Video,offset,\"v.mp4\"" / "1,offset,..." lines).
+    // Reads [General] (AudioFilename, Mode, WidescreenStoryboard), [Metadata] (Version) and
+    // [Events] (background "0,0,\"bg.jpg\"" and video "Video,offset,\"v.mp4\"" / "1,offset,..." lines).
     public static OsuFileInfo Scan(string osuPath)
     {
         var info = new OsuFileInfo();
@@ -62,6 +65,15 @@ public class OsuFileScanner
                             info.Widescreen = value == "1";
                             break;
                     }
+                    break;
+
+                case "Metadata":
+                    int metaColon = line.IndexOf(':');
+                    if (metaColon < 0)
+                        break;
+
+                    if (line.Substring(0, metaColon).Trim() == "Version")
+                        info.Version = line.Substring(metaColon + 1).Trim();
                     break;
 
                 case "Events":
