@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Text;
 using System.Threading;
@@ -10,6 +11,7 @@ using System.Threading.Tasks;
 using JukeBox.Game.Beatmaps;
 using JukeBox.Game.Online;
 using JukeBox.Game.Playback;
+using JukeBox.Game.Tests.Beatmaps;
 using JukeBox.Game.UI;
 using NUnit.Framework;
 using osu.Framework.Allocation;
@@ -26,6 +28,7 @@ namespace JukeBox.Game.Tests.Visual
     {
         private PlaybackController playback = null!;
         private MusicQueue queue = null!;
+        private BeatmapCache cache = null!;
         private Jukebox jukebox = null!;
 
         private NowPlayingBar bar = null!;
@@ -62,13 +65,20 @@ namespace JukeBox.Game.Tests.Visual
 
             playback = new PlaybackController();
             queue = new MusicQueue();
-            var mirror = new EmptyMirror();
-            jukebox = new Jukebox(queue, new RadioService(mirror), new BeatmapCache(Path.Combine(tmp, "cache"), mirror), playback);
+            var emptyMirror = new EmptyMirror();
+
+            // Backed by a real (if fake-content) mirror rather than EmptyMirror, so
+            // QueuePanelRowShowsDownloadingThenReadyStatus below can exercise a real
+            // download/extract round trip through GetAsync.
+            cache = new BeatmapCache(Path.Combine(tmp, "cache"), new FileMirror(makeOsz()));
+
+            jukebox = new Jukebox(queue, new RadioService(emptyMirror), cache, playback);
 
             var deps = new DependencyContainer(parent);
             deps.CacheAs(playback);
             deps.CacheAs(jukebox);
             deps.CacheAs(queue);
+            deps.CacheAs(cache);
             return deps;
         }
 
@@ -209,6 +219,54 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("remove first row via its ✕ button", () => panel.TriggerRemoveAt(0));
             AddAssert("1 row left", () => panel.RowCount == 1);
             AddAssert("removed set is gone from the queue itself", () => queue.Items.All(i => i.Id != 1));
+        }
+
+        // Regression coverage for per-row download status: a set with no cache entry and nothing
+        // in flight for it shows "waiting"; once a download for it is kicked off it shows
+        // "downloading…"; once GetAsync completes (extracted to disk with a *.osu file) it flips
+        // to "ready". Uses set id 999 — distinct from fixtureSet/fixtureSetLong's 1/2 and from
+        // whatever CreateChildDependencies' cache fixture osz was downloaded as — so nothing else
+        // in this fixture has touched its cache state.
+        [Test]
+        public void QueuePanelRowShowsDownloadingThenReadyStatus()
+        {
+            const int waiting_id = 999;
+            const int downloading_id = 998;
+
+            AddStep("enqueue a set with no cache activity", () =>
+                queue.Enqueue(new BeatmapSetInfo { Id = waiting_id, Title = "Waiting", Artist = "Artist" }));
+
+            AddAssert("row shows waiting", () => panel.StatusTextAt(indexOf(waiting_id)) == "waiting");
+
+            AddStep("enqueue another set and start caching it", () =>
+            {
+                queue.Enqueue(new BeatmapSetInfo { Id = downloading_id, Title = "Downloading", Artist = "Artist" });
+                _ = cache.GetAsync(downloading_id);
+            });
+
+            AddUntilStep("row shows ready once GetAsync completes",
+                () => panel.StatusTextAt(indexOf(downloading_id)) == "ready");
+        }
+
+        private int indexOf(int setId)
+        {
+            int index = queue.Items.ToList().FindIndex(i => i.Id == setId);
+            Assert.That(index, Is.Not.EqualTo(-1), $"set {setId} not found in queue");
+            return index;
+        }
+
+        // Builds a minimal but real .osz (a zip containing a *.osu file) so BeatmapCache.GetAsync
+        // has something genuine to download/extract/scan — mirrors BeatmapCacheTest.makeOsz.
+        private string makeOsz()
+        {
+            string dir = Path.Combine(tmp, "osz-build");
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(Path.Combine(dir, "test.osu"),
+                "osu file format v14\n\n[General]\nAudioFilename: audio.mp3\nMode: 0\n\n[Events]\n");
+            File.WriteAllBytes(Path.Combine(dir, "audio.mp3"), new byte[] { 0xFF });
+            string osz = Path.Combine(tmp, "fixture.osz");
+            ZipFile.CreateFromDirectory(dir, osz);
+            return osz;
         }
 
         // BASS (the audio backend behind osu!framework's Track) plays WAV directly, so a
