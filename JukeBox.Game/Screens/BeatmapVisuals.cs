@@ -29,7 +29,7 @@ public partial class BeatmapVisuals : CompositeDrawable
     private readonly IFrameBasedClock playbackClock;
 
     private TextureStore? backgroundTextures;
-    private StoryboardLayer storyboardLayer = null!;
+    private TransformStoryboardLayer storyboardLayer = null!;
 
     // Held so Update() can watch for an async decode fault (Video.IsFaulted only becomes true
     // after construction has already succeeded, on the decoder's own thread) and drop the layer.
@@ -127,7 +127,7 @@ public partial class BeatmapVisuals : CompositeDrawable
             }
         }
 
-        AddInternal(storyboardLayer = new StoryboardLayer(set)
+        AddInternal(storyboardLayer = new TransformStoryboardLayer(set)
         {
             Anchor = Anchor.Centre,
             Origin = Anchor.Centre,
