@@ -705,7 +705,9 @@ public async Task RadioSkipsDownloadDisabled()
 - [ ] **Step 4: Run — expect PASS.**
 - [ ] **Step 5: Commit** `git commit -am "feat: music queue + radio random picker"`
 
----### Task 7: PlaybackController (track = clock)
+---
+
+### Task 7: PlaybackController (track = clock)
 
 **Files:**
 - Create: `JukeBox.Game/Playback/PlaybackController.cs`
