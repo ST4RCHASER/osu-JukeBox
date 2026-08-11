@@ -32,6 +32,7 @@ namespace JukeBox.Game.Online
                 $"s={r.Status}", $"sort={r.Sort}", $"p={page}", $"ps={r.PageSize}"
             };
             if (extra.Length > 0) q.Add($"e={extra}");
+            if (r.Option != null) q.Add($"option={r.Option}");
             return $"{API_BASE}/search?{string.Join("&", q)}";
         }
 
