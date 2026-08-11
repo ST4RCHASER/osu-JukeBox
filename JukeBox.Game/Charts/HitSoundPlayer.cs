@@ -189,12 +189,17 @@ public partial class HitSoundPlayer : Component
 /// indices of events that became due since the previous call; a backward jump rewinds the cursor
 /// (binary search) so those events fire again; events that became due more than
 /// <see cref="CatchUpWindowMs"/> before "now" (i.e. skipped over by a forward seek) are swallowed.
+/// Backward deltas under <see cref="JitterToleranceMs"/> are treated as clock jitter, not a seek —
+/// the cursor is not rewound, so already-fired events don't re-fire.
 /// Separated from the drawable so it can be unit-tested headlessly.
 /// </summary>
 public class HitSoundCursor
 {
     /// <summary>How stale an event may be and still fire — anything older was seeked over.</summary>
     public const double CatchUpWindowMs = 200;
+
+    /// <summary>Backward movement smaller than this is clock jitter, not a user seek.</summary>
+    public const double JitterToleranceMs = 50;
 
     private readonly double[] times;
     private int index;
@@ -208,6 +213,14 @@ public class HitSoundCursor
     public List<int> Advance(double now)
     {
         var fired = new List<int>();
+
+        if (now < lastTime && lastTime - now < JitterToleranceMs)
+        {
+            // Tiny backward step (decoupled clocks can wobble when re-syncing to their source):
+            // ignore it rather than rewind and machine-gun the last-fired events again.
+            lastTime = now;
+            return fired;
+        }
 
         if (now < lastTime)
         {
