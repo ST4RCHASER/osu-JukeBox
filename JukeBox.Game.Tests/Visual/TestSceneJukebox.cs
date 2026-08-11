@@ -84,15 +84,49 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("enqueue set2 (idle already false, just queues)", () => jukebox.EnqueueAndMaybePlayAsync(set2));
             AddStep("advance", () => jukebox.AdvanceAsync());
             AddUntilStep("set2 playing", () => playback.Current.Value?.SetId == set2.Id);
+        }
 
+        [Test]
+        public void LastErrorIsStickyWithinAFailingRoundButClearedByTheNextSuccessfulOne()
+        {
             AddStep("queue failing set then set4", () =>
             {
                 queue.Enqueue(setFailing);
                 queue.Enqueue(set4);
             });
-            AddStep("advance past failure", () => jukebox.AdvanceAsync());
+            AddStep("advance (single round: pops failing set, then set4)", () => jukebox.AdvanceAsync());
             AddUntilStep("set4 playing", () => playback.Current.Value?.SetId == set4.Id);
-            AddAssert("last error recorded failure", () => jukebox.LastError.Value != null && jukebox.LastError.Value.Contains("Failing"));
+            AddAssert("failure earlier in this round is still visible", () => jukebox.LastError.Value != null && jukebox.LastError.Value.Contains("Failing"));
+
+            AddStep("queue a clean set1 and advance again", () =>
+            {
+                queue.Enqueue(set1);
+                jukebox.AdvanceAsync();
+            });
+            AddUntilStep("set1 playing", () => playback.Current.Value?.SetId == set1.Id);
+            AddAssert("a fully-successful round clears the stale error", () => jukebox.LastError.Value == null);
+        }
+
+        // Regression test for the reentrancy guard's latest-wins coalescing: a SkipCurrent (or
+        // TrackCompleted) that arrives while an advance round is still stuck downloading must not
+        // be dropped — it must run one more round once the in-flight one finishes.
+        [Test]
+        public void SkipDuringInFlightAdvanceIsNotLostAndTriggersAnotherRoundAfterward()
+        {
+            AddStep("gate set1's download", () => mirror.GateDownload(1));
+            AddStep("enqueue set1 (advance starts, blocks mid-download)", () => jukebox.EnqueueAndMaybePlayAsync(set1));
+            AddStep("queue set2 behind it", () => queue.Enqueue(set2));
+
+            AddStep("skip while the advance for set1 is still in flight", () => jukebox.SkipCurrent());
+
+            AddStep("release set1's download", () => mirror.ReleaseGate(1));
+
+            // Whichever of set1/set2 actually wins the visible swap is PlaybackController's own
+            // "most-recently-requested call wins" arbitration (see OverlappingPlayAsyncSecondCallWins) —
+            // not what's under test here. What matters is that the skip wasn't silently dropped:
+            // a second round ran and drained the queue.
+            AddUntilStep("coalesced skip eventually plays set2", () => playback.Current.Value?.SetId == set2.Id);
+            AddAssert("queue drained (set2 was actually popped and played, not left queued)", () => queue.Items.Count == 0);
         }
 
         private string makeOsz(string name, string audioFileName)
@@ -138,19 +172,33 @@ namespace JukeBox.Game.Tests.Visual
 
         // Serves distinct fixture .osz files per setId; download for an unregistered id throws,
         // simulating a mirror/extract failure for the "failing set" case. SearchAsync always
-        // returns empty (radio isn't exercised by this test's happy paths).
+        // returns empty (radio isn't exercised by this test's happy paths). DownloadAsync for a
+        // gated setId blocks until released, giving tests a deterministic window in which an
+        // advance round is "in flight".
         private class FixtureMirror : IBeatmapMirror
         {
             private readonly Dictionary<int, string> paths = new();
+            private readonly Dictionary<int, TaskCompletionSource<bool>> gates = new();
             public string Name => "fixture";
 
             public void Register(int setId, string oszPath) => paths[setId] = oszPath;
+
+            public void GateDownload(int setId) => gates[setId] = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            public void ReleaseGate(int setId)
+            {
+                if (gates.TryGetValue(setId, out var tcs))
+                    tcs.TrySetResult(true);
+            }
 
             public Task<List<BeatmapSetInfo>> SearchAsync(SearchRequest r, CancellationToken ct = default)
                 => Task.FromResult(new List<BeatmapSetInfo>());
 
             public async Task DownloadAsync(int setId, bool noVideo, Stream destination, CancellationToken ct = default)
             {
+                if (gates.TryGetValue(setId, out var gate))
+                    await gate.Task.ConfigureAwait(false);
+
                 if (!paths.TryGetValue(setId, out string? path))
                     throw new IOException($"fixture mirror has no set {setId}");
 
