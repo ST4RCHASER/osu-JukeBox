@@ -1,6 +1,8 @@
-﻿using JukeBox.Game.Screens;
+﻿using JukeBox.Game.Online;
+using JukeBox.Game.Screens;
 using osu.Framework.Allocation;
 using osu.Framework.Graphics;
+using osu.Framework.Graphics.Textures;
 using osu.Framework.Screens;
 
 namespace JukeBox.Game
@@ -15,6 +17,16 @@ namespace JukeBox.Game
             // Add your top-level game components here.
             // A screen stack and sample screen has been provided for convenience, but you can replace it if you don't want to use screens.
             Child = screenStack = new ScreenStack { RelativeSizeAxes = Axes.Both };
+
+            // Single online TextureStore for beatmap set cover thumbnails
+            // (https://b.ppy.sh/thumb/{setId}l.jpg), shared by every SearchResultRow/NowPlayingBar
+            // rather than one per row. CreateOnlineStore() (not CreateTextureLoaderStore's own
+            // NativeStorage-backed overload) is what actually knows how to fetch a bare https://
+            // URL as raw bytes. Deliberately wired here rather than in JukeBoxGameBase.load() —
+            // see the field comment on `dependencies` for why.
+            var thumbnailStore = new TextureStore(Host.Renderer,
+                Host.CreateTextureLoaderStore(CreateOnlineStore()), useAtlas: false);
+            dependencies.Cache(new OnlineThumbnailStore { Store = thumbnailStore });
         }
 
         protected override void LoadComplete()
