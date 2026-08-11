@@ -108,6 +108,18 @@ public partial class QueuePanel : CompositeDrawable
         this.MoveToX(shown ? 0 : panel_width, slide_duration, Easing.OutQuint);
     }
 
+    /// <summary>
+    /// Forces the panel to a specific shown/hidden state, e.g. so a layout switch can dock it
+    /// permanently open without depending on <see cref="ToggleVisibility"/>'s toggle parity.
+    /// </summary>
+    public void SetShown(bool value)
+    {
+        if (shown == value)
+            return;
+
+        ToggleVisibility();
+    }
+
     private void rebuildRows()
     {
         headerText.Text = $"Queue ({queue.Items.Count})";
