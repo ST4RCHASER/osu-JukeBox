@@ -49,6 +49,7 @@ public partial class MainScreen : Screen
 
     private SearchOverlay search = null!;
     private QueuePanel queuePanel = null!;
+    private SettingsOverlay settingsOverlay = null!;
 
     /// <summary>
     /// Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the fullscreen-overlay
@@ -69,6 +70,7 @@ public partial class MainScreen : Screen
 
         search = new SearchOverlay { RelativeSizeAxes = Axes.Both };
         queuePanel = new QueuePanel();
+        settingsOverlay = new SettingsOverlay();
 
         InternalChildren = new Drawable[]
         {
@@ -101,6 +103,7 @@ public partial class MainScreen : Screen
                 Origin = Anchor.TopLeft,
             },
             new NowPlayingBar(),
+            settingsOverlay,
             new BasicButton
             {
                 Anchor = Anchor.TopRight,
@@ -109,6 +112,15 @@ public partial class MainScreen : Screen
                 Size = new Vector2(96, 28),
                 Text = "layout",
                 Action = toggleLayout,
+            },
+            new IconButton
+            {
+                Anchor = Anchor.TopRight,
+                Origin = Anchor.TopRight,
+                Position = new Vector2(-112, 8),
+                Size = new Vector2(28, 28),
+                Icon = FontAwesome.Solid.Cog,
+                Action = () => settingsOverlay.ToggleVisibility(),
             },
         };
 
