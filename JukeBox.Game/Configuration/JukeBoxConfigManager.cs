@@ -9,6 +9,7 @@ public enum JukeBoxSetting
     NoVideoDownloads,
     UiLayout,
     CacheSizeGb,
+    ShowFps,
 }
 
 public enum UiLayout
@@ -30,5 +31,6 @@ public class JukeBoxConfigManager : IniConfigManager<JukeBoxSetting>
         SetDefault(JukeBoxSetting.NoVideoDownloads, false);
         SetDefault(JukeBoxSetting.UiLayout, UiLayout.FullscreenOverlay);
         SetDefault(JukeBoxSetting.CacheSizeGb, 10.0);
+        SetDefault(JukeBoxSetting.ShowFps, false);
     }
 }
