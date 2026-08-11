@@ -18,5 +18,21 @@ namespace JukeBox.Game.Tests.Online
             Assert.That(sets[0].Beatmaps, Is.Not.Empty);
             Assert.That(sets[0].Beatmaps[0].Version, Is.Not.Empty);
         }
+
+        [Test]
+        public void DisplayTitleAndArtistPreferRomanizedOverUnicode()
+        {
+            var set = new BeatmapSetInfo { Title = "Romanized Title", TitleUnicode = "曲名", Artist = "Romanized Artist", ArtistUnicode = "アーティスト" };
+            Assert.That(set.DisplayTitle, Is.EqualTo("Romanized Title"));
+            Assert.That(set.DisplayArtist, Is.EqualTo("Romanized Artist"));
+        }
+
+        [Test]
+        public void DisplayTitleAndArtistFallBackToUnicodeWhenRomanizedMissing()
+        {
+            var set = new BeatmapSetInfo { Title = "", TitleUnicode = "曲名", Artist = "", ArtistUnicode = "アーティスト" };
+            Assert.That(set.DisplayTitle, Is.EqualTo("曲名"));
+            Assert.That(set.DisplayArtist, Is.EqualTo("アーティスト"));
+        }
     }
 }
