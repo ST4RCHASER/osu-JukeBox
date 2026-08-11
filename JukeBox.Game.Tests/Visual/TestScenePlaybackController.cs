@@ -1,3 +1,5 @@
+using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Text;
 using JukeBox.Game.Beatmaps;
@@ -15,6 +17,10 @@ namespace JukeBox.Game.Tests.Visual
         private CachedBeatmapSet fixtureSet = null!;
         private CachedBeatmapSet fixtureSetA = null!;
         private CachedBeatmapSet fixtureSetB = null!;
+        private string sameAudioDiff = null!;
+        private string otherAudioDiff = null!;
+
+        private double timeBeforeSwitch;
 
         [SetUp]
         public void SetUp()
@@ -25,12 +31,32 @@ namespace JukeBox.Game.Tests.Visual
             string audioFile = Path.Combine(tmp, "audio.wav");
             writeSilentWav(audioFile, 1);
 
+            // A second, longer audio file in the same folder: the "different AudioFilename"
+            // difficulty-switch branch is observable through the track length changing.
+            writeSilentWav(Path.Combine(tmp, "audio2.wav"), 3);
+
+            // The .osu files themselves never need to exist for SwitchDifficultyAsync — it works
+            // off the Difficulties metadata captured at cache-load time.
+            string diffA = Path.Combine(tmp, "a.osu");
+            string diffB = Path.Combine(tmp, "b.osu");
+            string diffC = Path.Combine(tmp, "c.osu");
+
             fixtureSet = new CachedBeatmapSet
             {
                 SetId = 1,
                 Directory = tmp,
                 AudioFile = audioFile,
+                PreferredOsuFile = diffA,
+                OsuFiles = new List<string> { diffA, diffB, diffC },
+                Difficulties = new List<DifficultyInfo>
+                {
+                    new DifficultyInfo { Path = diffA, Version = "Easy", Mode = 0, AudioFilename = "audio.wav" },
+                    new DifficultyInfo { Path = diffB, Version = "Hard", Mode = 0, AudioFilename = "audio.wav" },
+                    new DifficultyInfo { Path = diffC, Version = "Other", Mode = 0, AudioFilename = "audio2.wav" },
+                },
             };
+            sameAudioDiff = diffB;
+            otherAudioDiff = diffC;
 
             // Two more fixtures in their own subdirectories, for the overlapping-PlayAsync test.
             string dirA = Path.Combine(tmp, "a");
@@ -84,6 +110,97 @@ namespace JukeBox.Game.Tests.Visual
 
             AddUntilStep("second call's track is active", () => controller.Current.Value?.SetId == fixtureSetB.SetId);
             AddAssert("first call never became active", () => controller.Current.Value?.SetId != fixtureSetA.SetId);
+        }
+
+        // Same-audio branch: no track swap happens, so playback simply continues — the position
+        // stays monotonic (never reset/seeked), the track length is unchanged, and only the
+        // selected file retargets.
+        [Test]
+        public void SwitchDifficultySameAudioContinuesWithoutTrackSwap()
+        {
+            AddStep("play fixture", () => controller.PlayAsync(fixtureSet));
+            AddUntilStep("clock advances", () => controller.CurrentTimeMs > 0);
+
+            double lengthBefore = 0;
+            AddStep("switch to same-audio diff", () =>
+            {
+                timeBeforeSwitch = controller.CurrentTimeMs;
+                lengthBefore = controller.LengthMs;
+                controller.SwitchDifficultyAsync(sameAudioDiff);
+            });
+
+            AddUntilStep("selection retargeted", () => controller.SelectedOsuFile.Value == sameAudioDiff);
+            AddAssert("track length unchanged", () => controller.LengthMs == lengthBefore);
+            AddAssert("position monotonic (no reset)", () => controller.CurrentTimeMs >= timeBeforeSwitch);
+            AddAssert("still playing", () => controller.IsPlaying);
+        }
+
+        // Different-audio branch: the new difficulty's AudioFilename resolves to another file, so
+        // a new track (observably longer here) swaps in, seeked to the previous position, and the
+        // old track/store disposal doesn't disturb subsequent updates.
+        [Test]
+        public void SwitchDifficultyDifferentAudioResumesAtPreviousPosition()
+        {
+            AddStep("play fixture", () => controller.PlayAsync(fixtureSet));
+            AddUntilStep("clock advances", () => controller.CurrentTimeMs > 0);
+
+            AddStep("switch to other-audio diff", () =>
+            {
+                timeBeforeSwitch = controller.CurrentTimeMs;
+                controller.SwitchDifficultyAsync(otherAudioDiff);
+            });
+
+            AddUntilStep("selection retargeted", () => controller.SelectedOsuFile.Value == otherAudioDiff);
+            AddUntilStep("new (3s) track active", () => controller.LengthMs > 2000);
+            AddAssert("position resumed, not reset to zero", () => controller.CurrentTimeMs >= timeBeforeSwitch);
+            AddAssert("position near previous, not wildly ahead", () => controller.CurrentTimeMs < timeBeforeSwitch + 2000);
+            AddAssert("still playing", () => controller.IsPlaying);
+
+            // A few more frames with the old track disposed — playback must keep advancing.
+            double mark = 0;
+            AddStep("mark time", () => mark = controller.CurrentTimeMs);
+            AddUntilStep("clock still advances on the new track", () => controller.CurrentTimeMs > mark);
+        }
+
+        // Pause state must survive an audio swap: a paused switch stays paused at the same spot.
+        [Test]
+        public void SwitchDifficultyDifferentAudioPreservesPause()
+        {
+            AddStep("play fixture", () => controller.PlayAsync(fixtureSet));
+            AddUntilStep("clock advances", () => controller.CurrentTimeMs > 0);
+
+            AddStep("pause", () => controller.TogglePause());
+            AddAssert("not playing", () => !controller.IsPlaying);
+
+            AddStep("switch to other-audio diff", () =>
+            {
+                timeBeforeSwitch = controller.CurrentTimeMs;
+                controller.SwitchDifficultyAsync(otherAudioDiff);
+            });
+
+            AddUntilStep("new (3s) track active", () => controller.LengthMs > 2000);
+            AddAssert("still paused", () => !controller.IsPlaying);
+            AddAssert("position preserved exactly", () => Math.Abs(controller.CurrentTimeMs - timeBeforeSwitch) < 1);
+        }
+
+        // Race arbitration, same pattern as OverlappingPlayAsyncSecondCallWins: a PlayAsync issued
+        // right after a difficulty switch claims a newer generation, so the switch's (stale) track
+        // must be dropped — latest request wins, nothing wedges.
+        [Test]
+        public void OverlappingSwitchThenPlayAsyncPlayWins()
+        {
+            AddStep("play fixture", () => controller.PlayAsync(fixtureSet));
+            AddUntilStep("clock advances", () => controller.CurrentTimeMs > 0);
+
+            AddStep("switch then play B back-to-back", () =>
+            {
+                controller.SwitchDifficultyAsync(otherAudioDiff);
+                controller.PlayAsync(fixtureSetB);
+            });
+
+            AddUntilStep("PlayAsync's set is active", () => controller.Current.Value?.SetId == fixtureSetB.SetId);
+            AddAssert("stale switch selection was dropped", () => controller.SelectedOsuFile.Value != otherAudioDiff);
+            AddUntilStep("playback not wedged", () => controller.IsPlaying && controller.CurrentTimeMs >= 0);
         }
 
         // BASS (the audio backend behind osu!framework's Track) plays WAV directly, so a
