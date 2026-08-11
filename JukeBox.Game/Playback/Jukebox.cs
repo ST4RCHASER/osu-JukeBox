@@ -189,6 +189,12 @@ public partial class Jukebox : Component
                 return;
             }
 
+            // Checked before GetAsync rather than having GetAsync report hit/miss: the cache can
+            // only grow via a download, so gating eviction on "was this a miss" means a run of
+            // cache hits (skip/track-complete with everything already cached) costs nothing —
+            // no re-stat of every cached set's size on every round.
+            bool wasCached = cache.IsCached(next.Id);
+
             CachedBeatmapSet cached;
 
             try
@@ -206,14 +212,18 @@ public partial class Jukebox : Component
             Schedule(() => NowPlaying.Value = next);
 
             // Fire-and-forget prefetch of the new queue head, so it's likely already cached
-            // by the time we get to it.
+            // by the time we get to it. Deliberately not eviction-gated itself: if this downloads
+            // a set, the cache stays over-limit until that set becomes "current" on some later
+            // round and its own download triggers eviction — a self-correcting delay rather than
+            // a second eviction path to reason about here.
             if (queue.Items.Count > 0)
             {
                 int headId = queue.Items[0].Id;
                 _ = cache.GetAsync(headId);
             }
 
-            evictCacheInBackground(next.Id);
+            if (!wasCached)
+                evictCacheInBackground(next.Id);
 
             return;
         }
