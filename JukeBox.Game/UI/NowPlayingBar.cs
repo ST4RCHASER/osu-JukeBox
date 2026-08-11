@@ -1,6 +1,8 @@
 #nullable enable
 
 using System;
+using System.Threading;
+using System.Threading.Tasks;
 using JukeBox.Game.Online;
 using JukeBox.Game.Playback;
 using osu.Framework.Allocation;
@@ -9,27 +11,44 @@ using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Shapes;
 using osu.Framework.Graphics.Sprites;
+using osu.Framework.Graphics.Textures;
 using osu.Framework.Graphics.UserInterface;
+using osu.Framework.Logging;
 using osuTK;
 using osuTK.Graphics;
 
 namespace JukeBox.Game.UI;
 
 /// <summary>
-/// Bottom-anchored, full-width playback bar: cover thumb (placeholder — Task 13 wires the real
-/// artwork), title/artist (from <see cref="Playback.Jukebox.NowPlaying"/>), a seekable progress
-/// bar, play/pause + skip buttons and a volume slider bound directly to
-/// <see cref="PlaybackController.Volume"/>.
+/// Bottom-anchored, full-width playback bar: cover thumb (fetched async from
+/// <see cref="OnlineThumbnailStore"/> whenever <see cref="Playback.Jukebox.NowPlaying"/> changes;
+/// a placeholder box remains underneath until it loads or if it never does), title/artist (from
+/// <see cref="Playback.Jukebox.NowPlaying"/>), a seekable progress bar, play/pause + skip buttons
+/// and a volume slider bound directly to <see cref="PlaybackController.Volume"/>.
 /// </summary>
 public partial class NowPlayingBar : CompositeDrawable
 {
     private const float bar_height = 80;
+    private const float cover_size = 64;
 
     [Resolved]
     private PlaybackController playback { get; set; } = null!;
 
     [Resolved]
     private Jukebox jukebox { get; set; } = null!;
+
+    // [Resolved(canBeNull: true)] rather than a hard [Resolved]: only JukeBoxGame's own
+    // [BackgroundDependencyLoader] (not JukeBoxGameBase's, shared with every test scene) caches
+    // this — see the field comment on JukeBoxGameBase.dependencies — so every existing test scene
+    // must keep constructing/resolving this bar fine with no store present at all.
+    [Resolved(canBeNull: true)]
+    private OnlineThumbnailStore? thumbnailStore { get; set; }
+
+    // Bumped every time NowPlaying changes; an in-flight thumbnail load whose generation has
+    // fallen behind by the time it completes is stale (NowPlaying has since changed again, or
+    // gone back to null) and must not draw its now-outdated cover over whatever's current.
+    private int thumbnailGeneration;
+    private Sprite? coverSprite;
 
     // Local, not bound straight to CurrentTimeMs/LengthMs. TransferValueOnCommit only gates one
     // direction — user drag input reaching this bindable (`Current`) is deferred until commit —
@@ -76,10 +95,10 @@ public partial class NowPlayingBar : CompositeDrawable
                 RelativeSizeAxes = Axes.Both,
                 Colour = new Color4(20, 20, 20, 255),
             },
-            new Box // cover thumb placeholder; Task 13 replaces with the real artwork texture.
+            new Box // cover thumb placeholder; stays visible underneath until/unless the real one loads.
             {
                 Position = new Vector2(8, 8),
-                Size = new Vector2(64, 64),
+                Size = new Vector2(cover_size, cover_size),
                 Colour = Color4.DarkSlateGray,
             },
             new FillFlowContainer
@@ -179,5 +198,52 @@ public partial class NowPlayingBar : CompositeDrawable
     {
         titleText.Text = change.NewValue?.DisplayTitle ?? string.Empty;
         artistText.Text = change.NewValue?.DisplayArtist ?? string.Empty;
+
+        int myGeneration = ++thumbnailGeneration;
+
+        // The previous set's cover no longer matches what's playing (or nothing is playing) —
+        // drop it immediately rather than leave a stale thumbnail up while (or if) a new one loads.
+        coverSprite?.Expire();
+        coverSprite = null;
+
+        if (change.NewValue == null || thumbnailStore == null)
+            return;
+
+        _ = loadThumbnailAsync(change.NewValue.Id, myGeneration);
+    }
+
+    private async Task loadThumbnailAsync(int setId, int generation)
+    {
+        Texture? texture;
+
+        try
+        {
+            texture = await thumbnailStore!.Store.GetAsync($"https://b.ppy.sh/thumb/{setId}l.jpg", CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // Missing/unreachable thumbnail — not fatal, the placeholder box stays up.
+            Logger.Error(ex, $"Failed to load cover thumbnail for set {setId}");
+            return;
+        }
+
+        if (texture == null)
+            return;
+
+        Schedule(() =>
+        {
+            // NowPlaying moved on again while this load was in flight — this cover is stale.
+            if (generation != thumbnailGeneration)
+                return;
+
+            // Drawn on top of (added after) the placeholder box from load(), so it simply covers it.
+            AddInternal(coverSprite = new Sprite
+            {
+                Position = new Vector2(8, 8),
+                Size = new Vector2(cover_size, cover_size),
+                FillMode = FillMode.Fill,
+                Texture = texture,
+            });
+        });
     }
 }
