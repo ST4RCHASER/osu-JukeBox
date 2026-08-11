@@ -31,10 +31,16 @@ public partial class NowPlayingBar : CompositeDrawable
     [Resolved]
     private Jukebox jukebox { get; set; } = null!;
 
-    // Local, not bound straight to CurrentTimeMs/LengthMs: SliderBar<T>.TransferValueOnCommit
-    // keeps drag *preview* on a separate instantaneous value internally, so Update() overwriting
-    // this every frame doesn't fight a live drag — it only needs guarding (via settingProgress)
-    // against re-triggering a Seek from its own write once a drag is committed.
+    // Local, not bound straight to CurrentTimeMs/LengthMs. TransferValueOnCommit only gates one
+    // direction — user drag input reaching this bindable (`Current`) is deferred until commit —
+    // but the OTHER direction is unconditional: SliderBar<T>'s constructor wires
+    // `current.ValueChanged` straight into its internal drag-preview value with no such gate
+    // (confirmed by decompiling SliderBar<T>, since no local framework source is available). So
+    // without also checking progressBar.IsDragged, Update()'s periodic write below would still
+    // stomp the live drag preview every frame while a drag is in progress, snapping the handle
+    // back to playback position before the user's drag is committed. settingProgress guards the
+    // separate, narrower problem of that same write re-triggering a Seek via the ValueChanged
+    // handler in LoadComplete.
     private readonly BindableDouble progress = new BindableDouble { MinValue = 0, MaxValue = 1 };
     private bool settingProgress;
 
@@ -48,6 +54,12 @@ public partial class NowPlayingBar : CompositeDrawable
     /// drive it via <see cref="Drawable.TriggerClick"/> without depending on its exact position.
     /// </summary>
     internal BasicButton PlayPauseButton => playPauseButton;
+
+    /// <summary>
+    /// Test-only access to the progress bar (JukeBox.Game.Tests has InternalsVisibleTo), to drive
+    /// a real mouse drag over it and observe its <c>Current</c>/<see cref="Drawable.IsDragged"/>.
+    /// </summary>
+    internal BasicSliderBar<double> ProgressBar => progressBar;
 
     [BackgroundDependencyLoader]
     private void load()
@@ -151,9 +163,14 @@ public partial class NowPlayingBar : CompositeDrawable
     {
         base.Update();
 
-        settingProgress = true;
-        progress.Value = Math.Clamp(playback.CurrentTimeMs / Math.Max(1, playback.LengthMs), 0, 1);
-        settingProgress = false;
+        // Skip the write entirely while the user is actively dragging: see the comment on
+        // `progress` above for why writing to it here would otherwise fight the live drag.
+        if (!progressBar.IsDragged)
+        {
+            settingProgress = true;
+            progress.Value = Math.Clamp(playback.CurrentTimeMs / Math.Max(1, playback.LengthMs), 0, 1);
+            settingProgress = false;
+        }
 
         playPauseButton.Text = playback.IsPlaying ? "⏸" : "▶";
     }
