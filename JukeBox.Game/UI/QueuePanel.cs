@@ -8,8 +8,8 @@ using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Shapes;
 using osu.Framework.Graphics.Sprites;
+using osu.Framework.Input.Events;
 using osuTK;
-using osuTK.Graphics;
 
 namespace JukeBox.Game.UI;
 
@@ -65,32 +65,40 @@ public partial class QueuePanel : CompositeDrawable
         Anchor = Anchor.TopRight;
         Origin = Anchor.TopRight;
 
+        Masking = true;
+        CornerRadius = Theme.CornerRadius;
+        EdgeEffect = Theme.PanelShadow;
+
         InternalChildren = new Drawable[]
         {
             new Box
             {
                 RelativeSizeAxes = Axes.Both,
-                Colour = new Color4(28, 28, 28, 255),
+                Colour = Theme.PanelSurface,
             },
             new Container
             {
                 RelativeSizeAxes = Axes.Both,
-                Padding = new MarginPadding(8),
+                Padding = new MarginPadding(Theme.PanelPadding),
                 Child = new FillFlowContainer
                 {
                     RelativeSizeAxes = Axes.X,
                     AutoSizeAxes = Axes.Y,
                     Direction = FillDirection.Vertical,
-                    Spacing = new Vector2(0, 4),
+                    Spacing = new Vector2(0, Theme.RowSpacing),
                     Children = new Drawable[]
                     {
-                        headerText = new SpriteText { Font = FontUsage.Default.With(size: 18) },
+                        headerText = new SpriteText
+                        {
+                            Font = FontUsage.Default.With(size: Theme.HeaderTextSize),
+                            Colour = Theme.TextPrimary,
+                        },
                         rowsFlow = new FillFlowContainer
                         {
                             RelativeSizeAxes = Axes.X,
                             AutoSizeAxes = Axes.Y,
                             Direction = FillDirection.Vertical,
-                            Spacing = new Vector2(0, 4),
+                            Spacing = new Vector2(0, Theme.RowSpacing),
                         }
                     }
                 }
@@ -152,8 +160,10 @@ public partial class QueuePanel : CompositeDrawable
         private readonly BeatmapCache? cache;
         private readonly IconButton removeButton;
         private readonly SpriteText statusText;
+        private readonly Box surface;
 
         private int framesSincePoll;
+        private bool ready;
 
         public QueueRow(BeatmapSetInfo set, BeatmapCache? cache, System.Action onRemove)
         {
@@ -161,36 +171,76 @@ public partial class QueuePanel : CompositeDrawable
             this.cache = cache;
 
             RelativeSizeAxes = Axes.X;
-            Height = 28;
+            Height = 32;
+
+            Masking = true;
+            CornerRadius = Theme.CornerRadius;
 
             InternalChildren = new Drawable[]
             {
+                surface = new Box
+                {
+                    RelativeSizeAxes = Axes.Both,
+                    Colour = Theme.PanelSurface,
+                },
                 new SpriteText
                 {
                     Anchor = Anchor.CentreLeft,
                     Origin = Anchor.CentreLeft,
-                    Font = FontUsage.Default.With(size: 14),
+                    Position = new Vector2(8, 0),
+                    Font = FontUsage.Default.With(size: Theme.RowSecondaryTextSize),
+                    Colour = Theme.TextPrimary,
                     Text = $"{set.DisplayTitle} — {set.DisplayArtist}",
                 },
                 statusText = new SpriteText
                 {
                     Anchor = Anchor.CentreRight,
                     Origin = Anchor.CentreRight,
-                    Position = new Vector2(-28, 0),
-                    Font = FontUsage.Default.With(size: 12),
-                    Colour = new Color4(180, 180, 180, 255),
+                    Position = new Vector2(-32, 0),
+                    Font = FontUsage.Default.With(size: Theme.CaptionTextSize),
+                    Colour = Theme.TextTertiary,
                 },
                 removeButton = new IconButton
                 {
                     Anchor = Anchor.CentreRight,
                     Origin = Anchor.CentreRight,
+                    Position = new Vector2(-4, 0),
                     Size = new Vector2(24, 24),
                     Icon = FontAwesome.Solid.Times,
                     Action = onRemove,
+                    Alpha = 0,
                 }
             };
 
             updateStatus();
+        }
+
+        protected override void LoadComplete()
+        {
+            base.LoadComplete();
+            ready = true;
+        }
+
+        protected override bool OnHover(HoverEvent e)
+        {
+            surface.FadeColour(Theme.ElevatedSurface, Theme.HoverFadeDuration);
+            fadeRemoveButton(1);
+            return base.OnHover(e);
+        }
+
+        protected override void OnHoverLost(HoverLostEvent e)
+        {
+            surface.FadeColour(Theme.PanelSurface, Theme.HoverFadeDuration);
+            fadeRemoveButton(0);
+            base.OnHoverLost(e);
+        }
+
+        private void fadeRemoveButton(float alpha)
+        {
+            if (ready)
+                removeButton.FadeTo(alpha, Theme.HoverFadeDuration);
+            else
+                removeButton.Alpha = alpha;
         }
 
         protected override void Update()
@@ -209,13 +259,18 @@ public partial class QueuePanel : CompositeDrawable
 
         private void updateStatus()
         {
+            bool isCached = cache != null && cache.IsCached(set.Id);
+            bool downloading = cache != null && cache.IsDownloading(set.Id);
+
             statusText.Text = cache == null
                 ? string.Empty
-                : cache.IsCached(set.Id)
+                : isCached
                     ? "ready"
-                    : cache.IsDownloading(set.Id)
+                    : downloading
                         ? "downloading…"
                         : "waiting";
+
+            statusText.Colour = isCached ? Theme.Accent : Theme.TextTertiary;
         }
 
         public void TriggerRemove() => removeButton.TriggerClick();

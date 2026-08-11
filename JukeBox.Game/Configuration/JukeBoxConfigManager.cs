@@ -31,7 +31,7 @@ public class JukeBoxConfigManager : IniConfigManager<JukeBoxSetting>
     {
         SetDefault(JukeBoxSetting.Volume, 1.0, 0.0, 1.0);
         SetDefault(JukeBoxSetting.NoVideoDownloads, false);
-        SetDefault(JukeBoxSetting.UiLayout, UiLayout.FullscreenOverlay);
+        SetDefault(JukeBoxSetting.UiLayout, UiLayout.Split);
         SetDefault(JukeBoxSetting.CacheSizeGb, 10.0);
         SetDefault(JukeBoxSetting.ShowFps, false);
         SetDefault(JukeBoxSetting.PreferredMirror, MirrorSource.Auto);
