@@ -208,7 +208,20 @@ public partial class Jukebox : Component
                 continue;
             }
 
-            await playback.PlayAsync(cached).ConfigureAwait(false);
+            bool played = await playback.PlayAsync(cached).ConfigureAwait(false);
+
+            if (!played)
+            {
+                // No loadable audio for this set (e.g. AudioFilename missing/points at a file
+                // that doesn't exist, or the track failed to decode). Counting this round a
+                // success would leave nothing playing and TrackCompleted never firing again —
+                // treat it exactly like a cache/download failure above: report and try the next
+                // candidate instead of wedging.
+                string message = $"No playable audio for '{next.DisplayTitle}'";
+                Schedule(() => LastError.Value = message);
+                continue;
+            }
+
             Schedule(() => NowPlaying.Value = next);
 
             // Fire-and-forget prefetch of the new queue head, so it's likely already cached

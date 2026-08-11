@@ -164,9 +164,46 @@ namespace JukeBox.Game.Tests.Visual
             AddUntilStep("a second round ran (guard was released, not wedged)", () => queue.Items.Count == 0);
         }
 
+        // Regression test for the silent-stall bug: a set with no loadable audio (AudioFilename
+        // missing, or pointing at a file that doesn't exist) used to make PlaybackController.PlayAsync
+        // return silently, and Jukebox would count the round a success anyway — NowPlaying got set,
+        // nothing was actually playing, and TrackCompleted would never fire again to advance past it.
+        // PlayAsync now reports failure and advanceRoundAsync treats it exactly like a cache/download
+        // failure: report LastError and keep popping instead of wedging on the dead set.
+        [Test]
+        public void SetWithNoLoadableAudioReportsErrorAndAdvancesToNextQueuedSet()
+        {
+            AddStep("register a set whose .osu has no AudioFilename", () => mirror.Register(5, makeOszNoAudio("noaudio")));
+
+            var setNoAudio = new BeatmapSetInfo { Id = 5, Title = "Silent" };
+
+            AddStep("queue the silent set then a normal one", () =>
+            {
+                queue.Enqueue(setNoAudio);
+                queue.Enqueue(set1);
+            });
+            AddStep("advance (single round: pops silent set, then set1)", () => jukebox.AdvanceAsync());
+
+            AddUntilStep("set1 playing (silent set was skipped, not wedged on)", () => playback.Current.Value?.SetId == set1.Id);
+            AddAssert("failure reported for the silent set", () => jukebox.LastError.Value != null && jukebox.LastError.Value.Contains("Silent"));
+        }
+
+        // Builds a fixture .osz whose only difficulty has no AudioFilename key at all, so
+        // BeatmapCache.LoadFromDirectory leaves CachedBeatmapSet.AudioFile null — the "no loadable
+        // audio" case, distinct from `setFailing` above (which fails at the download/cache stage).
+        private string makeOszNoAudio(string name)
+        {
+            string dir = Path.Combine(tmp, "build_" + name);
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(Path.Combine(dir, "diff.osu"), "osu file format v14\n\n[General]\nMode: 0\n");
+            string osz = Path.Combine(tmp, name + ".osz");
+            ZipFile.CreateFromDirectory(dir, osz);
+            return osz;
+        }
+
         private partial class ThrowingPlaybackController : PlaybackController
         {
-            public override Task PlayAsync(CachedBeatmapSet set) => throw new InvalidOperationException("simulated unexpected playback fault");
+            public override Task<bool> PlayAsync(CachedBeatmapSet set) => throw new InvalidOperationException("simulated unexpected playback fault");
         }
 
         private string makeOsz(string name, string audioFileName)
