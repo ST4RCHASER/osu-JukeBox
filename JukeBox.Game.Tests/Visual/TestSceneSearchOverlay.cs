@@ -74,6 +74,40 @@ namespace JukeBox.Game.Tests.Visual
             AddUntilStep("no rows shown", () => !overlay.ChildrenOfType<SearchResultRow>().Any());
         }
 
+        [Test]
+        public void DisabledSetRowIsNotClickable()
+        {
+            AddStep("mirror returns a single download-disabled set", () =>
+            {
+                mirror.Sets.Clear();
+                mirror.Sets.Add(new BeatmapSetInfo
+                {
+                    Id = 99,
+                    Title = "Locked Song",
+                    Artist = "Artist L",
+                    Creator = "mapperL",
+                    Status = "ranked",
+                    Availability = new AvailabilityInfo { DownloadDisabled = true },
+                });
+            });
+
+            AddStep("type 'a'", () => overlay.ShowWithInitialChar('a'));
+            AddUntilStep("1 result row shown", () => overlay.ChildrenOfType<SearchResultRow>().Count() == 1);
+
+            SearchResultRow row = null!;
+            AddStep("grab the row", () => row = overlay.ChildrenOfType<SearchResultRow>().Single());
+            AddAssert("row reports disabled (framework-level, not just dimmed)", () => row.Enabled.Value == false);
+
+            AddStep("click the disabled row", () =>
+            {
+                InputManager.MoveMouseTo(row);
+                InputManager.Click(MouseButton.Left);
+            });
+
+            AddAssert("no set was picked", () => picked == null);
+            AddAssert("overlay still visible (click was a no-op, not a pick+hide)", () => overlay.State.Value == Visibility.Visible);
+        }
+
         // Serves fixed sets for any query — enough to exercise the debounce → search → render
         // pipeline without touching the network.
         private class StubMirror : IBeatmapMirror

@@ -262,7 +262,10 @@ public partial class SearchOverlay : FocusedOverlayContainer
         foreach (var set in sets)
         {
             var row = new SearchResultRow(set);
-            row.Action = () => pick(row);
+            // ClickableContainer.Action's setter also drives its Enabled bindable
+            // (Enabled.Value = action != null) — leaving Action non-null for a disabled set would
+            // dim it visually but still let it absorb clicks and show hover/press feedback.
+            row.Action = set.DownloadDisabled ? null : () => pick(row);
             resultsFlow.Add(row);
         }
     }
