@@ -1,9 +1,14 @@
+using System.Net.Http;
+using JukeBox.Game.Beatmaps;
+using JukeBox.Game.Configuration;
+using JukeBox.Game.Online;
+using JukeBox.Game.Playback;
+using JukeBox.Resources;
 using osu.Framework.Allocation;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.IO.Stores;
 using osuTK;
-using JukeBox.Resources;
 
 namespace JukeBox.Game
 {
@@ -15,6 +20,13 @@ namespace JukeBox.Game
 
         protected override Container<Drawable> Content { get; }
 
+        private DependencyContainer dependencies = null!;
+
+        private readonly HttpClient http = new HttpClient();
+
+        private PlaybackController playback = null!;
+        private Jukebox jukebox = null!;
+
         protected JukeBoxGameBase()
         {
             // Ensure game and tests scale with window size and screen DPI.
@@ -25,10 +37,45 @@ namespace JukeBox.Game
             });
         }
 
+        protected override IReadOnlyDependencyContainer CreateChildDependencies(IReadOnlyDependencyContainer parent)
+            => dependencies = new DependencyContainer(base.CreateChildDependencies(parent));
+
         [BackgroundDependencyLoader]
         private void load()
         {
             Resources.AddStore(new DllResourceStore(typeof(JukeBoxResources).Assembly));
+
+            var mirror = new MirrorChain(new NerinyanMirror(http), new CatboyMirror(http), new OsuDirectMirror(http));
+            dependencies.CacheAs<IBeatmapMirror>(mirror);
+
+            var config = new JukeBoxConfigManager(Host.Storage);
+            dependencies.Cache(config);
+
+            var cache = new BeatmapCache(Host.Storage.GetFullPath("cache"), mirror, config.Get<bool>(JukeBoxSetting.NoVideoDownloads));
+            dependencies.Cache(cache);
+
+            var queue = new MusicQueue();
+            dependencies.Cache(queue);
+
+            var radio = new RadioService(mirror);
+            dependencies.Cache(radio);
+
+            // Game.AddInternal is sealed to throw ("Use Add or Content instead") — Add routes
+            // through the overridden Content property (the DPI-scaling container from the
+            // constructor) instead.
+            Add(playback = new PlaybackController());
+            dependencies.Cache(playback);
+
+            Add(jukebox = new Jukebox(queue, radio, cache, playback));
+            dependencies.Cache(jukebox);
+
+            config.BindWith(JukeBoxSetting.Volume, playback.Volume);
+        }
+
+        protected override void Dispose(bool isDisposing)
+        {
+            base.Dispose(isDisposing);
+            http.Dispose();
         }
     }
 }
