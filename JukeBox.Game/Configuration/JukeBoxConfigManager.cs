@@ -1,3 +1,4 @@
+using JukeBox.Game.Online;
 using osu.Framework.Configuration;
 using osu.Framework.Platform;
 
@@ -10,6 +11,7 @@ public enum JukeBoxSetting
     UiLayout,
     CacheSizeGb,
     ShowFps,
+    PreferredMirror,
 }
 
 public enum UiLayout
@@ -32,5 +34,6 @@ public class JukeBoxConfigManager : IniConfigManager<JukeBoxSetting>
         SetDefault(JukeBoxSetting.UiLayout, UiLayout.FullscreenOverlay);
         SetDefault(JukeBoxSetting.CacheSizeGb, 10.0);
         SetDefault(JukeBoxSetting.ShowFps, false);
+        SetDefault(JukeBoxSetting.PreferredMirror, MirrorSource.Auto);
     }
 }
