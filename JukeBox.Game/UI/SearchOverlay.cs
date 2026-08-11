@@ -25,7 +25,8 @@ namespace JukeBox.Game.UI;
 /// beatmap set search against <see cref="IBeatmapMirror"/>, rendered as a scrollable list of
 /// <see cref="SearchResultRow"/>s. Up/Down move the highlighted row; Enter (or clicking a row)
 /// fires <see cref="SetPicked"/> with the selected set (falling back to the first result) and
-/// closes the overlay; Escape just closes it.
+/// closes the overlay; Escape just closes it. See <see cref="Docked"/> for the one exception to
+/// both of those "closes it" behaviours.
 /// </summary>
 public partial class SearchOverlay : FocusedOverlayContainer
 {
@@ -33,6 +34,13 @@ public partial class SearchOverlay : FocusedOverlayContainer
     private const int page_size = 30;
 
     public event Action<BeatmapSetInfo>? SetPicked;
+
+    /// <summary>
+    /// When true, this overlay is docked inline (e.g. MainScreen's Split layout) rather than
+    /// acting as a dismissable modal: picking a result still fires <see cref="SetPicked"/> but
+    /// doesn't hide the overlay, and Escape doesn't hide it either.
+    /// </summary>
+    public bool Docked { get; set; }
 
     [Resolved]
     private IBeatmapMirror mirror { get; set; } = null!;
@@ -142,7 +150,8 @@ public partial class SearchOverlay : FocusedOverlayContainer
         switch (e.Key)
         {
             case Key.Escape:
-                Hide();
+                if (!Docked)
+                    Hide();
                 return true;
 
             case Key.Up:
@@ -203,7 +212,9 @@ public partial class SearchOverlay : FocusedOverlayContainer
             return;
 
         SetPicked?.Invoke(row.Set);
-        Hide();
+
+        if (!Docked)
+            Hide();
     }
 
     private void scheduleSearch(string query)

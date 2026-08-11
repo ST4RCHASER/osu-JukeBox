@@ -101,7 +101,10 @@ public partial class MainScreen : Screen
         currentChromeParent.Add(search);
         currentChromeParent.Add(queuePanel);
 
-        search.SetPicked += set => jukebox.EnqueueAndMaybePlayAsync(set);
+        // Fire-and-forget by design: SetPicked is a synchronous event, and EnqueueAndMaybePlayAsync's
+        // own failure paths already surface through jukebox.LastError (see the toast wiring in
+        // LoadComplete) rather than through this call's returned Task.
+        search.SetPicked += set => _ = jukebox.EnqueueAndMaybePlayAsync(set);
     }
 
     protected override void LoadComplete()
@@ -168,6 +171,10 @@ public partial class MainScreen : Screen
             target.Add(queuePanel);
             currentChromeParent = target;
         }
+
+        // Docked in Split (permanently visible left column, not a dismissable modal): picking a
+        // result or pressing Escape must not make it vanish. See SearchOverlay.Docked.
+        search.Docked = split;
 
         if (split)
         {

@@ -114,6 +114,25 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("fullscreen layout visible again", () => screen.FullscreenLayoutContainer.Alpha == 1);
         }
 
+        // Regression test for the docked-search-panel-vanishing bug: Split's left column embeds
+        // the same SearchOverlay used as a fullscreen modal in the other layout, and that
+        // overlay's own pick()/Escape both Hide() unconditionally unless told it's docked. This
+        // drives Escape (not a real pick) deliberately: picking here would go through the real
+        // search.SetPicked -> jukebox.EnqueueAndMaybePlayAsync -> cache.GetAsync ->
+        // mirror.DownloadAsync wiring, and StubMirror's DownloadAsync always throws — Jukebox's
+        // advance loop would then retry forever against the same still-searchable stub set with
+        // no yield point, hanging the test. Escape exercises the same Docked gate without that risk.
+        [Test]
+        public void SplitLayoutSearchStaysVisibleAfterEscape()
+        {
+            AddStep("press tab (switch to split)", () => InputManager.Key(Key.Tab));
+            AddUntilStep("split shown", () => screen.SplitLayoutContainer.Alpha == 1);
+            AddUntilStep("search overlay visible in split layout", () => screen.ChildrenOfType<SearchOverlay>().Single().State.Value == Visibility.Visible);
+
+            AddStep("press escape", () => InputManager.Key(Key.Escape));
+            AddAssert("search overlay still visible (docked)", () => screen.ChildrenOfType<SearchOverlay>().Single().State.Value == Visibility.Visible);
+        }
+
         // Never exercised (queue stays empty and the mirror returns no candidates, so
         // Jukebox.Start()'s automatic radio round finds nothing and just retries later) — only
         // present so Jukebox/RadioService/BeatmapCache have a mirror to construct against without
