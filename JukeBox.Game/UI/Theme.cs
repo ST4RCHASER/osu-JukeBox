@@ -35,6 +35,16 @@ internal static class Theme
 
     public static readonly Color4 Error = new Color4(0xFF, 0x5C, 0x5C, 0xFF);
 
+    /// <summary>Chart-renderer combo colours: the accent plus three accent-adjacent hues, cycled
+    /// per combo so consecutive combos read as distinct groups.</summary>
+    public static readonly Color4[] ComboColours =
+    {
+        Accent,                                    // pink (accent)
+        new Color4(0x66, 0xB8, 0xFF, 0xFF),        // sky blue
+        new Color4(0xFF, 0xC0, 0x66, 0xFF),        // warm gold
+        new Color4(0x7E, 0xE0, 0xA8, 0xFF),        // mint
+    };
+
     /// <summary>Dim scrim shown behind centred modal overlays (settings/map-id) and the fullscreen
     /// search dropdown.</summary>
     public static readonly Color4 ModalScrim = Color4.Black.Opacity(0.7f);
