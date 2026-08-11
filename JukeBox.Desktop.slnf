@@ -1,0 +1,11 @@
+﻿{
+  "solution": {
+    "path": "JukeBox.sln",
+    "projects": [
+      "JukeBox.Desktop\\JukeBox.Desktop.csproj",
+      "JukeBox.Game\\JukeBox.Game.csproj",
+      "JukeBox.Game.Tests\\JukeBox.Game.Tests.csproj",
+      "JukeBox.Resources\\JukeBox.Resources.csproj"
+    ]
+  }
+}

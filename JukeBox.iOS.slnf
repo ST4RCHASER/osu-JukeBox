@@ -1,0 +1,10 @@
+{
+  "solution": {
+    "path": "JukeBox.sln",
+    "projects": [
+      "JukeBox.Game\\JukeBox.Game.csproj",
+      "JukeBox.Resources\\JukeBox.Resources.csproj",
+      "JukeBox.iOS\\JukeBox.iOS.csproj"
+    ]
+  }
+}
