@@ -27,6 +27,32 @@ namespace JukeBox.Game.Tests.Online
         }
     }
 
+    public class PartialWriteThenFailMirror : IBeatmapMirror
+    {
+        private static readonly byte[] partialBytes = { 9, 9, 9, 9, 9 };
+        public string Name => "partial";
+        public Task<List<BeatmapSetInfo>> SearchAsync(SearchRequest r, CancellationToken ct = default)
+            => throw new NotSupportedException();
+        public Task DownloadAsync(int setId, bool noVideo, Stream destination, CancellationToken ct = default)
+        {
+            destination.Write(partialBytes, 0, partialBytes.Length);
+            throw new IOException("down after partial write");
+        }
+    }
+
+    public class SucceedingDownloadMirror : IBeatmapMirror
+    {
+        private static readonly byte[] payload = { 1, 2, 3 };
+        public string Name => "ok";
+        public Task<List<BeatmapSetInfo>> SearchAsync(SearchRequest r, CancellationToken ct = default)
+            => throw new NotSupportedException();
+        public Task DownloadAsync(int setId, bool noVideo, Stream destination, CancellationToken ct = default)
+        {
+            destination.Write(payload, 0, payload.Length);
+            return Task.CompletedTask;
+        }
+    }
+
     [TestFixture]
     public class MirrorChainTest
     {
@@ -46,6 +72,15 @@ namespace JukeBox.Game.Tests.Online
         {
             var chain = new MirrorChain(new FakeMirror { Fail = true }, new FakeMirror { Fail = true });
             Assert.ThrowsAsync<AggregateException>(() => chain.SearchAsync(new SearchRequest()));
+        }
+
+        [Test]
+        public async Task DownloadResetsStreamBetweenFallbackAttempts()
+        {
+            var chain = new MirrorChain(new PartialWriteThenFailMirror(), new SucceedingDownloadMirror());
+            using var destination = new MemoryStream();
+            await chain.DownloadAsync(1, false, destination);
+            Assert.That(destination.ToArray(), Is.EqualTo(new byte[] { 1, 2, 3 }));
         }
     }
 }
