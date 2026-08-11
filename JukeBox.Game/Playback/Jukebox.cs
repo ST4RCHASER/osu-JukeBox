@@ -32,6 +32,15 @@ public partial class Jukebox : Component
     public readonly Bindable<BeatmapSetInfo?> NowPlaying = new();
 
     /// <summary>
+    /// Human-readable progress feedback for whatever the current advance round is doing that
+    /// isn't instant — currently just "Downloading {title}…" while a cache-miss download is in
+    /// flight. Null the rest of the time (including while the round is otherwise busy but nothing
+    /// needs to download). UI (e.g. <see cref="UI.NowPlayingBar"/>) shows this so a first-run
+    /// download doesn't look like the app hung with no feedback at all.
+    /// </summary>
+    public readonly Bindable<string?> Status = new();
+
+    /// <summary>
     /// Cache size limit in bytes, checked after every successful <see cref="BeatmapCache.GetAsync"/>
     /// via <see cref="BeatmapCache.EvictToLimit"/>. Set from <c>JukeBoxSetting.CacheSizeGb</c> by
     /// the owner (see <see cref="JukeBoxGameBase"/>); this class has no config dependency itself.
@@ -55,6 +64,15 @@ public partial class Jukebox : Component
     private readonly object advanceLock = new();
     private bool advancing;
     private bool pendingAdvance;
+
+    // Tracks whether whatever's currently playing (per NowPlaying) came from the queue or was
+    // picked by the radio fallback — written in the same Schedule callback as NowPlaying so it's
+    // updated on the update thread at the same point NowPlaying is, and read from
+    // EnqueueAndMaybePlayAsync (also update-thread) to decide whether a newly-enqueued pick should
+    // interrupt radio filler. Only ever meaningful once something has played at least once;
+    // defaults to false (not radio) so an enqueue before anything has played doesn't spuriously
+    // "interrupt" — the existing playback.Current.Value == null idle check already handles that case.
+    private bool currentIsRadio;
 
     public Jukebox(MusicQueue queue, RadioService radio, BeatmapCache cache, PlaybackController playback)
     {
@@ -88,7 +106,11 @@ public partial class Jukebox : Component
     {
         queue.Enqueue(set);
 
-        if (playback.Current.Value == null)
+        // Advance not just when idle, but also when radio filler is currently playing: the user's
+        // pick should interrupt that (SkipCurrent semantics, via AdvanceAsync's coalescing guard)
+        // rather than wait for the radio track to finish. A set already playing from the queue is
+        // left alone — later enqueues just wait their turn behind it.
+        if (playback.Current.Value == null || currentIsRadio)
             await AdvanceAsync().ConfigureAwait(false);
     }
 
@@ -180,7 +202,9 @@ public partial class Jukebox : Component
 
         while (true)
         {
-            BeatmapSetInfo? next = queue.PopNext() ?? await radio.PickRandomAsync().ConfigureAwait(false);
+            BeatmapSetInfo? fromQueue = queue.PopNext();
+            bool viaRadio = fromQueue == null;
+            BeatmapSetInfo? next = fromQueue ?? await radio.PickRandomAsync().ConfigureAwait(false);
 
             if (next == null)
             {
@@ -195,6 +219,12 @@ public partial class Jukebox : Component
             // no re-stat of every cached set's size on every round.
             bool wasCached = cache.IsCached(next.Id);
 
+            if (!wasCached)
+            {
+                string downloadingTitle = next.DisplayTitle;
+                Schedule(() => Status.Value = $"Downloading {downloadingTitle}…");
+            }
+
             CachedBeatmapSet cached;
 
             try
@@ -205,6 +235,7 @@ public partial class Jukebox : Component
             {
                 string message = $"Failed to load '{next.DisplayTitle}': {ex.Message}";
                 Schedule(() => LastError.Value = message);
+                Schedule(() => Status.Value = null);
                 continue;
             }
 
@@ -219,10 +250,16 @@ public partial class Jukebox : Component
                 // candidate instead of wedging.
                 string message = $"No playable audio for '{next.DisplayTitle}'";
                 Schedule(() => LastError.Value = message);
+                Schedule(() => Status.Value = null);
                 continue;
             }
 
-            Schedule(() => NowPlaying.Value = next);
+            Schedule(() =>
+            {
+                NowPlaying.Value = next;
+                Status.Value = null;
+                currentIsRadio = viaRadio;
+            });
 
             // Fire-and-forget prefetch of the new queue head, so it's likely already cached
             // by the time we get to it. Deliberately not eviction-gated itself: if this downloads
