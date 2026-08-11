@@ -89,6 +89,35 @@ public partial class Jukebox : Component
     }
 
     /// <summary>
+    /// Marshals <paramref name="f"/> onto the update thread via <c>Schedule</c> and returns its
+    /// result. <see cref="queue"/>'s <see cref="MusicQueue.Items"/> is a
+    /// <see cref="BindableList{T}"/> that a UI consumer (e.g. <see cref="UI.QueuePanel"/>) binds
+    /// <see cref="BindableList{T}.CollectionChanged"/> against to rebuild Drawables — mutating or
+    /// even enumerating it off the update thread races that rebuild and can crash the framework
+    /// (see the routed call sites below). advanceRoundAsync and evictCacheInBackground run with
+    /// <c>ConfigureAwait(false)</c> continuations on the threadpool, so every touch of
+    /// <see cref="queue"/> from either must go through this.
+    /// </summary>
+    private Task<T> onUpdateThread<T>(Func<T> f)
+    {
+        var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        Schedule(() =>
+        {
+            try
+            {
+                tcs.SetResult(f());
+            }
+            catch (Exception ex)
+            {
+                tcs.SetException(ex);
+            }
+        });
+
+        return tcs.Task;
+    }
+
+    /// <summary>
     /// Kicks off playback if nothing has played yet (queue if non-empty, radio otherwise).
     /// A no-op once something is already playing.
     /// </summary>
@@ -102,6 +131,12 @@ public partial class Jukebox : Component
     /// Enqueues <paramref name="set"/>. If nothing has played yet, advances immediately so the
     /// newly-enqueued set (or whatever is now at the head of the queue) starts playing.
     /// </summary>
+    /// <remarks>
+    /// Must be called from the update thread — it touches <see cref="queue"/> directly rather
+    /// than via <see cref="onUpdateThread{T}"/>, same as <see cref="Start"/> and
+    /// <see cref="SkipCurrent"/>. Every current caller (UI event handlers such as
+    /// MapIdOverlay/SearchOverlay's submit actions) already runs there.
+    /// </remarks>
     public async Task EnqueueAndMaybePlayAsync(BeatmapSetInfo set)
     {
         queue.Enqueue(set);
@@ -221,7 +256,13 @@ public partial class Jukebox : Component
 
         while (true)
         {
-            BeatmapSetInfo? fromQueue = queue.PopNext();
+            // Routed through onUpdateThread: this loop's first iteration runs synchronously on
+            // whatever thread called AdvanceAsync (the update thread, per every caller's
+            // contract), but a `continue` below (a failed candidate) or a coalesced second round
+            // from advanceLoopAsync always resumes after an awaited ConfigureAwait(false), i.e.
+            // on the threadpool — popping straight off queue.Items there would race any UI bound
+            // to its CollectionChanged (see onUpdateThread's doc comment).
+            BeatmapSetInfo? fromQueue = await onUpdateThread(() => queue.PopNext()).ConfigureAwait(false);
             bool viaRadio = fromQueue == null;
             BeatmapSetInfo? next = fromQueue ?? await radio.PickRandomAsync().ConfigureAwait(false);
 
@@ -285,11 +326,13 @@ public partial class Jukebox : Component
             // a set, the cache stays over-limit until that set becomes "current" on some later
             // round and its own download triggers eviction — a self-correcting delay rather than
             // a second eviction path to reason about here.
-            if (queue.Items.Count > 0)
-            {
-                int headId = queue.Items[0].Id;
-                _ = cache.GetAsync(headId);
-            }
+            //
+            // Read via onUpdateThread rather than touching queue.Items directly: this point is
+            // always reached after the cache.GetAsync/PlayAsync awaits above, so we're on the
+            // threadpool here regardless of which loop iteration this is.
+            int? headId = await onUpdateThread(() => queue.Items.Count > 0 ? queue.Items[0].Id : (int?)null).ConfigureAwait(false);
+            if (headId != null)
+                _ = cache.GetAsync(headId.Value);
 
             if (!wasCached)
                 evictCacheInBackground(next.Id);
@@ -301,27 +344,32 @@ public partial class Jukebox : Component
     /// <summary>
     /// Runs <see cref="BeatmapCache.EvictToLimit"/> off the update thread (it enumerates, sizes
     /// and deletes set directories synchronously) so it never blocks playback. Fire-and-forget
-    /// with its own try/catch: eviction failures are logged but must never surface as a Jukebox
-    /// failure, since the advance round that triggered this has already succeeded.
+    /// (async void, matching <see cref="prefetchInBackground"/>) with its own try/catch:
+    /// eviction failures are logged but must never surface as a Jukebox failure, since the
+    /// advance round that triggered this has already succeeded.
     /// </summary>
-    private void evictCacheInBackground(int currentId)
+    private async void evictCacheInBackground(int currentId)
     {
-        // Snapshot protected ids on the update thread (current + queued) before hopping off it,
-        // rather than touching the BindableList from the background task.
-        var protectedIds = new List<int> { currentId };
-        protectedIds.AddRange(queue.Items.Select(i => i.Id));
         long limit = CacheLimitBytes;
 
-        Task.Run(() =>
+        try
         {
-            try
+            // Snapshot protected ids (current + queued) via onUpdateThread before hopping off it
+            // — this method is called from advanceRoundAsync after its cache.GetAsync/PlayAsync
+            // awaits, i.e. already on the threadpool, so touching the BindableList directly here
+            // would race any UI bound to its CollectionChanged.
+            var protectedIds = await onUpdateThread(() =>
             {
-                cache.EvictToLimit(limit, protectedIds);
-            }
-            catch (Exception ex)
-            {
-                Logger.Error(ex, "Jukebox: cache eviction failed");
-            }
-        });
+                var ids = new List<int> { currentId };
+                ids.AddRange(queue.Items.Select(i => i.Id));
+                return ids;
+            }).ConfigureAwait(false);
+
+            await Task.Run(() => cache.EvictToLimit(limit, protectedIds)).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Logger.Error(ex, "Jukebox: cache eviction failed");
+        }
     }
 }
