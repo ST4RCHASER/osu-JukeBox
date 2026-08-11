@@ -1,5 +1,6 @@
 #nullable enable
 
+using System;
 using System.IO;
 using JukeBox.Game.Beatmaps;
 using JukeBox.Game.Storyboard;
@@ -10,6 +11,7 @@ using osu.Framework.Graphics.Sprites;
 using osu.Framework.Graphics.Textures;
 using osu.Framework.Graphics.Video;
 using osu.Framework.IO.Stores;
+using osu.Framework.Logging;
 using osu.Framework.Platform;
 using osu.Framework.Timing;
 using osuTK;
@@ -29,11 +31,22 @@ public partial class BeatmapVisuals : CompositeDrawable
     private TextureStore? backgroundTextures;
     private StoryboardLayer storyboardLayer = null!;
 
+    // Held so Update() can watch for an async decode fault (Video.IsFaulted only becomes true
+    // after construction has already succeeded, on the decoder's own thread) and drop the layer.
+    private Container? videoContainer;
+    private Video? video;
+
     /// <summary>
     /// Test-only access to disposal state (JukeBox.Game.Tests has InternalsVisibleTo) —
     /// <see cref="Drawable.IsDisposed"/> itself is protected.
     /// </summary>
     internal bool Disposed => IsDisposed;
+
+    /// <summary>
+    /// Test-only access to whether the video layer is currently present (JukeBox.Game.Tests has
+    /// InternalsVisibleTo), to assert it gets torn down after a decoder fault.
+    /// </summary>
+    internal bool HasVideoLayer => videoContainer != null;
 
     public BeatmapVisuals(CachedBeatmapSet set, IFrameBasedClock playbackClock)
     {
@@ -83,7 +96,7 @@ public partial class BeatmapVisuals : CompositeDrawable
                     ? OsuFileScanner.Scan(set.PreferredOsuFile).VideoOffsetMs
                     : 0;
 
-                var video = new Video(set.VideoFile, startAtCurrentTime: false)
+                video = new Video(set.VideoFile, startAtCurrentTime: false)
                 {
                     RelativeSizeAxes = Axes.Both,
                     FillMode = FillMode.Fit,
@@ -91,7 +104,7 @@ public partial class BeatmapVisuals : CompositeDrawable
                     Origin = Anchor.Centre,
                 };
 
-                AddInternal(new Container
+                videoContainer = new Container
                 {
                     RelativeSizeAxes = Axes.Both,
                     // The .osu Video event's offset is the song time at which the video's own
@@ -101,11 +114,16 @@ public partial class BeatmapVisuals : CompositeDrawable
                     // above — playbackClock is already pumped by PlaybackController.
                     Clock = new FramedOffsetClock(playbackClock, false) { Offset = -offsetMs },
                     Child = video,
-                });
+                };
+
+                AddInternal(videoContainer);
             }
-            catch
+            catch (Exception e)
             {
                 // Decode failure (corrupt/unsupported video) — drop the layer, keep bg + storyboard.
+                video = null;
+                videoContainer = null;
+                Logger.Error(e, $"Failed to load storyboard video '{set.VideoFile}'");
             }
         }
 
@@ -119,6 +137,17 @@ public partial class BeatmapVisuals : CompositeDrawable
     protected override void Update()
     {
         base.Update();
+
+        // Video decoding happens on its own thread; construction can succeed and the fault only
+        // shows up later via IsFaulted. Catch that here and drop the (now-frozen) layer.
+        if (video?.IsFaulted == true && videoContainer != null)
+        {
+            RemoveInternal(videoContainer, true);
+            Logger.Log($"Storyboard video decoder faulted for '{set.VideoFile}', removing layer",
+                LoggingTarget.Runtime, LogLevel.Error);
+            videoContainer = null;
+            video = null;
+        }
 
         // Storyboard space is always 480 units tall (640 or 854 wide); scale it uniformly to fit
         // this drawable's height and centre it, same as osu!'s own storyboard letterboxing.
