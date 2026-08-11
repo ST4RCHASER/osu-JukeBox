@@ -16,6 +16,7 @@ using NUnit.Framework;
 using osu.Framework.Allocation;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
+using osu.Framework.Graphics.Sprites;
 using osu.Framework.Graphics.UserInterface;
 using osu.Framework.Screens;
 using osu.Framework.Testing;
@@ -188,6 +189,32 @@ namespace JukeBox.Game.Tests.Visual
 
             AddAssert("height restored to full", () => panel.Height == 1f);
             AddAssert("relative axes restored to Y-only", () => panel.RelativeSizeAxes == Axes.Y);
+        }
+
+        // Regression coverage for the settings gear button: it must be reachable (and the overlay
+        // it opens must actually be present) in both layouts, not just whichever one MainScreen
+        // starts in.
+        [Test]
+        public void GearButtonTogglesSettingsOverlayInBothLayouts()
+        {
+            SettingsOverlay overlay = null!;
+            AddStep("grab settings overlay", () => overlay = screen.ChildrenOfType<SettingsOverlay>().Single());
+
+            AddAssert("starts hidden", () => overlay.State.Value == Visibility.Hidden);
+
+            AddStep("click the corner gear button",
+                () => screen.ChildrenOfType<IconButton>().Single(b => b.Icon.Equals(FontAwesome.Solid.Cog)).TriggerClick());
+            AddAssert("overlay visible", () => overlay.State.Value == Visibility.Visible);
+
+            AddStep("click the gear button again", () => screen.ChildrenOfType<IconButton>().Single(b => b.Icon.Equals(FontAwesome.Solid.Cog)).TriggerClick());
+            AddAssert("overlay hidden again", () => overlay.State.Value == Visibility.Hidden);
+
+            AddStep("switch to split layout", () => InputManager.Key(Key.Tab));
+            AddUntilStep("split shown", () => screen.SplitLayoutContainer.Alpha == 1);
+
+            AddStep("click the corner gear button in split layout",
+                () => screen.ChildrenOfType<IconButton>().Single(b => b.Icon.Equals(FontAwesome.Solid.Cog)).TriggerClick());
+            AddAssert("overlay visible in split layout too", () => overlay.State.Value == Visibility.Visible);
         }
 
         // Never exercised (queue stays empty and the mirror returns no candidates, so
