@@ -145,8 +145,9 @@ public class BeatmapCache
         {
             string name = Path.GetFileName(dir);
 
-            // Skip non-set directories: in-progress extractions and anything not a plain set id.
-            if (!int.TryParse(name, out int setId) || name.EndsWith(".extracting", StringComparison.OrdinalIgnoreCase))
+            // Skip non-set directories: this also covers in-progress "<id>.extracting" dirs,
+            // since their name isn't a bare integer either.
+            if (!int.TryParse(name, out int setId))
                 continue;
 
             long size = dirSize(dir);
