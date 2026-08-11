@@ -19,8 +19,12 @@ public class BeatmapSetInfo
     public bool Storyboard { get; set; }
     public AvailabilityInfo? Availability { get; set; }
     public List<BeatmapInfo> Beatmaps { get; set; } = new();
-    public string DisplayTitle => string.IsNullOrEmpty(TitleUnicode) ? Title : TitleUnicode!;
-    public string DisplayArtist => string.IsNullOrEmpty(ArtistUnicode) ? Artist : ArtistUnicode!;
+    // Prefer the romanized Title/Artist: the default font has no CJK (or other non-Latin) glyph
+    // coverage, so preferring TitleUnicode/ArtistUnicode drew as "????" tofu boxes whenever a set's
+    // metadata was non-Latin. Fall back to the unicode variant only when the romanized one is
+    // missing, rather than dropping the metadata entirely.
+    public string DisplayTitle => string.IsNullOrEmpty(Title) ? TitleUnicode ?? "" : Title;
+    public string DisplayArtist => string.IsNullOrEmpty(Artist) ? ArtistUnicode ?? "" : Artist;
     public bool DownloadDisabled => Availability?.DownloadDisabled == true;
 
     public static List<BeatmapSetInfo> ParseList(string json)
