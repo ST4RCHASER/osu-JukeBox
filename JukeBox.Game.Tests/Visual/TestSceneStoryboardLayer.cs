@@ -114,6 +114,45 @@ namespace JukeBox.Game.Tests.Visual
                 () => topLeftLayer.FirstSprite!.OriginPosition == Vector2.Zero);
         }
 
+        // Regression test for the crash-on-malformed-storyboard bug: Radio auto-downloads
+        // arbitrary third-party .osz files, and Core's parser is strict — e.g. an unrecognised
+        // Layer token makes StoryboardReader's Enum.Parse throw outright, uncaught, straight out
+        // of StoryboardLoader.Load. That must not take the whole app down; StoryboardLayer.load
+        // now catches it and falls back to an empty (nothing-visible) storyboard instead.
+        [Test]
+        public void MalformedOsbDoesNotCrashAndFallsBackToEmptyStoryboard()
+        {
+            StoryboardLayer garbageLayer = null!;
+
+            AddStep("create layer from malformed .osb", () =>
+            {
+                string osbFile = Path.Combine(tmp, "garbage.osb");
+                File.WriteAllText(osbFile, """
+                    osu file format v14
+
+                    [Events]
+                    //Storyboard Layer 0 (Background)
+                    Sprite,NotARealLayer,Centre,"bg.png",320,240
+                    _M,0,0,5000,320,240,320,240
+                    """);
+
+                var garbageSet = new CachedBeatmapSet
+                {
+                    SetId = 3,
+                    Directory = tmp,
+                    OsbFile = osbFile,
+                };
+
+                Add(garbageLayer = new StoryboardLayer(garbageSet));
+                garbageLayer.Clock = new FramedClock(manual);
+            });
+
+            AddUntilStep("layer loads without throwing", () => garbageLayer.IsLoaded);
+
+            AddStep("t=2500", () => manual.CurrentTime = 2500);
+            AddAssert("no sprites visible (fell back to empty storyboard)", () => garbageLayer.VisibleSpriteCount == 0);
+        }
+
         // 1x1 red pixel PNG — content is irrelevant, only that it decodes to a valid texture.
         private static byte[] solidPng() => Convert.FromBase64String(
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==");
