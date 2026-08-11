@@ -1,5 +1,6 @@
 #nullable enable
 
+using JukeBox.Game.Beatmaps;
 using JukeBox.Game.Online;
 using JukeBox.Game.Playback;
 using osu.Framework.Allocation;
@@ -25,6 +26,11 @@ public partial class QueuePanel : CompositeDrawable
     [Resolved]
     private MusicQueue queue { get; set; } = null!;
 
+    // canBeNull: not every host of this panel caches a BeatmapCache (e.g. some test scenes don't
+    // need real caching wired up at all) — rows just hide their status text when this is null.
+    [Resolved(canBeNull: true)]
+    private BeatmapCache? cache { get; set; }
+
     private SpriteText headerText = null!;
     private FillFlowContainer rowsFlow = null!;
 
@@ -38,6 +44,12 @@ public partial class QueuePanel : CompositeDrawable
     internal int RowCount => rowsFlow.Count;
 
     internal string HeaderText => headerText.Text.ToString();
+
+    /// <summary>
+    /// Test-only: the row at <paramref name="index"/>'s current status text ("ready",
+    /// "downloading…", "waiting", or empty when no <see cref="BeatmapCache"/> is resolved).
+    /// </summary>
+    internal string StatusTextAt(int index) => ((QueueRow)rowsFlow.Children[index]).StatusText;
 
     /// <summary>
     /// Test-only: clicks the ✕ button on the row at <paramref name="index"/>, exercising the same
@@ -126,17 +138,27 @@ public partial class QueuePanel : CompositeDrawable
         rowsFlow.Clear();
 
         foreach (var set in queue.Items)
-            rowsFlow.Add(new QueueRow(set, () => queue.Items.Remove(set)));
+            rowsFlow.Add(new QueueRow(set, cache, () => queue.Items.Remove(set)));
     }
 
     private partial class QueueRow : CompositeDrawable
     {
-        private readonly BeatmapSetInfo set;
-        private readonly IconButton removeButton;
+        // Polling a dict lookup + a directory scan every frame per row is cheap at queue scale,
+        // but there's no need to do it 60 times a second either — throttled to roughly twice a
+        // second, which is plenty responsive for a status label a human is watching.
+        private const int poll_interval_frames = 30;
 
-        public QueueRow(BeatmapSetInfo set, System.Action onRemove)
+        private readonly BeatmapSetInfo set;
+        private readonly BeatmapCache? cache;
+        private readonly IconButton removeButton;
+        private readonly SpriteText statusText;
+
+        private int framesSincePoll;
+
+        public QueueRow(BeatmapSetInfo set, BeatmapCache? cache, System.Action onRemove)
         {
             this.set = set;
+            this.cache = cache;
 
             RelativeSizeAxes = Axes.X;
             Height = 28;
@@ -150,6 +172,14 @@ public partial class QueuePanel : CompositeDrawable
                     Font = FontUsage.Default.With(size: 14),
                     Text = $"{set.DisplayTitle} — {set.DisplayArtist}",
                 },
+                statusText = new SpriteText
+                {
+                    Anchor = Anchor.CentreRight,
+                    Origin = Anchor.CentreRight,
+                    Position = new Vector2(-28, 0),
+                    Font = FontUsage.Default.With(size: 12),
+                    Colour = new Color4(180, 180, 180, 255),
+                },
                 removeButton = new IconButton
                 {
                     Anchor = Anchor.CentreRight,
@@ -159,8 +189,37 @@ public partial class QueuePanel : CompositeDrawable
                     Action = onRemove,
                 }
             };
+
+            updateStatus();
+        }
+
+        protected override void Update()
+        {
+            base.Update();
+
+            if (cache == null)
+                return;
+
+            if (framesSincePoll++ < poll_interval_frames)
+                return;
+
+            framesSincePoll = 0;
+            updateStatus();
+        }
+
+        private void updateStatus()
+        {
+            statusText.Text = cache == null
+                ? string.Empty
+                : cache.IsCached(set.Id)
+                    ? "ready"
+                    : cache.IsDownloading(set.Id)
+                        ? "downloading…"
+                        : "waiting";
         }
 
         public void TriggerRemove() => removeButton.TriggerClick();
+
+        internal string StatusText => statusText.Text.ToString();
     }
 }

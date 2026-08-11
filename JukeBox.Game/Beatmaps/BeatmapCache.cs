@@ -31,6 +31,16 @@ public class BeatmapCache
 
     public bool IsCached(int setId) => hasOsuFiles(Path.Combine(root, setId.ToString()));
 
+    /// <summary>
+    /// True while a <see cref="GetAsync"/> call for <paramref name="setId"/> is in flight and
+    /// hasn't completed yet — i.e. it's tracked in <see cref="inflight"/> but not yet cached on
+    /// disk. Once the download/extract finishes, <see cref="IsCached"/> becomes true and this
+    /// reverts to false (there's a narrow window where both could technically read true/false
+    /// depending on scheduling, but the "not cached yet" check keeps this false for a set that
+    /// was already on disk and is just being re-touched via a cache hit).
+    /// </summary>
+    public bool IsDownloading(int setId) => inflight.ContainsKey(setId) && !IsCached(setId);
+
     private static bool hasOsuFiles(string dir)
         => Directory.Exists(dir) && Directory.EnumerateFiles(dir, "*.osu", osu_enum_options).Any();
 
