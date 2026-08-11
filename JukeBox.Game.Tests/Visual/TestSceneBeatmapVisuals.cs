@@ -177,7 +177,7 @@ namespace JukeBox.Game.Tests.Visual
 
             AddUntilStep("visuals loaded despite malformed storyboard", () => visuals.IsLoaded);
             AddAssert("no storyboard sprites visible (fell back to empty storyboard)",
-                () => visuals.ChildrenOfType<StoryboardLayer>().Single().VisibleSpriteCount == 0);
+                () => visuals.ChildrenOfType<TransformStoryboardLayer>().Single().VisibleSpriteCount == 0);
 
             AddStep("remove visuals", () => Remove(visuals, true));
         }
