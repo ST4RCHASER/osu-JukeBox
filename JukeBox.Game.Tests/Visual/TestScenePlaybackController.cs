@@ -13,6 +13,8 @@ namespace JukeBox.Game.Tests.Visual
         private PlaybackController controller = null!;
         private string tmp = null!;
         private CachedBeatmapSet fixtureSet = null!;
+        private CachedBeatmapSet fixtureSetA = null!;
+        private CachedBeatmapSet fixtureSetB = null!;
 
         [SetUp]
         public void SetUp()
@@ -29,14 +31,28 @@ namespace JukeBox.Game.Tests.Visual
                 Directory = tmp,
                 AudioFile = audioFile,
             };
+
+            // Two more fixtures in their own subdirectories, for the overlapping-PlayAsync test.
+            string dirA = Path.Combine(tmp, "a");
+            string dirB = Path.Combine(tmp, "b");
+            Directory.CreateDirectory(dirA);
+            Directory.CreateDirectory(dirB);
+
+            string audioFileA = Path.Combine(dirA, "audio.wav");
+            string audioFileB = Path.Combine(dirB, "audio.wav");
+            writeSilentWav(audioFileA, 1);
+            writeSilentWav(audioFileB, 1);
+
+            fixtureSetA = new CachedBeatmapSet { SetId = 10, Directory = dirA, AudioFile = audioFileA };
+            fixtureSetB = new CachedBeatmapSet { SetId = 20, Directory = dirB, AudioFile = audioFileB };
         }
 
-        [TearDown]
-        public void TearDown()
-        {
-            if (Directory.Exists(tmp))
-                Directory.Delete(tmp, true);
-        }
+        // NOTE: deliberately NOT deleting `tmp` here. TestScene runs each [Test] method's queued
+        // AddStep bodies from a base-class teardown hook that NUnit invokes *after* this derived
+        // class's own [TearDown] — so a synchronous delete here would race the fixture files out
+        // from under the still-pending steps (confirmed empirically: it caused every track load
+        // in this file to silently fail). Test temp dirs are left for the OS to reclaim, matching
+        // the same tradeoff already made by TestScene's own step/browser scratch directories.
 
         [SetUpSteps]
         public void SetUpSteps()
@@ -48,10 +64,26 @@ namespace JukeBox.Game.Tests.Visual
         public void PlayThenPauseStopsClock()
         {
             AddStep("play fixture", () => controller.PlayAsync(fixtureSet));
+            AddUntilStep("track is active", () => controller.Current.Value?.SetId == fixtureSet.SetId);
             AddUntilStep("clock advances", () => controller.CurrentTimeMs > 0);
 
             AddStep("pause", () => controller.TogglePause());
             AddAssert("not playing", () => !controller.IsPlaying);
+        }
+
+        // Regression test for the PlayAsync overlap race: the most-recently-requested call must
+        // win the swap even if its load happens to finish before (or after) the older call's.
+        [Test]
+        public void OverlappingPlayAsyncSecondCallWins()
+        {
+            AddStep("play A then B back-to-back", () =>
+            {
+                controller.PlayAsync(fixtureSetA);
+                controller.PlayAsync(fixtureSetB);
+            });
+
+            AddUntilStep("second call's track is active", () => controller.Current.Value?.SetId == fixtureSetB.SetId);
+            AddAssert("first call never became active", () => controller.Current.Value?.SetId != fixtureSetA.SetId);
         }
 
         // BASS (the audio backend behind osu!framework's Track) plays WAV directly, so a

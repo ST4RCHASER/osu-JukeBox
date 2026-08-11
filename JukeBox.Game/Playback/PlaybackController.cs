@@ -2,6 +2,7 @@
 
 using System;
 using System.IO;
+using System.Threading;
 using System.Threading.Tasks;
 using JukeBox.Game.Beatmaps;
 using osu.Framework.Allocation;
@@ -40,6 +41,12 @@ public partial class PlaybackController : Component
 
     private Track? currentTrack;
 
+    // Arbitrates overlapping PlayAsync calls: each call claims the next generation at entry
+    // (synchronously, before the async load), and only the call whose generation is still
+    // current when its load finishes is allowed to swap in its track. This guarantees the
+    // most-recently-requested call always wins the swap, regardless of load completion order.
+    private int generation;
+
     protected override void Update()
     {
         base.Update();
@@ -50,6 +57,8 @@ public partial class PlaybackController : Component
     {
         if (set.AudioFile == null)
             return;
+
+        int myGeneration = Interlocked.Increment(ref generation);
 
         string directory = set.Directory;
         string fileName = Path.GetFileName(set.AudioFile);
@@ -65,6 +74,14 @@ public partial class PlaybackController : Component
 
         Schedule(() =>
         {
+            // A newer PlayAsync call was made while this one was loading — drop this load
+            // rather than swap a stale track in over whatever the newer call has (or will) set.
+            if (myGeneration != Volatile.Read(ref generation))
+            {
+                track.Dispose();
+                return;
+            }
+
             var previous = currentTrack;
 
             currentTrack = track;
