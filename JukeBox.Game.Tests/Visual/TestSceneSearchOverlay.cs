@@ -59,6 +59,21 @@ namespace JukeBox.Game.Tests.Visual
         }
 
         [Test]
+        public void DockedOverlayStaysVisibleAfterPickAndEscape()
+        {
+            AddStep("mark docked", () => overlay.Docked = true);
+            AddStep("type 'a' (opens + seeds textbox)", () => overlay.ShowWithInitialChar('a'));
+            AddUntilStep("3 result rows shown", () => overlay.ChildrenOfType<SearchResultRow>().Count() == 3);
+
+            AddStep("press enter", () => InputManager.Key(Key.Enter));
+            AddUntilStep("first set picked", () => picked?.Id == mirror.Sets[0].Id);
+            AddAssert("overlay still visible (docked pick doesn't hide)", () => overlay.State.Value == Visibility.Visible);
+
+            AddStep("press escape", () => InputManager.Key(Key.Escape));
+            AddAssert("overlay still visible (docked escape doesn't hide)", () => overlay.State.Value == Visibility.Visible);
+        }
+
+        [Test]
         public void EmptyMirrorShowsNoResults()
         {
             AddStep("type 'a'", () => overlay.ShowWithInitialChar('a'));
