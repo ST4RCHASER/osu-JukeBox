@@ -64,7 +64,8 @@ public partial class NowPlayingBar : CompositeDrawable
     private bool settingProgress;
 
     private BasicSliderBar<double> progressBar = null!;
-    private BasicButton playPauseButton = null!;
+    private IconButton playPauseButton = null!;
+    private SpriteText statusText = null!;
     private SpriteText titleText = null!;
     private SpriteText artistText = null!;
 
@@ -72,7 +73,7 @@ public partial class NowPlayingBar : CompositeDrawable
     /// Test-only access to the play/pause button (JukeBox.Game.Tests has InternalsVisibleTo), to
     /// drive it via <see cref="Drawable.TriggerClick"/> without depending on its exact position.
     /// </summary>
-    internal BasicButton PlayPauseButton => playPauseButton;
+    internal IconButton PlayPauseButton => playPauseButton;
 
     /// <summary>
     /// Test-only access to the progress bar (JukeBox.Game.Tests has InternalsVisibleTo), to drive
@@ -108,6 +109,7 @@ public partial class NowPlayingBar : CompositeDrawable
                 Direction = FillDirection.Vertical,
                 Children = new Drawable[]
                 {
+                    statusText = new SpriteText { Font = FontUsage.Default.With(size: 12), Colour = Color4.LightYellow },
                     titleText = new SpriteText { Font = FontUsage.Default.With(size: 18) },
                     artistText = new SpriteText { Font = FontUsage.Default.With(size: 14), Colour = Color4.Gray },
                 }
@@ -137,16 +139,16 @@ public partial class NowPlayingBar : CompositeDrawable
                 Spacing = new Vector2(8, 0),
                 Children = new Drawable[]
                 {
-                    playPauseButton = new BasicButton
+                    playPauseButton = new IconButton
                     {
                         Size = new Vector2(48, 32),
-                        Text = "⏯",
+                        Icon = FontAwesome.Solid.Play,
                         Action = () => playback.TogglePause(),
                     },
-                    new BasicButton
+                    new IconButton
                     {
                         Size = new Vector2(48, 32),
-                        Text = "⏭",
+                        Icon = FontAwesome.Solid.StepForward,
                         Action = () => jukebox.SkipCurrent(),
                     },
                     new BasicSliderBar<double>
@@ -166,6 +168,7 @@ public partial class NowPlayingBar : CompositeDrawable
         base.LoadComplete();
 
         jukebox.NowPlaying.BindValueChanged(onNowPlayingChanged, true);
+        jukebox.Status.BindValueChanged(e => statusText.Text = e.NewValue ?? string.Empty, true);
 
         progress.BindValueChanged(e =>
         {
@@ -191,7 +194,7 @@ public partial class NowPlayingBar : CompositeDrawable
             settingProgress = false;
         }
 
-        playPauseButton.Text = playback.IsPlaying ? "⏸" : "▶";
+        playPauseButton.Icon = playback.IsPlaying ? FontAwesome.Solid.Pause : FontAwesome.Solid.Play;
     }
 
     private void onNowPlayingChanged(ValueChangedEvent<BeatmapSetInfo?> change)
