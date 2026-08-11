@@ -105,6 +105,43 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("remove screen", () => Remove(stack, true));
         }
 
+        // Regression test for the "video layer must not sink the whole stack" requirement: a
+        // corrupt/unsupported video file must not prevent BeatmapVisuals from loading with its
+        // background + storyboard layers intact.
+        [Test]
+        public void CorruptVideoFileDoesNotPreventLoad()
+        {
+            BeatmapVisuals visuals = null!;
+
+            AddStep("create visuals with garbage video", () =>
+            {
+                string videoFile = Path.Combine(tmp, "garbage.mp4");
+                File.WriteAllBytes(videoFile, new byte[] { 0x00, 0x01, 0x02, 0x03 });
+
+                var set = new CachedBeatmapSet
+                {
+                    SetId = 3,
+                    Directory = tmp,
+                    BackgroundFile = fixtureSetA.BackgroundFile,
+                    VideoFile = videoFile,
+                };
+
+                Add(visuals = new BeatmapVisuals(set, playbackClock) { RelativeSizeAxes = Axes.Both });
+            });
+
+            AddUntilStep("visuals loaded despite bad video", () => visuals.IsLoaded);
+
+            // The garbage file doesn't fail Video's constructor synchronously — the decoder
+            // faults asynchronously on its own thread a little later (confirmed empirically: the
+            // runtime logs "VideoDecoder faulted: ... Invalid data found when processing input").
+            // BeatmapVisuals.Update() polls Video.IsFaulted and tears the layer down once that
+            // happens; assert that actually occurs rather than just that nothing crashed.
+            AddUntilStep("video layer torn down after decoder fault", () => !visuals.HasVideoLayer);
+            AddAssert("visuals still alive (no crash from the bad video)", () => !visuals.Disposed);
+
+            AddStep("remove visuals", () => Remove(visuals, true));
+        }
+
         // 1x1 red pixel PNG — content is irrelevant, only that it decodes to a valid texture.
         private static byte[] solidPng() => Convert.FromBase64String(
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==");
