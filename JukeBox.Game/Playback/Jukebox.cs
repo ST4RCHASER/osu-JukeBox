@@ -21,6 +21,14 @@ public partial class Jukebox : Component
 
     public readonly Bindable<string?> LastError = new();
 
+    /// <summary>
+    /// The <see cref="BeatmapSetInfo"/> metadata (title/artist/etc.) for whatever
+    /// <see cref="PlaybackController"/> is currently playing — set alongside <see cref="PlaybackController.PlayAsync"/>
+    /// in each advance round, so UI (e.g. a now-playing bar) has a title/artist to display without
+    /// having to derive it from <see cref="Beatmaps.CachedBeatmapSet"/>, which carries none.
+    /// </summary>
+    public readonly Bindable<BeatmapSetInfo?> NowPlaying = new();
+
     private readonly MusicQueue queue;
     private readonly RadioService radio;
     private readonly BeatmapCache cache;
@@ -185,6 +193,7 @@ public partial class Jukebox : Component
             }
 
             await playback.PlayAsync(cached).ConfigureAwait(false);
+            Schedule(() => NowPlaying.Value = next);
 
             // Fire-and-forget prefetch of the new queue head, so it's likely already cached
             // by the time we get to it.
