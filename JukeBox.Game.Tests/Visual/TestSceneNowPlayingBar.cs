@@ -221,6 +221,47 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("removed set is gone from the queue itself", () => queue.Items.All(i => i.Id != 1));
         }
 
+        // Regression test for a production crash: MusicQueue.Items is a BindableList that
+        // QueuePanel binds CollectionChanged against to rebuild rowsFlow's InternalChildren.
+        // Jukebox's advanceRoundAsync pops the queue from a ConfigureAwait(false) continuation
+        // (i.e. off the update thread) on its second-and-later candidate within a round, which
+        // used to run that rebuild inline on the popping thread — mutating a Loaded Drawable's
+        // InternalChildren off the update thread, which the framework throws
+        // Drawable.InvalidThreadForMutationException for (and, in production, left the panel's
+        // internal Drawable bookkeeping corrupted enough to crash later with an unrelated
+        // KeyNotFoundException). This reproduces that class of bug directly at the queue/panel
+        // boundary — mutating Items from a background thread while the panel is loaded — without
+        // needing to drive Jukebox's own retry/coalescing paths to land a PopNext call off-thread.
+        [Test]
+        public void QueuePanelSurvivesQueueMutationFromBackgroundThread()
+        {
+            AddStep("enqueue two sets", () =>
+            {
+                queue.Enqueue(new BeatmapSetInfo { Id = 1, Title = "One", Artist = "Artist One" });
+                queue.Enqueue(new BeatmapSetInfo { Id = 2, Title = "Two", Artist = "Artist Two" });
+            });
+            AddAssert("2 rows shown", () => panel.RowCount == 2);
+
+            Exception? caught = null;
+
+            AddStep("pop the queue from a background thread while the panel is loaded", () =>
+            {
+                caught = null;
+                try
+                {
+                    Task.Run(() => queue.PopNext()).GetAwaiter().GetResult();
+                }
+                catch (Exception ex)
+                {
+                    caught = ex;
+                }
+            });
+
+            AddAssert("no exception escaped the off-thread mutation", () => caught == null);
+            AddUntilStep("panel reflects the removal", () => panel.RowCount == 1);
+            AddAssert("header reflects the removal", () => panel.HeaderText == "Queue (1)");
+        }
+
         // Regression coverage for per-row download status: a set with no cache entry and nothing
         // in flight for it shows "waiting"; once a download for it is kicked off it shows
         // "downloading…"; once GetAsync completes (extracted to disk with a *.osu file) it flips
