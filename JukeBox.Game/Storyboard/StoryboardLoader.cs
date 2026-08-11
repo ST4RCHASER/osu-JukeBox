@@ -22,11 +22,14 @@ public static class StoryboardLoader
 {
     public static List<StoryboardObject> Load(string? osbFile, string? osuFile)
     {
-        // Must be set BEFORE parsing: StoryboardObject.AddLoopCommand reads this flag at parse
-        // time (inside StoryboardReader's command build). With unrolling, Core materializes every
-        // loop iteration into plain commands on the object's main timelines, so the transform
-        // compiler never has to translate "L" loops into framework transform-loops.
-        ReOsuStoryboardPlayer.Setting.EnableLoopCommandUnrolling = true;
+        // Explicitly OFF (the Core default), and it must stay off: Core's unrolling
+        // (LoopCommand.SubCommandExpand) allocates LoopCount copies of every sub-command with no
+        // upper bound, so a hostile .osb with "L,0,2000000000" would OOM/hang inside parse — and
+        // no exception means the malformed-storyboard try/catch can't save us. Loops are instead
+        // compiled into framework transform-loops (Transform.LoopCount — O(1) per sub-command
+        // regardless of iteration count) by StoryboardTransforms. The flag is read in
+        // StoryboardObject.AddLoopCommand during parse, so it's pinned before parsing starts.
+        ReOsuStoryboardPlayer.Setting.EnableLoopCommandUnrolling = false;
 
         var osb = osbFile != null ? readFile(osbFile) : new List<StoryboardObject>();
         var osu = osuFile != null ? readFile(osuFile) : new List<StoryboardObject>();

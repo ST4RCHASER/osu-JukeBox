@@ -60,8 +60,14 @@ namespace JukeBox.Game.Tests.Visual
         {
             AddStep("create layer", () =>
             {
-                Child = layer = new TransformStoryboardLayer(fixtureSet);
-                layer.Clock = new FramedClock(manual);
+                // Clock is assigned BEFORE attaching: Add/Child= loads the layer synchronously
+                // against the current clock, and framework transform-loops bake Time.Current at
+                // creation (TransformSequence.makeTransformsLooping consumes iterations that lie
+                // before it) — compiling against the scene's wall-time clock would corrupt loop
+                // playback. Production (BeatmapVisuals) likewise installs its playback clock
+                // before children load.
+                layer = new TransformStoryboardLayer(fixtureSet) { Clock = new FramedClock(manual) };
+                Child = layer;
             });
         }
 
@@ -95,6 +101,174 @@ namespace JukeBox.Game.Tests.Visual
             AddUntilStep("sprite visible again", () => layer.VisibleSpriteCount == 1);
         }
 
+        // "L" loops are compiled as framework transform-loops (one set of transforms replayed by
+        // evaluation), not unrolled — this asserts the repeat actually happens: a 0→1 fade over
+        // each 1000ms iteration must be mid-fade again during the SECOND iteration (without the
+        // loop, alpha would already be pinned at 1 there).
+        [Test]
+        public void LoopCommandsRepeatAcrossIterations()
+        {
+            TransformStoryboardLayer loopLayer = null!;
+
+            AddStep("create looped-fade layer", () =>
+            {
+                string osbFile = Path.Combine(tmp, "loop.osb");
+                File.WriteAllText(osbFile, """
+                    osu file format v14
+
+                    [Events]
+                    //Storyboard Layer 0 (Background)
+                    Sprite,Background,Centre,"bg.png",320,240
+                    _L,1000,3
+                    __F,0,0,1000,0,1
+                    """);
+
+                var loopSet = new CachedBeatmapSet
+                {
+                    SetId = 4,
+                    Directory = tmp,
+                    OsbFile = osbFile,
+                };
+
+                // Clock before Add — see SetUpSteps for why (loop transforms bake load-time clock).
+                loopLayer = new TransformStoryboardLayer(loopSet) { Clock = new FramedClock(manual) };
+                Add(loopLayer);
+            });
+
+            AddStep("t=2500 (mid 2nd iteration)", () => manual.CurrentTime = 2500);
+            AddUntilStep("sprite visible", () => loopLayer.VisibleSpriteCount == 1);
+            AddAssert("alpha mid-fade again (~0.5), i.e. the loop repeated",
+                () => Math.Abs(loopLayer.FirstSprite!.Alpha - 0.5f) < 0.02f);
+
+            // Lifetime covers all 3 iterations (1000 + 1000*3 = 4000) and ends after them.
+            AddStep("t=4500 (past last iteration)", () => manual.CurrentTime = 4500);
+            AddUntilStep("no sprite visible", () => loopLayer.VisibleSpriteCount == 0);
+        }
+
+        // Regression test for the hostile-loop-count review finding: Core's loop *unrolling*
+        // (SubCommandExpand) would allocate LoopCount copies of every sub-command — LoopCount
+        // 2,000,000,000 = OOM/hang inside load with no exception for the malformed-osb fallback
+        // to catch. Compiled transform-loops store one set of transforms regardless of iteration
+        // count, so this must load promptly. (The huge count also int-overflows Core's
+        // FrameEndTime into the negative; the drawable's lifetime clamp turns that into
+        // "never alive", same as the old updater which never admitted such objects.)
+        [Test]
+        public void HugeLoopCountLoadsWithoutUnrolling()
+        {
+            TransformStoryboardLayer hostileLayer = null!;
+
+            AddStep("create layer with LoopCount=2,000,000,000", () =>
+            {
+                string osbFile = Path.Combine(tmp, "hostile-loop.osb");
+                File.WriteAllText(osbFile, """
+                    osu file format v14
+
+                    [Events]
+                    //Storyboard Layer 0 (Background)
+                    Sprite,Background,Centre,"bg.png",320,240
+                    _L,0,2000000000
+                    __F,0,0,1000,0,1
+                    """);
+
+                var hostileSet = new CachedBeatmapSet
+                {
+                    SetId = 5,
+                    Directory = tmp,
+                    OsbFile = osbFile,
+                };
+
+                // Clock before Add — see SetUpSteps for why (loop transforms bake load-time clock).
+                hostileLayer = new TransformStoryboardLayer(hostileSet) { Clock = new FramedClock(manual) };
+                Add(hostileLayer);
+            });
+
+            // The until-step's own timeout is the time box: with unrolling this would OOM/hang
+            // long before IsLoaded; with transform-loops it loads in milliseconds.
+            AddUntilStep("layer loads promptly without unrolling", () => hostileLayer.IsLoaded);
+
+            AddStep("t=500", () => manual.CurrentTime = 500);
+            AddAssert("hostile object never becomes alive (overflowed lifetime clamped)",
+                () => hostileLayer.VisibleSpriteCount == 0);
+        }
+
+        // Regression test for the zero-frame-animation review finding: an Animation whose frame
+        // files are all missing must not construct a frameless TextureAnimation (unguarded
+        // framework exception in Update/Draw) — the layer skips the drawable entirely, same rule
+        // as missing-texture sprites.
+        [Test]
+        public void AnimationWithMissingFramesDoesNotCrash()
+        {
+            TransformStoryboardLayer animLayer = null!;
+
+            AddStep("create layer with frameless animation", () =>
+            {
+                string osbFile = Path.Combine(tmp, "anim-missing.osb");
+                File.WriteAllText(osbFile, """
+                    osu file format v14
+
+                    [Events]
+                    //Storyboard Layer 0 (Background)
+                    Animation,Background,Centre,"missing.png",320,240,4,100,LoopForever
+                    _F,0,0,5000,1,1
+                    """);
+
+                var animSet = new CachedBeatmapSet
+                {
+                    SetId = 6,
+                    Directory = tmp,
+                    OsbFile = osbFile,
+                };
+
+                // Clock before Add — see SetUpSteps for why (loop transforms bake load-time clock).
+                animLayer = new TransformStoryboardLayer(animSet) { Clock = new FramedClock(manual) };
+                Add(animLayer);
+            });
+
+            AddUntilStep("layer loads without throwing", () => animLayer.IsLoaded);
+
+            AddStep("t=2500", () => manual.CurrentTime = 2500);
+            AddAssert("animation not present (no frame textures resolved)",
+                () => animLayer.VisibleSpriteCount == 0);
+        }
+
+        // Positive animation path: frames that DO exist render (frame files use Core's
+        // FrameBaseImagePath + index + extension naming).
+        [Test]
+        public void AnimationWithExistingFramesIsVisible()
+        {
+            TransformStoryboardLayer animLayer = null!;
+
+            AddStep("create layer with real animation frames", () =>
+            {
+                File.WriteAllBytes(Path.Combine(tmp, "anim0.png"), solidPng());
+                File.WriteAllBytes(Path.Combine(tmp, "anim1.png"), solidPng());
+
+                string osbFile = Path.Combine(tmp, "anim-ok.osb");
+                File.WriteAllText(osbFile, """
+                    osu file format v14
+
+                    [Events]
+                    //Storyboard Layer 0 (Background)
+                    Animation,Background,Centre,"anim.png",320,240,2,100,LoopForever
+                    _F,0,0,5000,1,1
+                    """);
+
+                var animSet = new CachedBeatmapSet
+                {
+                    SetId = 7,
+                    Directory = tmp,
+                    OsbFile = osbFile,
+                };
+
+                // Clock before Add — see SetUpSteps for why (loop transforms bake load-time clock).
+                animLayer = new TransformStoryboardLayer(animSet) { Clock = new FramedClock(manual) };
+                Add(animLayer);
+            });
+
+            AddStep("t=2500", () => manual.CurrentTime = 2500);
+            AddUntilStep("animation visible", () => animLayer.VisibleSpriteCount == 1);
+        }
+
         // Regression test for the OriginOffset Y-flip fix: Core's AnchorConvert expresses
         // "TopLeft" origin as a Y-up (-0.5, +0.5) offset from sprite centre, but osu!framework's
         // Sprite.OriginPosition is Y-down pixel space (0,0 == texture top-left). A naive
@@ -122,8 +296,9 @@ namespace JukeBox.Game.Tests.Visual
                     OsbFile = osbFile,
                 };
 
-                Add(topLeftLayer = new TransformStoryboardLayer(topLeftSet));
-                topLeftLayer.Clock = new FramedClock(manual);
+                // Clock before Add — see SetUpSteps for why (loop transforms bake load-time clock).
+                topLeftLayer = new TransformStoryboardLayer(topLeftSet) { Clock = new FramedClock(manual) };
+                Add(topLeftLayer);
             });
 
             AddStep("t=2500", () => manual.CurrentTime = 2500);
@@ -165,8 +340,9 @@ namespace JukeBox.Game.Tests.Visual
                     OsbFile = osbFile,
                 };
 
-                Add(garbageLayer = new TransformStoryboardLayer(garbageSet));
-                garbageLayer.Clock = new FramedClock(manual);
+                // Clock before Add — see SetUpSteps for why (loop transforms bake load-time clock).
+                garbageLayer = new TransformStoryboardLayer(garbageSet) { Clock = new FramedClock(manual) };
+                Add(garbageLayer);
             });
 
             AddUntilStep("layer loads without throwing", () => garbageLayer.IsLoaded);
@@ -221,8 +397,9 @@ namespace JukeBox.Game.Tests.Visual
 
                 perfClock = new ManualClock { CurrentTime = 0 };
 
-                Add(perfLayer = new TransformStoryboardLayer(perfSet));
-                perfLayer.Clock = new FramedClock(perfClock);
+                // Clock before Add — see SetUpSteps for why (loop transforms bake load-time clock).
+                perfLayer = new TransformStoryboardLayer(perfSet) { Clock = new FramedClock(perfClock) };
+                Add(perfLayer);
             });
 
             AddUntilStep("layer loaded", () => perfLayer.IsLoaded);

@@ -23,6 +23,13 @@ namespace JukeBox.Game.Storyboard;
 /// </summary>
 internal partial class DrawableStoryboardAnimation : TextureAnimation, IStoryboardDrawable
 {
+    /// <summary>
+    /// Upper bound on frames read from an animation declaration. Real storyboard animations are
+    /// at most a few hundred frames; a hostile FrameCount (e.g. 2 billion) must not turn the
+    /// frame-loading loop into a hang or grow the texture memo unboundedly.
+    /// </summary>
+    internal const int MaxFrames = 10_000;
+
     private readonly StoryboardAnimation anim;
     private readonly TransformStoryboardLayer owner;
 
@@ -103,7 +110,8 @@ internal partial class DrawableStoryboardAnimation : TextureAnimation, IStoryboa
         Depth = -anim.Z;
 
         LifetimeStart = anim.FrameStartTime;
-        LifetimeEnd = anim.FrameEndTime;
+        // Same hostile-overflow clamp as DrawableStoryboardSprite.
+        LifetimeEnd = Math.Max(anim.FrameStartTime, anim.FrameEndTime);
 
         Position = new Vector2(anim.Postion.X, anim.Postion.Y);
         Rotation = MathHelper.RadiansToDegrees(anim.Rotate);
@@ -124,16 +132,21 @@ internal partial class DrawableStoryboardAnimation : TextureAnimation, IStoryboa
 
         // Core builds frame paths as FrameBaseImagePath + index + FrameFileExtension
         // (StoryboardAnimation.Update); reuse the layer's fallback+memo texture lookup per frame.
-        for (int i = 0; i < anim.FrameCount; i++)
+        // Missing frames are still added (as null-texture frames, like lazer) so the surviving
+        // frames keep their original indices and timing. The layer only constructs this drawable
+        // when at least one frame texture resolves, so FrameCount here is never zero.
+        int frameCount = Math.Min(anim.FrameCount, MaxFrames);
+
+        for (int i = 0; i < frameCount; i++)
         {
             var tex = owner.GetTexture(anim.FrameBaseImagePath + i + anim.FrameFileExtension);
 
-            if (tex == null)
-                continue;
+            // null-forgiving: Animation<Texture> declares a non-nullable frame content parameter
+            // but tolerates null at draw time (Sprite.Texture is nullable); lazer relies on the
+            // same behaviour for missing frames.
+            AddFrame(tex!, anim.FrameDelay);
 
-            AddFrame(tex, anim.FrameDelay);
-
-            if (!sized)
+            if (tex != null && !sized)
             {
                 // Frames are near-universally uniform in size; use the first found frame for the
                 // custom origin conversion (same Y-flip mapping as DrawableStoryboardSprite).
