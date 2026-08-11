@@ -1,0 +1,3 @@
+[submodule "external/ReOsuStoryboardPlayer"]
+	path = external/ReOsuStoryboardPlayer
+	url = https://github.com/MikiraSora/ReOsuStoryboardPlayer
