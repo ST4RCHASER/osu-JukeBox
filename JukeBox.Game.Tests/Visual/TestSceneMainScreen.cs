@@ -217,6 +217,31 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("overlay visible in split layout too", () => overlay.State.Value == Visibility.Visible);
         }
 
+        // Regression coverage for the map-ID button: it must be reachable (and the overlay it
+        // opens must actually be present) in both layouts, same as the settings gear button.
+        [Test]
+        public void HashtagButtonTogglesMapIdOverlayInBothLayouts()
+        {
+            MapIdOverlay overlay = null!;
+            AddStep("grab map-id overlay", () => overlay = screen.ChildrenOfType<MapIdOverlay>().Single());
+
+            AddAssert("starts hidden", () => overlay.State.Value == Visibility.Hidden);
+
+            AddStep("click the corner hashtag button",
+                () => screen.ChildrenOfType<IconButton>().Single(b => b.Icon.Equals(FontAwesome.Solid.Hashtag)).TriggerClick());
+            AddAssert("overlay visible", () => overlay.State.Value == Visibility.Visible);
+
+            AddStep("click the hashtag button again", () => screen.ChildrenOfType<IconButton>().Single(b => b.Icon.Equals(FontAwesome.Solid.Hashtag)).TriggerClick());
+            AddAssert("overlay hidden again", () => overlay.State.Value == Visibility.Hidden);
+
+            AddStep("switch to split layout", () => InputManager.Key(Key.Tab));
+            AddUntilStep("split shown", () => screen.SplitLayoutContainer.Alpha == 1);
+
+            AddStep("click the corner hashtag button in split layout",
+                () => screen.ChildrenOfType<IconButton>().Single(b => b.Icon.Equals(FontAwesome.Solid.Hashtag)).TriggerClick());
+            AddAssert("overlay visible in split layout too", () => overlay.State.Value == Visibility.Visible);
+        }
+
         // Never exercised (queue stays empty and the mirror returns no candidates, so
         // Jukebox.Start()'s automatic radio round finds nothing and just retries later) — only
         // present so Jukebox/RadioService/BeatmapCache have a mirror to construct against without

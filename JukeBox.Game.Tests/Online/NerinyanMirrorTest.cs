@@ -45,6 +45,20 @@ namespace JukeBox.Game.Tests.Online
         }
 
         [Test]
+        public void IncludesOptionParamWhenSet()
+        {
+            var url = NerinyanMirror.BuildSearchUrl(new SearchRequest { Query = "123", Option = "setId" });
+            Assert.That(url, Does.Contain("option=setId"));
+        }
+
+        [Test]
+        public void OmitsOptionParamWhenNull()
+        {
+            var url = NerinyanMirror.BuildSearchUrl(new SearchRequest { Query = "camellia" });
+            Assert.That(url, Does.Not.Contain("option="));
+        }
+
+        [Test]
         public async Task SearchParsesResponse()
         {
             var handler = new StubHandler { ResponseBody = "[{\"id\":1,\"title\":\"t\",\"artist\":\"a\",\"creator\":\"c\",\"beatmaps\":[]}]" };
