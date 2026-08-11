@@ -53,7 +53,10 @@ public partial class PlaybackController : Component
         decoupledClock.ProcessFrame();
     }
 
-    public async Task PlayAsync(CachedBeatmapSet set)
+    // virtual: lets JukeboxTest inject a genuinely-throwing test double (PlaybackController's own
+    // real failure paths return silently rather than throw — see TestSceneJukebox — so this is
+    // the only realistic seam for a test that exercises Jukebox's unhandled-exception guard).
+    public virtual async Task PlayAsync(CachedBeatmapSet set)
     {
         if (set.AudioFile == null)
             return;

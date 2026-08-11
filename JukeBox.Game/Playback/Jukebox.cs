@@ -6,6 +6,7 @@ using JukeBox.Game.Beatmaps;
 using JukeBox.Game.Online;
 using osu.Framework.Bindables;
 using osu.Framework.Graphics;
+using osu.Framework.Logging;
 
 namespace JukeBox.Game.Playback;
 
@@ -105,24 +106,50 @@ public partial class Jukebox : Component
 
     private async Task advanceLoopAsync()
     {
-        while (true)
+        try
         {
-            await advanceRoundAsync().ConfigureAwait(false);
-
-            lock (advanceLock)
+            while (true)
             {
-                if (pendingAdvance)
+                try
                 {
-                    // A request coalesced while this round ran — consume it and run one more
-                    // round without releasing the guard in between (so a request arriving in
-                    // that gap can't be missed).
-                    pendingAdvance = false;
-                    continue;
+                    await advanceRoundAsync().ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    // A round threw outside the failure handling advanceRoundAsync already does
+                    // for cache lookups (e.g. an unexpected fault from RadioService or
+                    // PlaybackController). Surface it the same way a handled failure is
+                    // surfaced, and fall through to the pending-check below instead of
+                    // rethrowing, so the guard still gets released rather than staying stuck
+                    // "advancing" forever.
+                    Logger.Error(ex, "Jukebox: advance round failed unexpectedly");
+                    string message = ex.Message;
+                    Schedule(() => LastError.Value = $"Unexpected error: {message}");
                 }
 
-                advancing = false;
-                return;
+                lock (advanceLock)
+                {
+                    if (pendingAdvance)
+                    {
+                        // A request coalesced while this round ran — consume it and run one more
+                        // round without releasing the guard in between (so a request arriving in
+                        // that gap can't be missed).
+                        pendingAdvance = false;
+                        continue;
+                    }
+
+                    advancing = false;
+                    return;
+                }
             }
+        }
+        finally
+        {
+            // Last-resort safety net: guarantees the guard can never wedge permanently even if
+            // something above (e.g. the lock block itself) throws in a way the catch above
+            // doesn't cover. Idempotent with the normal-path release above.
+            lock (advanceLock)
+                advancing = false;
         }
     }
 

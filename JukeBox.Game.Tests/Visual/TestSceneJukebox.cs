@@ -1,5 +1,6 @@
 #nullable enable
 
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
@@ -127,6 +128,45 @@ namespace JukeBox.Game.Tests.Visual
             // a second round ran and drained the queue.
             AddUntilStep("coalesced skip eventually plays set2", () => playback.Current.Value?.SetId == set2.Id);
             AddAssert("queue drained (set2 was actually popped and played, not left queued)", () => queue.Items.Count == 0);
+        }
+
+        // Regression test for the guard's exception-safety: an unhandled fault from a round
+        // (i.e. something other than the cache-download failure already handled inside
+        // advanceRoundAsync) must not leave `advancing` stuck true forever. RadioService never
+        // propagates a mirror fault (it swallows every attempt internally and returns null), and
+        // a cache/download fault is already fully absorbed by advanceRoundAsync's own try/catch
+        // regardless of exception type — verified by reading both, so neither can reach the new
+        // guard. PlaybackController.PlayAsync also doesn't throw for real (empirically checked:
+        // it returns silently for both a garbage audio file and a missing directory). So this
+        // uses a throwing PlaybackController test double via the `virtual` seam added to
+        // PlaybackController.PlayAsync — the only realistic way to exercise this path.
+        [Test]
+        public void UnhandledExceptionDuringAdvanceReleasesGuardAndSurfacesError()
+        {
+            AddStep("swap in a playback controller that throws unexpectedly", () =>
+            {
+                playback = new ThrowingPlaybackController();
+                jukebox = new Jukebox(queue, radio, cache, playback);
+                Children = new Drawable[] { playback, jukebox };
+            });
+
+            AddStep("enqueue set1 (round pops it, caches fine, then PlayAsync throws)", () => jukebox.EnqueueAndMaybePlayAsync(set1));
+            AddUntilStep("unexpected error surfaced via LastError", () => jukebox.LastError.Value != null && jukebox.LastError.Value.Contains("Unexpected error"));
+
+            AddStep("queue set2 and skip", () =>
+            {
+                queue.Enqueue(set2);
+                jukebox.SkipCurrent();
+            });
+            // set2's round will also throw (same throwing controller), but the queue only empties
+            // if a second round actually ran at all — which only happens if the guard was
+            // released after the first round's unhandled exception, not left stuck "advancing".
+            AddUntilStep("a second round ran (guard was released, not wedged)", () => queue.Items.Count == 0);
+        }
+
+        private partial class ThrowingPlaybackController : PlaybackController
+        {
+            public override Task PlayAsync(CachedBeatmapSet set) => throw new InvalidOperationException("simulated unexpected playback fault");
         }
 
         private string makeOsz(string name, string audioFileName)
