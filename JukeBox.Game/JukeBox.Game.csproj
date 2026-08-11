@@ -9,4 +9,7 @@
   <ItemGroup>
     <PackageReference Include="ppy.osu.Framework" Version="2026.807.0" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="JukeBox.Game.Tests" />
+  </ItemGroup>
 </Project>
