@@ -28,6 +28,8 @@ namespace JukeBox.Game.Screens;
 /// docked and always visible in Split) is otherwise unreachable, so Ctrl+Q or the corner "queue"
 /// button toggles it there — Ctrl+Q rather than a bare letter so it doesn't collide with the
 /// type-anywhere-to-search behaviour above (which explicitly excludes Ctrl/Alt/Super combinations).
+/// The corner gear button opens <see cref="SettingsOverlay"/>; the "#" button next to it opens
+/// <see cref="MapIdOverlay"/>, for queueing a set directly by beatmapset ID instead of searching.
 /// </summary>
 public partial class MainScreen : Screen
 {
@@ -50,6 +52,7 @@ public partial class MainScreen : Screen
     private SearchOverlay search = null!;
     private QueuePanel queuePanel = null!;
     private SettingsOverlay settingsOverlay = null!;
+    private MapIdOverlay mapIdOverlay = null!;
 
     /// <summary>
     /// Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the fullscreen-overlay
@@ -71,6 +74,7 @@ public partial class MainScreen : Screen
         search = new SearchOverlay { RelativeSizeAxes = Axes.Both };
         queuePanel = new QueuePanel();
         settingsOverlay = new SettingsOverlay();
+        mapIdOverlay = new MapIdOverlay();
 
         InternalChildren = new Drawable[]
         {
@@ -104,6 +108,7 @@ public partial class MainScreen : Screen
             },
             new NowPlayingBar(),
             settingsOverlay,
+            mapIdOverlay,
             new BasicButton
             {
                 Anchor = Anchor.TopRight,
@@ -122,6 +127,15 @@ public partial class MainScreen : Screen
                 Icon = FontAwesome.Solid.Cog,
                 Action = () => settingsOverlay.ToggleVisibility(),
             },
+            new IconButton
+            {
+                Anchor = Anchor.TopRight,
+                Origin = Anchor.TopRight,
+                Position = new Vector2(-148, 8),
+                Size = new Vector2(28, 28),
+                Icon = FontAwesome.Solid.Hashtag,
+                Action = () => mapIdOverlay.ToggleVisibility(),
+            },
         };
 
         // The fullscreen layout is the default (UiLayout.FullscreenOverlay) — start both the
@@ -135,6 +149,7 @@ public partial class MainScreen : Screen
         // own failure paths already surface through jukebox.LastError (see the toast wiring in
         // LoadComplete) rather than through this call's returned Task.
         search.SetPicked += set => _ = jukebox.EnqueueAndMaybePlayAsync(set);
+        mapIdOverlay.SetResolved += set => _ = jukebox.EnqueueAndMaybePlayAsync(set);
     }
 
     protected override void LoadComplete()
