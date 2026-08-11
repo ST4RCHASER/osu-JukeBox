@@ -7,6 +7,7 @@ using JukeBox.Game.Online;
 using JukeBox.Game.Playback;
 using osu.Framework.Allocation;
 using osu.Framework.Bindables;
+using osu.Framework.Extensions.Color4Extensions;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Shapes;
@@ -15,21 +16,24 @@ using osu.Framework.Graphics.Textures;
 using osu.Framework.Graphics.UserInterface;
 using osu.Framework.Logging;
 using osuTK;
-using osuTK.Graphics;
 
 namespace JukeBox.Game.UI;
 
 /// <summary>
 /// Bottom-anchored, full-width playback bar: cover thumb (fetched async from
 /// <see cref="OnlineThumbnailStore"/> whenever <see cref="Playback.Jukebox.NowPlaying"/> changes;
-/// a placeholder box remains underneath until it loads or if it never does), title/artist (from
-/// <see cref="Playback.Jukebox.NowPlaying"/>), a seekable progress bar, play/pause + skip buttons
-/// and a volume slider bound directly to <see cref="PlaybackController.Volume"/>.
+/// a placeholder box remains underneath until it loads or if it never does), title (with a small
+/// accent underline) / artist (from <see cref="Playback.Jukebox.NowPlaying"/>), a status line
+/// (<see cref="Playback.Jukebox.Status"/>, styled in soft red when
+/// <see cref="Playback.Jukebox.LastError"/> is set), a seekable <see cref="ProgressSliderBar"/>
+/// spanning the bar's top edge, play/pause + skip buttons and a volume slider bound directly to
+/// <see cref="PlaybackController.Volume"/>.
 /// </summary>
 public partial class NowPlayingBar : CompositeDrawable
 {
-    private const float bar_height = 80;
+    private const float bar_height = 88;
     private const float cover_size = 64;
+    private const float play_pause_size = 44;
 
     [Resolved]
     private PlaybackController playback { get; set; } = null!;
@@ -49,6 +53,7 @@ public partial class NowPlayingBar : CompositeDrawable
     // gone back to null) and must not draw its now-outdated cover over whatever's current.
     private int thumbnailGeneration;
     private Sprite? coverSprite;
+    private Container coverContainer = null!;
 
     // Local, not bound straight to CurrentTimeMs/LengthMs. TransferValueOnCommit only gates one
     // direction — user drag input reaching this bindable (`Current`) is deferred until commit —
@@ -63,10 +68,11 @@ public partial class NowPlayingBar : CompositeDrawable
     private readonly BindableDouble progress = new BindableDouble { MinValue = 0, MaxValue = 1 };
     private bool settingProgress;
 
-    private BasicSliderBar<double> progressBar = null!;
+    private ProgressSliderBar progressBar = null!;
     private IconButton playPauseButton = null!;
     private SpriteText statusText = null!;
     private SpriteText titleText = null!;
+    private Box titleUnderline = null!;
     private SpriteText artistText = null!;
 
     /// <summary>
@@ -79,7 +85,7 @@ public partial class NowPlayingBar : CompositeDrawable
     /// Test-only access to the progress bar (JukeBox.Game.Tests has InternalsVisibleTo), to drive
     /// a real mouse drag over it and observe its <c>Current</c>/<see cref="Drawable.IsDragged"/>.
     /// </summary>
-    internal BasicSliderBar<double> ProgressBar => progressBar;
+    internal ProgressSliderBar ProgressBar => progressBar;
 
     [BackgroundDependencyLoader]
     private void load()
@@ -89,74 +95,149 @@ public partial class NowPlayingBar : CompositeDrawable
         Anchor = Anchor.BottomLeft;
         Origin = Anchor.BottomLeft;
 
+        Masking = true;
+        CornerRadius = Theme.CornerRadius;
+        EdgeEffect = Theme.PanelShadow;
+
         InternalChildren = new Drawable[]
         {
             new Box
             {
                 RelativeSizeAxes = Axes.Both,
-                Colour = new Color4(20, 20, 20, 255),
+                Colour = Theme.PanelSurface,
             },
-            new Box // cover thumb placeholder; stays visible underneath until/unless the real one loads.
+            // The signature element: spans the bar's full top edge, above everything else below.
+            progressBar = new ProgressSliderBar
             {
-                Position = new Vector2(8, 8),
-                Size = new Vector2(cover_size, cover_size),
-                Colour = Color4.DarkSlateGray,
+                RelativeSizeAxes = Axes.X,
+                Anchor = Anchor.TopLeft,
+                Origin = Anchor.TopLeft,
+                Current = progress,
+                TransferValueOnCommit = true,
             },
-            new FillFlowContainer
-            {
-                Position = new Vector2(80, 8),
-                AutoSizeAxes = Axes.Both,
-                Direction = FillDirection.Vertical,
-                Children = new Drawable[]
-                {
-                    statusText = new SpriteText { Font = FontUsage.Default.With(size: 12), Colour = Color4.LightYellow },
-                    titleText = new SpriteText { Font = FontUsage.Default.With(size: 18) },
-                    artistText = new SpriteText { Font = FontUsage.Default.With(size: 14), Colour = Color4.Gray },
-                }
-            },
+            // Everything else sits below the progress bar's hit area so it never overlaps it.
             new Container
             {
-                Position = new Vector2(80, 56),
-                RelativeSizeAxes = Axes.X,
-                Padding = new MarginPadding { Right = 260 },
-                Height = 8,
-                Child = progressBar = new BasicSliderBar<double>
-                {
-                    RelativeSizeAxes = Axes.Both,
-                    Current = progress,
-                    TransferValueOnCommit = true,
-                    BackgroundColour = Color4.Gray,
-                    SelectionColour = Color4.White,
-                }
-            },
-            new FillFlowContainer
-            {
-                Anchor = Anchor.TopRight,
-                Origin = Anchor.TopRight,
-                Position = new Vector2(-8, 8),
-                AutoSizeAxes = Axes.Both,
-                Direction = FillDirection.Horizontal,
-                Spacing = new Vector2(8, 0),
+                RelativeSizeAxes = Axes.Both,
+                Padding = new MarginPadding { Top = 12, Horizontal = Theme.PanelPadding },
                 Children = new Drawable[]
                 {
-                    playPauseButton = new IconButton
+                    coverContainer = new Container
                     {
-                        Size = new Vector2(48, 32),
-                        Icon = FontAwesome.Solid.Play,
-                        Action = () => playback.TogglePause(),
+                        Anchor = Anchor.CentreLeft,
+                        Origin = Anchor.CentreLeft,
+                        Size = new Vector2(cover_size),
+                        Masking = true,
+                        CornerRadius = Theme.CornerRadius,
+                        Child = new Box // placeholder; stays visible underneath until/unless the real cover loads.
+                        {
+                            RelativeSizeAxes = Axes.Both,
+                            Colour = Theme.ElevatedSurface,
+                        },
                     },
-                    new IconButton
+                    new FillFlowContainer
                     {
-                        Size = new Vector2(48, 32),
-                        Icon = FontAwesome.Solid.StepForward,
-                        Action = () => jukebox.SkipCurrent(),
+                        Anchor = Anchor.CentreLeft,
+                        Origin = Anchor.CentreLeft,
+                        Position = new Vector2(cover_size + 16, 0),
+                        AutoSizeAxes = Axes.Both,
+                        Direction = FillDirection.Vertical,
+                        Spacing = new Vector2(0, 2),
+                        Children = new Drawable[]
+                        {
+                            new Container
+                            {
+                                AutoSizeAxes = Axes.Both,
+                                Children = new Drawable[]
+                                {
+                                    titleText = new SpriteText
+                                    {
+                                        Font = FontUsage.Default.With(size: Theme.RowTitleTextSize),
+                                        Colour = Theme.TextPrimary,
+                                    },
+                                    titleUnderline = new Box
+                                    {
+                                        Anchor = Anchor.BottomLeft,
+                                        Origin = Anchor.BottomLeft,
+                                        RelativeSizeAxes = Axes.X,
+                                        Height = 2,
+                                        Y = 2,
+                                        Colour = Theme.Accent,
+                                    },
+                                }
+                            },
+                            artistText = new SpriteText
+                            {
+                                Font = FontUsage.Default.With(size: Theme.RowSecondaryTextSize),
+                                Colour = Theme.TextSecondary,
+                            },
+                            statusText = new SpriteText
+                            {
+                                Font = FontUsage.Default.With(size: Theme.CaptionTextSize),
+                                Colour = Theme.TextTertiary,
+                            },
+                        }
                     },
-                    new BasicSliderBar<double>
+                    new FillFlowContainer
                     {
-                        Size = new Vector2(80, 32),
-                        Current = playback.Volume,
-                        BackgroundColour = Color4.Gray,
-                        SelectionColour = Color4.White,
+                        Anchor = Anchor.Centre,
+                        Origin = Anchor.Centre,
+                        AutoSizeAxes = Axes.Both,
+                        Direction = FillDirection.Horizontal,
+                        Spacing = new Vector2(12, 0),
+                        Children = new Drawable[]
+                        {
+                            playPauseButton = new IconButton
+                            {
+                                Anchor = Anchor.CentreLeft,
+                                Origin = Anchor.CentreLeft,
+                                Size = new Vector2(play_pause_size),
+                                CornerRadius = play_pause_size / 2,
+                                Icon = FontAwesome.Solid.Play,
+                                IconColour = Theme.Background,
+                                IdleColour = Theme.Accent,
+                                HoverColour = Theme.Accent.Lighten(0.15f),
+                                Action = () => playback.TogglePause(),
+                            },
+                            new IconButton
+                            {
+                                Anchor = Anchor.CentreLeft,
+                                Origin = Anchor.CentreLeft,
+                                Size = new Vector2(36),
+                                Icon = FontAwesome.Solid.StepForward,
+                                Action = () => jukebox.SkipCurrent(),
+                            },
+                        }
+                    },
+                    new FillFlowContainer
+                    {
+                        Anchor = Anchor.CentreRight,
+                        Origin = Anchor.CentreRight,
+                        AutoSizeAxes = Axes.Both,
+                        Direction = FillDirection.Horizontal,
+                        Spacing = new Vector2(8, 0),
+                        Children = new Drawable[]
+                        {
+                            new SpriteIcon
+                            {
+                                Anchor = Anchor.CentreLeft,
+                                Origin = Anchor.CentreLeft,
+                                Icon = FontAwesome.Solid.VolumeUp,
+                                Size = new Vector2(14),
+                                Colour = Theme.TextTertiary,
+                            },
+                            new BasicSliderBar<double>
+                            {
+                                Anchor = Anchor.CentreLeft,
+                                Origin = Anchor.CentreLeft,
+                                Size = new Vector2(90, 6),
+                                CornerRadius = 3,
+                                Current = playback.Volume,
+                                BackgroundColour = Theme.ElevatedSurface,
+                                SelectionColour = Theme.Accent,
+                                FocusColour = Theme.Accent,
+                            },
+                        }
                     },
                 }
             },
@@ -168,7 +249,8 @@ public partial class NowPlayingBar : CompositeDrawable
         base.LoadComplete();
 
         jukebox.NowPlaying.BindValueChanged(onNowPlayingChanged, true);
-        jukebox.Status.BindValueChanged(e => statusText.Text = e.NewValue ?? string.Empty, true);
+        jukebox.Status.BindValueChanged(_ => refreshStatus(), true);
+        jukebox.LastError.BindValueChanged(_ => refreshStatus(), true);
 
         progress.BindValueChanged(e =>
         {
@@ -195,6 +277,20 @@ public partial class NowPlayingBar : CompositeDrawable
         }
 
         playPauseButton.Icon = playback.IsPlaying ? FontAwesome.Solid.Pause : FontAwesome.Solid.Play;
+    }
+
+    private void refreshStatus()
+    {
+        if (jukebox.LastError.Value != null)
+        {
+            statusText.Text = jukebox.LastError.Value;
+            statusText.Colour = Theme.Error;
+        }
+        else
+        {
+            statusText.Text = jukebox.Status.Value ?? string.Empty;
+            statusText.Colour = Theme.TextTertiary;
+        }
     }
 
     private void onNowPlayingChanged(ValueChangedEvent<BeatmapSetInfo?> change)
@@ -240,10 +336,9 @@ public partial class NowPlayingBar : CompositeDrawable
                 return;
 
             // Drawn on top of (added after) the placeholder box from load(), so it simply covers it.
-            AddInternal(coverSprite = new Sprite
+            coverContainer.Add(coverSprite = new Sprite
             {
-                Position = new Vector2(8, 8),
-                Size = new Vector2(cover_size, cover_size),
+                RelativeSizeAxes = Axes.Both,
                 FillMode = FillMode.Fill,
                 Texture = texture,
             });

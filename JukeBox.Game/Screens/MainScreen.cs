@@ -7,12 +7,12 @@ using osu.Framework.Allocation;
 using osu.Framework.Bindables;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
+using osu.Framework.Graphics.Shapes;
 using osu.Framework.Graphics.Sprites;
 using osu.Framework.Graphics.UserInterface;
 using osu.Framework.Input.Events;
 using osu.Framework.Screens;
 using osuTK;
-using osuTK.Graphics;
 using osuTK.Input;
 
 namespace JukeBox.Game.Screens;
@@ -21,19 +21,22 @@ namespace JukeBox.Game.Screens;
 /// Top-level screen: hosts <see cref="NowPlayingScreen"/>'s visuals behind the search overlay,
 /// queue panel and now-playing bar, and switches between the two pre-built layout containers
 /// (<see cref="FullscreenLayoutContainer"/>/<see cref="SplitLayoutContainer"/>) driven by
-/// <see cref="JukeBoxSetting.UiLayout"/>. Typing a printable character (with no modifiers held,
-/// and nothing else already consuming the key — e.g. the search box itself when focused) opens
-/// the search overlay via <see cref="SearchOverlay.ShowWithInitialChar"/>; Tab or the corner
+/// <see cref="JukeBoxSetting.UiLayout"/> (defaults to <see cref="UiLayout.Split"/> — the styled,
+/// always-docked left panel is the primary experience; the fullscreen "type anywhere" dropdown
+/// remains available as the alternate layout). Typing a printable character (with no modifiers
+/// held, and nothing else already consuming the key — e.g. the search box itself when focused)
+/// opens the search overlay via <see cref="SearchOverlay.ShowWithInitialChar"/>; Tab or the corner
 /// "layout" button toggles the layout. In the fullscreen layout, the queue drawer (permanently
 /// docked and always visible in Split) is otherwise unreachable, so Ctrl+Q or the corner "queue"
 /// button toggles it there — Ctrl+Q rather than a bare letter so it doesn't collide with the
 /// type-anywhere-to-search behaviour above (which explicitly excludes Ctrl/Alt/Super combinations).
-/// The corner gear button opens <see cref="SettingsOverlay"/>; the "#" button next to it opens
-/// <see cref="MapIdOverlay"/>, for queueing a set directly by beatmapset ID instead of searching.
+/// The top-right corner hosts a small translucent pill of icon buttons: gear (opens
+/// <see cref="SettingsOverlay"/>), "#" (opens <see cref="MapIdOverlay"/>, for queueing a set
+/// directly by beatmapset ID instead of searching) and the layout toggle.
 /// </summary>
 public partial class MainScreen : Screen
 {
-    private const float split_column_width = 360;
+    private const float split_column_width = 340;
     private const float queue_panel_width = 320;
 
     [Resolved]
@@ -93,48 +96,78 @@ public partial class MainScreen : Screen
                 {
                     Anchor = Anchor.TopRight,
                     Origin = Anchor.TopRight,
-                    Position = new Vector2(-8, 44),
+                    Position = new Vector2(-8, 52),
                     Size = new Vector2(96, 28),
                     Text = "queue",
+                    BackgroundColour = Theme.ElevatedSurface,
                     Action = () => queuePanel.ToggleVisibility(),
                 },
             },
+            // Split's left column: a single rounded, shadowed panel-surface housing both the
+            // (transparent-when-docked, see SearchOverlay.Docked) search overlay on top and the
+            // queue drawer below it — one continuous "left panel" rather than two separate boxes.
             SplitLayoutContainer = new Container
             {
                 RelativeSizeAxes = Axes.Y,
                 Width = split_column_width,
                 Anchor = Anchor.TopLeft,
                 Origin = Anchor.TopLeft,
+                Masking = true,
+                CornerRadius = Theme.CornerRadius,
+                EdgeEffect = Theme.PanelShadow,
+                Child = new Box
+                {
+                    RelativeSizeAxes = Axes.Both,
+                    Colour = Theme.PanelSurface,
+                },
             },
             new NowPlayingBar(),
             settingsOverlay,
             mapIdOverlay,
-            new BasicButton
+            new Container
             {
                 Anchor = Anchor.TopRight,
                 Origin = Anchor.TopRight,
                 Position = new Vector2(-8, 8),
-                Size = new Vector2(96, 28),
-                Text = "layout",
-                Action = toggleLayout,
-            },
-            new IconButton
-            {
-                Anchor = Anchor.TopRight,
-                Origin = Anchor.TopRight,
-                Position = new Vector2(-112, 8),
-                Size = new Vector2(28, 28),
-                Icon = FontAwesome.Solid.Cog,
-                Action = () => settingsOverlay.ToggleVisibility(),
-            },
-            new IconButton
-            {
-                Anchor = Anchor.TopRight,
-                Origin = Anchor.TopRight,
-                Position = new Vector2(-148, 8),
-                Size = new Vector2(28, 28),
-                Icon = FontAwesome.Solid.Hashtag,
-                Action = () => mapIdOverlay.ToggleVisibility(),
+                AutoSizeAxes = Axes.Both,
+                Masking = true,
+                CornerRadius = Theme.CornerRadius,
+                Children = new Drawable[]
+                {
+                    new Box
+                    {
+                        RelativeSizeAxes = Axes.Both,
+                        Colour = Theme.PanelSurface,
+                    },
+                    new FillFlowContainer
+                    {
+                        AutoSizeAxes = Axes.Both,
+                        Direction = FillDirection.Horizontal,
+                        Padding = new MarginPadding(4),
+                        Spacing = new Vector2(4, 0),
+                        Children = new Drawable[]
+                        {
+                            new IconButton
+                            {
+                                Size = new Vector2(28),
+                                Icon = FontAwesome.Solid.Cog,
+                                Action = () => settingsOverlay.ToggleVisibility(),
+                            },
+                            new IconButton
+                            {
+                                Size = new Vector2(28),
+                                Icon = FontAwesome.Solid.Hashtag,
+                                Action = () => mapIdOverlay.ToggleVisibility(),
+                            },
+                            new IconButton
+                            {
+                                Size = new Vector2(28),
+                                Icon = FontAwesome.Solid.Th,
+                                Action = toggleLayout,
+                            },
+                        }
+                    }
+                }
             },
         };
 
@@ -229,7 +262,9 @@ public partial class MainScreen : Screen
         }
 
         // Docked in Split (permanently visible left column, not a dismissable modal): picking a
-        // result or pressing Escape must not make it vanish. See SearchOverlay.Docked.
+        // result or pressing Escape must not make it vanish. See SearchOverlay.Docked — flipping
+        // it also switches the overlay's own chrome from a fullscreen dim scrim to a transparent
+        // background, since SplitLayoutContainer already supplies the panel surface behind it.
         search.Docked = split;
 
         if (split)
@@ -292,7 +327,7 @@ public partial class MainScreen : Screen
             Origin = Anchor.TopCentre,
             Y = 16,
             Font = FontUsage.Default.With(size: 20),
-            Colour = Color4.OrangeRed,
+            Colour = Theme.Error,
             Text = message,
             Alpha = 0,
         };
