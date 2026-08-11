@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
+using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -85,6 +86,21 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("enqueue set2 (idle already false, just queues)", () => jukebox.EnqueueAndMaybePlayAsync(set2));
             AddStep("advance", () => jukebox.AdvanceAsync());
             AddUntilStep("set2 playing", () => playback.Current.Value?.SetId == set2.Id);
+        }
+
+        // Regression test for the "no download/status feedback" UX complaint: Status should show
+        // progress while a cache-miss download is in flight, and clear once playback actually
+        // starts, so a first-run download doesn't look like the app hung.
+        [Test]
+        public void StatusShowsDownloadingWhileCacheMissInFlightAndClearsAfterwards()
+        {
+            AddStep("gate set1's download", () => mirror.GateDownload(1));
+            AddStep("enqueue set1 (advance starts, blocks mid-download)", () => jukebox.EnqueueAndMaybePlayAsync(set1));
+            AddUntilStep("status shows downloading set1", () => jukebox.Status.Value != null && jukebox.Status.Value.Contains(set1.DisplayTitle));
+
+            AddStep("release set1's download", () => mirror.ReleaseGate(1));
+            AddUntilStep("set1 playing", () => playback.Current.Value?.SetId == set1.Id);
+            AddAssert("status cleared once playing", () => jukebox.Status.Value == null);
         }
 
         [Test]
@@ -188,6 +204,34 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("failure reported for the silent set", () => jukebox.LastError.Value != null && jukebox.LastError.Value.Contains("Silent"));
         }
 
+        // Regression test for the "queued song doesn't play until radio song ends" UX complaint:
+        // a set the user explicitly enqueued should interrupt radio filler immediately (SkipCurrent
+        // semantics), rather than wait for the radio-picked track to finish on its own.
+        [Test]
+        public void EnqueueInterruptsRadioSourcedPlayback()
+        {
+            AddStep("radio has one pickable candidate (set2)", () => mirror.SetSearchResults(new List<BeatmapSetInfo> { set2 }));
+            AddStep("start with an empty queue (radio picks set2)", () => jukebox.Start());
+            AddUntilStep("set2 (radio-sourced) playing", () => playback.Current.Value?.SetId == set2.Id);
+
+            AddStep("enqueue set1 while the radio track is playing", () => jukebox.EnqueueAndMaybePlayAsync(set1));
+            AddUntilStep("set1 plays immediately, interrupting the radio filler", () => playback.Current.Value?.SetId == set1.Id);
+        }
+
+        // Companion regression test: playback sourced from the queue must NOT be interrupted by a
+        // later enqueue — the newly-enqueued set simply waits its turn, as before this fix.
+        [Test]
+        public void EnqueueDoesNotInterruptQueueSourcedPlayback()
+        {
+            AddStep("enqueue set1 (queue-sourced, starts playing)", () => jukebox.EnqueueAndMaybePlayAsync(set1));
+            AddUntilStep("set1 playing", () => playback.Current.Value?.SetId == set1.Id);
+
+            AddStep("enqueue set2 while set1 (queue-sourced) is still playing", () => jukebox.EnqueueAndMaybePlayAsync(set2));
+            AddWaitStep("let a few frames pass", 5);
+            AddAssert("set1 is still playing, not interrupted", () => playback.Current.Value?.SetId == set1.Id);
+            AddAssert("set2 waits queued instead of playing immediately", () => queue.Items.Any(i => i.Id == set2.Id));
+        }
+
         // Builds a fixture .osz whose only difficulty has no AudioFilename key at all, so
         // BeatmapCache.LoadFromDirectory leaves CachedBeatmapSet.AudioFile null — the "no loadable
         // audio" case, distinct from `setFailing` above (which fails at the download/cache stage).
@@ -256,9 +300,18 @@ namespace JukeBox.Game.Tests.Visual
         {
             private readonly Dictionary<int, string> paths = new();
             private readonly Dictionary<int, TaskCompletionSource<bool>> gates = new();
+
+            // Empty by default: most of this fixture's tests exercise the queue path only and
+            // rely on RadioService.PickRandomAsync returning null (empty candidates) rather than
+            // wedging on an unexpected radio pick. Tests exercising radio-sourced playback set
+            // this via SetSearchResults.
+            private List<BeatmapSetInfo> searchResults = new();
+
             public string Name => "fixture";
 
             public void Register(int setId, string oszPath) => paths[setId] = oszPath;
+
+            public void SetSearchResults(List<BeatmapSetInfo> sets) => searchResults = sets;
 
             public void GateDownload(int setId) => gates[setId] = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -269,7 +322,7 @@ namespace JukeBox.Game.Tests.Visual
             }
 
             public Task<List<BeatmapSetInfo>> SearchAsync(SearchRequest r, CancellationToken ct = default)
-                => Task.FromResult(new List<BeatmapSetInfo>());
+                => Task.FromResult(searchResults);
 
             public async Task DownloadAsync(int setId, bool noVideo, Stream destination, CancellationToken ct = default)
             {
