@@ -1,6 +1,8 @@
 #nullable enable
 
+using System;
 using JukeBox.Game.Configuration;
+using JukeBox.Game.Online;
 using osu.Framework.Allocation;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
@@ -30,12 +32,19 @@ public partial class SettingsOverlay : FocusedOverlayContainer
     private JukeBoxConfigManager config { get; set; } = null!;
 
     private BasicCheckbox showFpsCheckbox = null!;
+    private BasicDropdown<MirrorSource> mirrorDropdown = null!;
 
     /// <summary>
     /// Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the "Show FPS" checkbox,
     /// to drive/assert it without depending on this panel's internal layout.
     /// </summary>
     internal BasicCheckbox ShowFpsCheckbox => showFpsCheckbox;
+
+    /// <summary>
+    /// Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the "Beatmap mirror"
+    /// dropdown, to drive/assert it without depending on this panel's internal layout.
+    /// </summary>
+    internal BasicDropdown<MirrorSource> MirrorDropdown => mirrorDropdown;
 
     [BackgroundDependencyLoader]
     private void load()
@@ -66,6 +75,12 @@ public partial class SettingsOverlay : FocusedOverlayContainer
                     {
                         new SpriteText { Font = FontUsage.Default.With(size: 18), Text = "Settings" },
                         showFpsCheckbox = new BasicCheckbox { LabelText = "Show FPS" },
+                        new SpriteText { Text = "Beatmap mirror" },
+                        mirrorDropdown = new BasicDropdown<MirrorSource>
+                        {
+                            RelativeSizeAxes = Axes.X,
+                            Items = Enum.GetValues<MirrorSource>(),
+                        },
                     }
                 }
             }
@@ -77,6 +92,7 @@ public partial class SettingsOverlay : FocusedOverlayContainer
         base.LoadComplete();
 
         showFpsCheckbox.Current = config.GetBindable<bool>(JukeBoxSetting.ShowFps);
+        mirrorDropdown.Current = config.GetBindable<MirrorSource>(JukeBoxSetting.PreferredMirror);
     }
 
     protected override void PopIn() => this.FadeIn(fade_duration, Easing.OutQuint);
