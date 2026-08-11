@@ -16,6 +16,12 @@ using osuTK;
 using ReOsuStoryboardPlayer.Core.Base;
 using ReOsuStoryboardPlayer.Core.Kernel;
 
+// ReOsuStoryboardPlayer.Core.Base also declares an `Anchor` enum (storyboard origin values,
+// unrelated to osu!framework's). Both namespaces are `using`d in this file for other types
+// (StoryboardObject/Layer/StoryboardBackgroundObject vs. Sprite/Drawable), so the framework's
+// Anchor needs an explicit alias to resolve unambiguously.
+using Anchor = osu.Framework.Graphics.Anchor;
+
 namespace JukeBox.Game.Storyboard;
 
 /// <summary>
@@ -31,6 +37,13 @@ public partial class StoryboardLayer : CompositeDrawable
     /// their active time window). Exposed for tests; not a count of realised Sprites.
     /// </summary>
     public int VisibleSpriteCount { get; private set; }
+
+    /// <summary>
+    /// Test-only access to the realised Sprite pool (JukeBox.Game.Tests has InternalsVisibleTo),
+    /// to assert per-sprite transform state (e.g. OriginPosition) that
+    /// <see cref="VisibleSpriteCount"/> alone can't cover.
+    /// </summary>
+    internal Sprite? FirstSprite => sprites.Values.FirstOrDefault();
 
     private readonly CachedBeatmapSet set;
 
@@ -103,11 +116,7 @@ public partial class StoryboardLayer : CompositeDrawable
 
             if (!sprites.TryGetValue(obj, out var sprite))
             {
-                sprite = new Sprite
-                {
-                    Anchor = osu.Framework.Graphics.Anchor.TopLeft,
-                    Origin = osu.Framework.Graphics.Anchor.Custom
-                };
+                sprite = new Sprite { Anchor = Anchor.TopLeft, Origin = Anchor.Custom };
                 sprites[obj] = sprite;
                 AddInternal(sprite);
             }

@@ -5,6 +5,7 @@ using JukeBox.Game.Storyboard;
 using NUnit.Framework;
 using osu.Framework.Testing;
 using osu.Framework.Timing;
+using osuTK;
 
 namespace JukeBox.Game.Tests.Visual
 {
@@ -70,6 +71,47 @@ namespace JukeBox.Game.Tests.Visual
 
             AddStep("t=6000", () => manual.CurrentTime = 6000);
             AddUntilStep("no sprite visible", () => layer.VisibleSpriteCount == 0);
+        }
+
+        // Regression test for the OriginOffset Y-flip fix: Core's AnchorConvert expresses
+        // "TopLeft" origin as a Y-up (-0.5, +0.5) offset from sprite centre, but osu!framework's
+        // Sprite.OriginPosition is Y-down pixel space (0,0 == texture top-left). A naive
+        // `0.5f + offset.Y` mapping would place the origin at the texture's *bottom*-left instead.
+        [Test]
+        public void TopLeftOriginIsTextureTopLeftCorner()
+        {
+            StoryboardLayer topLeftLayer = null!;
+
+            AddStep("create top-left-origin layer", () =>
+            {
+                string osbFile = Path.Combine(tmp, "topleft.osb");
+                File.WriteAllText(osbFile, """
+                    osu file format v14
+
+                    [Events]
+                    Sprite,Background,TopLeft,"bg.png",320,240
+                    _F,0,0,5000,1,1
+                    """);
+
+                var topLeftSet = new CachedBeatmapSet
+                {
+                    SetId = 2,
+                    Directory = tmp,
+                    OsbFile = osbFile,
+                };
+
+                Add(topLeftLayer = new StoryboardLayer(topLeftSet));
+                topLeftLayer.Clock = new FramedClock(manual);
+            });
+
+            AddStep("t=2500", () => manual.CurrentTime = 2500);
+            AddUntilStep("sprite realised", () => topLeftLayer.FirstSprite != null);
+
+            // Texture is 1x1, so OriginPosition.Y is exactly the origin fraction times 1: the
+            // fixed formula gives fracY = 0.5 - (+0.5) = 0 (top, i.e. pixel Y=0); the pre-fix
+            // formula would have given fracY = 0.5 + (+0.5) = 1 (bottom, i.e. pixel Y=1) instead.
+            AddAssert("origin at texture top-left corner (0,0), not bottom-left",
+                () => topLeftLayer.FirstSprite!.OriginPosition == Vector2.Zero);
         }
 
         // 1x1 red pixel PNG — content is irrelevant, only that it decodes to a valid texture.
