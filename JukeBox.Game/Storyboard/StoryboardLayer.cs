@@ -11,6 +11,7 @@ using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Sprites;
 using osu.Framework.Graphics.Textures;
 using osu.Framework.IO.Stores;
+using osu.Framework.Logging;
 using osu.Framework.Platform;
 using osuTK;
 using ReOsuStoryboardPlayer.Core.Base;
@@ -67,7 +68,21 @@ public partial class StoryboardLayer : CompositeDrawable
             host.CreateTextureLoaderStore(new StorageBackedResourceStore(new NativeStorage(set.Directory, host))),
             useAtlas: false, scaleAdjust: 1);
 
-        var objects = StoryboardLoader.Load(set.OsbFile, set.PreferredOsuFile);
+        List<StoryboardObject> objects;
+
+        try
+        {
+            objects = StoryboardLoader.Load(set.OsbFile, set.PreferredOsuFile);
+        }
+        catch (Exception ex)
+        {
+            // Core's parser is strict (e.g. int.Parse/Enum.Parse throw outright on a malformed
+            // line) and storyboards are downloaded from arbitrary third-party mirrors — a single
+            // corrupt .osb/.osu must not take the whole game down. Fall back to an empty
+            // storyboard (renders nothing; audio keeps playing) rather than rethrow.
+            Logger.Error(ex, $"Failed to load storyboard for set {set.SetId}; falling back to no storyboard");
+            objects = new List<StoryboardObject>();
+        }
 
         foreach (var bg in objects.OfType<StoryboardBackgroundObject>())
         {

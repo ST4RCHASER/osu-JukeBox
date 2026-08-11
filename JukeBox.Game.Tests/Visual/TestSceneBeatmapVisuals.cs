@@ -2,9 +2,11 @@
 
 using System;
 using System.IO;
+using System.Linq;
 using JukeBox.Game.Beatmaps;
 using JukeBox.Game.Playback;
 using JukeBox.Game.Screens;
+using JukeBox.Game.Storyboard;
 using NUnit.Framework;
 using osu.Framework.Allocation;
 using osu.Framework.Graphics;
@@ -138,6 +140,44 @@ namespace JukeBox.Game.Tests.Visual
             // happens; assert that actually occurs rather than just that nothing crashed.
             AddUntilStep("video layer torn down after decoder fault", () => !visuals.HasVideoLayer);
             AddAssert("visuals still alive (no crash from the bad video)", () => !visuals.Disposed);
+
+            AddStep("remove visuals", () => Remove(visuals, true));
+        }
+
+        // Regression test for the crash-on-malformed-storyboard bug, exercised through the full
+        // BeatmapVisuals stack (not just StoryboardLayer directly — see TestSceneStoryboardLayer
+        // for the narrower version): a garbage .osb downloaded by Radio must not prevent the rest
+        // of the visual stack (background) from loading, and must not crash BackgroundDependencyLoader.
+        [Test]
+        public void MalformedStoryboardDoesNotPreventVisualsFromLoading()
+        {
+            BeatmapVisuals visuals = null!;
+
+            AddStep("create visuals with malformed storyboard", () =>
+            {
+                string osbFile = Path.Combine(tmp, "garbage.osb");
+                File.WriteAllText(osbFile, """
+                    osu file format v14
+
+                    [Events]
+                    Sprite,NotARealLayer,Centre,"bg.png",320,240
+                    _M,0,0,5000,320,240,320,240
+                    """);
+
+                var set = new CachedBeatmapSet
+                {
+                    SetId = 4,
+                    Directory = tmp,
+                    BackgroundFile = fixtureSetA.BackgroundFile,
+                    OsbFile = osbFile,
+                };
+
+                Add(visuals = new BeatmapVisuals(set, playbackClock) { RelativeSizeAxes = Axes.Both });
+            });
+
+            AddUntilStep("visuals loaded despite malformed storyboard", () => visuals.IsLoaded);
+            AddAssert("no storyboard sprites visible (fell back to empty storyboard)",
+                () => visuals.ChildrenOfType<StoryboardLayer>().Single().VisibleSpriteCount == 0);
 
             AddStep("remove visuals", () => Remove(visuals, true));
         }
