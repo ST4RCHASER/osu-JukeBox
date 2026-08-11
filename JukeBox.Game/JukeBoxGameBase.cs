@@ -5,8 +5,10 @@ using JukeBox.Game.Online;
 using JukeBox.Game.Playback;
 using JukeBox.Resources;
 using osu.Framework.Allocation;
+using osu.Framework.Bindables;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
+using osu.Framework.Graphics.Performance;
 using osu.Framework.IO.Stores;
 using osuTK;
 
@@ -31,6 +33,21 @@ namespace JukeBox.Game
 
         private PlaybackController playback = null!;
         private Jukebox jukebox = null!;
+
+        // Kept as a field (rather than a load()-local) because osu.Framework's config-manager
+        // bindables use a weak-reference chain back to the master value — an unrooted local would
+        // be eligible for collection, silently dropping this binding. See JukeBoxSetting.ShowFps.
+        private Bindable<bool> showFps = null!;
+
+        /// <summary>
+        /// Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the ShowFps -&gt;
+        /// FrameStatisticsMode mapping used by the binding below, isolated from
+        /// <see cref="osu.Framework.Game.FrameStatistics"/> itself: actually flipping that bindable
+        /// activates the framework's real PerformanceOverlay, which isn't safe to run under a
+        /// headless test host (crashes with a NullReferenceException — no real renderer/GPU).
+        /// </summary>
+        internal static FrameStatisticsMode FrameStatisticsModeFor(bool showFps)
+            => showFps ? FrameStatisticsMode.Full : FrameStatisticsMode.None;
 
         protected JukeBoxGameBase()
         {
@@ -79,6 +96,16 @@ namespace JukeBox.Game
             // CacheSizeGb -> bytes: startup value only (eviction runs once per advance round, so
             // a live-updating bindable isn't worth the extra wiring here).
             jukebox.CacheLimitBytes = (long)(config.Get<double>(JukeBoxSetting.CacheSizeGb) * 1024 * 1024 * 1024);
+
+            // This framework version has no FrameworkSetting for the built-in FPS/frame-statistics
+            // overlay — instead osu.Framework.Game itself exposes a protected FrameStatistics
+            // bindable (driving a PerformanceOverlay it wires up in its own base.LoadComplete) that
+            // only a Game subclass like this one can reach. Setting it here — even before that
+            // wiring exists yet, since this runs in load(), well before LoadComplete — is safe: the
+            // overlay's own binding uses runOnceImmediately, so it just picks up whatever value is
+            // already sitting in FrameStatistics by the time base.LoadComplete() runs.
+            showFps = config.GetBindable<bool>(JukeBoxSetting.ShowFps);
+            showFps.BindValueChanged(e => FrameStatistics.Value = FrameStatisticsModeFor(e.NewValue), true);
         }
 
         protected override void Dispose(bool isDisposing)
