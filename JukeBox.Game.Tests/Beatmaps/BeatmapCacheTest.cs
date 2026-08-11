@@ -1,3 +1,4 @@
+using System;
 using System.IO;
 using System.IO.Compression;
 using System.Threading.Tasks;
@@ -71,6 +72,56 @@ namespace JukeBox.Game.Tests.Beatmaps
 
             var cache = new BeatmapCache(cacheDir, new FileMirror(Path.Combine(tmp, "unused.osz")));
             Assert.That(cache.IsCached(456), Is.True);
+        }
+
+        [Test]
+        public void EvictToLimitDeletesOldestUntilUnderLimit()
+        {
+            string cacheDir = Path.Combine(tmp, "cache");
+            Directory.CreateDirectory(cacheDir);
+
+            // Three fake set dirs, ~1 MB each, staggered mtimes (100 = oldest, 300 = newest).
+            string dirOld = makeFakeSetDir(cacheDir, 100, 1024 * 1024, new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+            string dirMid = makeFakeSetDir(cacheDir, 200, 1024 * 1024, new DateTime(2026, 1, 2, 0, 0, 0, DateTimeKind.Utc));
+            string dirNew = makeFakeSetDir(cacheDir, 300, 1024 * 1024, new DateTime(2026, 1, 3, 0, 0, 0, DateTimeKind.Utc));
+
+            var cache = new BeatmapCache(cacheDir, new FileMirror(Path.Combine(tmp, "unused.osz")));
+
+            // ~3 MB total; limit of 2 MB forces deletion of the single oldest set (100).
+            cache.EvictToLimit(2 * 1024 * 1024, Array.Empty<int>());
+
+            Assert.That(Directory.Exists(dirOld), Is.False);
+            Assert.That(Directory.Exists(dirMid), Is.True);
+            Assert.That(Directory.Exists(dirNew), Is.True);
+        }
+
+        [Test]
+        public void EvictToLimitNeverDeletesProtectedIds()
+        {
+            string cacheDir = Path.Combine(tmp, "cache");
+            Directory.CreateDirectory(cacheDir);
+
+            string dirOld = makeFakeSetDir(cacheDir, 100, 1024 * 1024, new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+            string dirMid = makeFakeSetDir(cacheDir, 200, 1024 * 1024, new DateTime(2026, 1, 2, 0, 0, 0, DateTimeKind.Utc));
+            makeFakeSetDir(cacheDir, 300, 1024 * 1024, new DateTime(2026, 1, 3, 0, 0, 0, DateTimeKind.Utc));
+
+            var cache = new BeatmapCache(cacheDir, new FileMirror(Path.Combine(tmp, "unused.osz")));
+
+            // Oldest (100) is protected, so eviction must skip it even though it's the LRU pick,
+            // and fall through to the next-oldest unprotected set (200) instead.
+            cache.EvictToLimit(2 * 1024 * 1024, new[] { 100 });
+
+            Assert.That(Directory.Exists(dirOld), Is.True);
+            Assert.That(Directory.Exists(dirMid), Is.False);
+        }
+
+        private static string makeFakeSetDir(string cacheDir, int setId, int sizeBytes, DateTime mtimeUtc)
+        {
+            string dir = Path.Combine(cacheDir, setId.ToString());
+            Directory.CreateDirectory(dir);
+            File.WriteAllBytes(Path.Combine(dir, "data.bin"), new byte[sizeBytes]);
+            Directory.SetLastWriteTimeUtc(dir, mtimeUtc);
+            return dir;
         }
     }
 

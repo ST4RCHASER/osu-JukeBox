@@ -70,6 +70,10 @@ namespace JukeBox.Game
             dependencies.Cache(jukebox);
 
             config.BindWith(JukeBoxSetting.Volume, playback.Volume);
+
+            // CacheSizeGb -> bytes: startup value only (eviction runs once per advance round, so
+            // a live-updating bindable isn't worth the extra wiring here).
+            jukebox.CacheLimitBytes = (long)(config.Get<double>(JukeBoxSetting.CacheSizeGb) * 1024 * 1024 * 1024);
         }
 
         protected override void Dispose(bool isDisposing)

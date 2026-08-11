@@ -1,6 +1,8 @@
 #nullable enable
 
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using JukeBox.Game.Beatmaps;
 using JukeBox.Game.Online;
@@ -28,6 +30,14 @@ public partial class Jukebox : Component
     /// having to derive it from <see cref="Beatmaps.CachedBeatmapSet"/>, which carries none.
     /// </summary>
     public readonly Bindable<BeatmapSetInfo?> NowPlaying = new();
+
+    /// <summary>
+    /// Cache size limit in bytes, checked after every successful <see cref="BeatmapCache.GetAsync"/>
+    /// via <see cref="BeatmapCache.EvictToLimit"/>. Set from <c>JukeBoxSetting.CacheSizeGb</c> by
+    /// the owner (see <see cref="JukeBoxGameBase"/>); this class has no config dependency itself.
+    /// Defaults to 10 GB so eviction still behaves sensibly if never set.
+    /// </summary>
+    public long CacheLimitBytes { get; set; } = 10L * 1024 * 1024 * 1024;
 
     private readonly MusicQueue queue;
     private readonly RadioService radio;
@@ -203,7 +213,36 @@ public partial class Jukebox : Component
                 _ = cache.GetAsync(headId);
             }
 
+            evictCacheInBackground(next.Id);
+
             return;
         }
+    }
+
+    /// <summary>
+    /// Runs <see cref="BeatmapCache.EvictToLimit"/> off the update thread (it enumerates, sizes
+    /// and deletes set directories synchronously) so it never blocks playback. Fire-and-forget
+    /// with its own try/catch: eviction failures are logged but must never surface as a Jukebox
+    /// failure, since the advance round that triggered this has already succeeded.
+    /// </summary>
+    private void evictCacheInBackground(int currentId)
+    {
+        // Snapshot protected ids on the update thread (current + queued) before hopping off it,
+        // rather than touching the BindableList from the background task.
+        var protectedIds = new List<int> { currentId };
+        protectedIds.AddRange(queue.Items.Select(i => i.Id));
+        long limit = CacheLimitBytes;
+
+        Task.Run(() =>
+        {
+            try
+            {
+                cache.EvictToLimit(limit, protectedIds);
+            }
+            catch (Exception ex)
+            {
+                Logger.Error(ex, "Jukebox: cache eviction failed");
+            }
+        });
     }
 }
