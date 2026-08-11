@@ -60,6 +60,18 @@ namespace JukeBox.Game.Tests.Beatmaps
             Assert.That(set.Widescreen, Is.True);
             Assert.That(set.VideoFile, Is.Null); // movie.mp4 not present in zip → null
         }
+
+        [Test]
+        public void IsCachedRecognizesNestedOsuFile()
+        {
+            string cacheDir = Path.Combine(tmp, "cache");
+            string setDir = Path.Combine(cacheDir, "456", "sub");
+            Directory.CreateDirectory(setDir);
+            File.WriteAllText(Path.Combine(setDir, "nested.osu"), osu_content);
+
+            var cache = new BeatmapCache(cacheDir, new FileMirror(Path.Combine(tmp, "unused.osz")));
+            Assert.That(cache.IsCached(456), Is.True);
+        }
     }
 
     public class FileMirror : IBeatmapMirror

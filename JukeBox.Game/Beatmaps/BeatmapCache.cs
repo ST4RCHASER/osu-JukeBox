@@ -18,6 +18,8 @@ public class BeatmapCache
     private readonly bool noVideo;
     private readonly ConcurrentDictionary<int, Task<CachedBeatmapSet>> inflight = new();
 
+    private static readonly EnumerationOptions osu_enum_options = new() { RecurseSubdirectories = true, MatchCasing = MatchCasing.CaseInsensitive };
+
     public BeatmapCache(string rootDirectory, IBeatmapMirror mirror, bool noVideo = false)
     {
         root = rootDirectory;
@@ -25,11 +27,10 @@ public class BeatmapCache
         this.noVideo = noVideo;
     }
 
-    public bool IsCached(int setId)
-    {
-        string dir = Path.Combine(root, setId.ToString());
-        return Directory.Exists(dir) && Directory.EnumerateFiles(dir, "*.osu").Any();
-    }
+    public bool IsCached(int setId) => hasOsuFiles(Path.Combine(root, setId.ToString()));
+
+    private static bool hasOsuFiles(string dir)
+        => Directory.Exists(dir) && Directory.EnumerateFiles(dir, "*.osu", osu_enum_options).Any();
 
     public Task<CachedBeatmapSet> GetAsync(int setId, CancellationToken ct = default)
         => inflight.GetOrAdd(setId, id => getInternal(id, ct));
@@ -39,7 +40,7 @@ public class BeatmapCache
         try
         {
             string dir = Path.Combine(root, setId.ToString());
-            if (Directory.Exists(dir) && Directory.EnumerateFiles(dir, "*.osu").Any())
+            if (IsCached(setId))
                 return LoadFromDirectory(setId, dir);
 
             string tmpOsz = Path.Combine(root, $"{setId}.osz.part");
@@ -58,9 +59,7 @@ public class BeatmapCache
 
     public CachedBeatmapSet LoadFromDirectory(int setId, string dir)
     {
-        var enumOptions = new EnumerationOptions { RecurseSubdirectories = true, MatchCasing = MatchCasing.CaseInsensitive };
-
-        string[] osuFiles = Directory.EnumerateFiles(dir, "*.osu", enumOptions)
+        string[] osuFiles = Directory.EnumerateFiles(dir, "*.osu", osu_enum_options)
                                       .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
                                       .ToArray();
 
@@ -69,7 +68,7 @@ public class BeatmapCache
             SetId = setId,
             Directory = Path.GetFullPath(dir),
             OsuFiles = osuFiles.ToList(),
-            OsbFile = Directory.EnumerateFiles(dir, "*.osb", enumOptions)
+            OsbFile = Directory.EnumerateFiles(dir, "*.osb", osu_enum_options)
                                 .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
                                 .FirstOrDefault(),
         };
