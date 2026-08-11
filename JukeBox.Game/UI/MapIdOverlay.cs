@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using JukeBox.Game.Online;
 using osu.Framework.Allocation;
+using osu.Framework.Extensions.Color4Extensions;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Shapes;
@@ -13,24 +14,24 @@ using osu.Framework.Graphics.UserInterface;
 using osu.Framework.Input.Events;
 using osu.Framework.Logging;
 using osuTK;
-using osuTK.Graphics;
 using osuTK.Input;
 
 namespace JukeBox.Game.UI;
 
 /// <summary>
-/// Small corner overlay for queueing a beatmap set directly by its numeric beatmapset ID, rather
+/// Small centred modal for queueing a beatmap set directly by its numeric beatmapset ID, rather
 /// than searching by title — opened via the corner "#" button in <see cref="Screens.MainScreen"/>,
-/// styled like <see cref="SettingsOverlay"/> (same dark panel/width). Enter (or clicking Add) parses
-/// the entered text as an int and looks it up through <see cref="IBeatmapMirror.SearchAsync"/> using
-/// NeriNyan's field-restricted "setId" option; if that doesn't return the id as its first result
-/// (e.g. a fallback mirror that ignores <see cref="SearchRequest.Option"/>), retries with a plain
-/// query and filters client-side. A match fires <see cref="SetResolved"/> and closes the overlay;
-/// invalid input or a failed lookup shows inline error text and leaves the overlay open to retry.
+/// styled like <see cref="SettingsOverlay"/> (same dim scrim + rounded panel-surface card). Enter
+/// (or clicking Add) parses the entered text as an int and looks it up through
+/// <see cref="IBeatmapMirror.SearchAsync"/> using NeriNyan's field-restricted "setId" option; if
+/// that doesn't return the id as its first result (e.g. a fallback mirror that ignores
+/// <see cref="SearchRequest.Option"/>), retries with a plain query and filters client-side. A
+/// match fires <see cref="SetResolved"/> and closes the overlay; invalid input or a failed lookup
+/// shows inline error text (in soft red) and leaves the overlay open to retry.
 /// </summary>
 public partial class MapIdOverlay : FocusedOverlayContainer
 {
-    private const float panel_width = 320;
+    private const float panel_width = 360;
     private const float fade_duration = 200;
 
     public event Action<BeatmapSetInfo>? SetResolved;
@@ -38,14 +39,14 @@ public partial class MapIdOverlay : FocusedOverlayContainer
     [Resolved]
     private IBeatmapMirror mirror { get; set; } = null!;
 
-    private BasicTextBox idBox = null!;
-    private BasicButton addButton = null!;
+    private AccentTextBox idBox = null!;
+    private IconButton addButton = null!;
     private SpriteText statusText = null!;
 
     /// <summary>
     /// Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the ID text box.
     /// </summary>
-    internal BasicTextBox IdBox => idBox;
+    internal AccentTextBox IdBox => idBox;
 
     /// <summary>
     /// Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the status/error text.
@@ -58,48 +59,76 @@ public partial class MapIdOverlay : FocusedOverlayContainer
     [BackgroundDependencyLoader]
     private void load()
     {
-        RelativeSizeAxes = Axes.Y;
-        Width = panel_width;
-        Anchor = Anchor.TopRight;
-        Origin = Anchor.TopRight;
+        RelativeSizeAxes = Axes.Both;
 
         InternalChildren = new Drawable[]
         {
             new Box
             {
                 RelativeSizeAxes = Axes.Both,
-                Colour = new Color4(28, 28, 28, 255),
+                Colour = Theme.ModalScrim,
             },
             new Container
             {
-                RelativeSizeAxes = Axes.Both,
-                Padding = new MarginPadding(8),
-                Child = new FillFlowContainer
+                Anchor = Anchor.Centre,
+                Origin = Anchor.Centre,
+                Width = panel_width,
+                AutoSizeAxes = Axes.Y,
+                Masking = true,
+                CornerRadius = Theme.CornerRadius,
+                EdgeEffect = Theme.PanelShadow,
+                Children = new Drawable[]
                 {
-                    RelativeSizeAxes = Axes.X,
-                    AutoSizeAxes = Axes.Y,
-                    Direction = FillDirection.Vertical,
-                    Spacing = new Vector2(0, 8),
-                    Children = new Drawable[]
+                    new Box
                     {
-                        new SpriteText { Font = FontUsage.Default.With(size: 18), Text = "Queue by beatmapset ID" },
-                        idBox = new BasicTextBox
+                        RelativeSizeAxes = Axes.Both,
+                        Colour = Theme.PanelSurface,
+                    },
+                    new FillFlowContainer
+                    {
+                        RelativeSizeAxes = Axes.X,
+                        AutoSizeAxes = Axes.Y,
+                        Padding = new MarginPadding(Theme.PanelPadding),
+                        Direction = FillDirection.Vertical,
+                        Spacing = new Vector2(0, Theme.SectionSpacing),
+                        Children = new Drawable[]
                         {
-                            RelativeSizeAxes = Axes.X,
-                            Height = 32,
-                            PlaceholderText = "beatmapset ID",
-                        },
-                        addButton = new BasicButton
-                        {
-                            RelativeSizeAxes = Axes.X,
-                            Height = 28,
-                            Text = "Add",
-                            Action = () => _ = lookUpAsync(),
-                        },
-                        statusText = new SpriteText
-                        {
-                            Colour = Color4.OrangeRed,
-                        },
+                            new SpriteText
+                            {
+                                Font = FontUsage.Default.With(size: Theme.HeaderTextSize),
+                                Colour = Theme.TextPrimary,
+                                Text = "Queue by beatmapset ID",
+                            },
+                            new Container
+                            {
+                                RelativeSizeAxes = Axes.X,
+                                Height = 40,
+                                Children = new Drawable[]
+                                {
+                                    idBox = new AccentTextBox
+                                    {
+                                        RelativeSizeAxes = Axes.Both,
+                                        Padding = new MarginPadding { Right = 48 },
+                                        PlaceholderText = "beatmapset ID",
+                                    },
+                                    addButton = new IconButton
+                                    {
+                                        Anchor = Anchor.CentreRight,
+                                        Origin = Anchor.CentreRight,
+                                        Size = new Vector2(40),
+                                        Icon = FontAwesome.Solid.Plus,
+                                        IdleColour = Theme.Accent,
+                                        HoverColour = Theme.Accent.Lighten(0.15f),
+                                        Action = () => _ = lookUpAsync(),
+                                    },
+                                }
+                            },
+                            statusText = new SpriteText
+                            {
+                                Font = FontUsage.Default.With(size: Theme.RowSecondaryTextSize),
+                                Colour = Theme.Error,
+                            },
+                        }
                     }
                 }
             }
