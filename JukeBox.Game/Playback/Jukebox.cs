@@ -106,12 +106,31 @@ public partial class Jukebox : Component
     {
         queue.Enqueue(set);
 
+        // Fire-and-forget: start caching this set immediately rather than waiting for its turn
+        // at the head of the queue, so a queued download is already underway (or done) by the
+        // time advanceRoundAsync gets to it. Safe to call unconditionally — GetAsync's inflight
+        // dict dedupes against both this and any later prefetch/advance-round call for the same
+        // set id.
+        prefetchInBackground(set.Id);
+
         // Advance not just when idle, but also when radio filler is currently playing: the user's
         // pick should interrupt that (SkipCurrent semantics, via AdvanceAsync's coalescing guard)
         // rather than wait for the radio track to finish. A set already playing from the queue is
         // left alone — later enqueues just wait their turn behind it.
         if (playback.Current.Value == null || currentIsRadio)
             await AdvanceAsync().ConfigureAwait(false);
+    }
+
+    private async void prefetchInBackground(int setId)
+    {
+        try
+        {
+            await cache.GetAsync(setId).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Logger.Error(ex, $"Jukebox: prefetch of set {setId} failed");
+        }
     }
 
     /// <summary>
