@@ -15,8 +15,11 @@ namespace JukeBox.Game
         private void load()
         {
             // Add your top-level game components here.
-            // A screen stack and sample screen has been provided for convenience, but you can replace it if you don't want to use screens.
-            Child = screenStack = new ScreenStack { RelativeSizeAxes = Axes.Both };
+            // IMPORTANT: use Add, not `Child =` — the Child setter clears and DISPOSES everything
+            // JukeBoxGameBase.load() already added to Content (PlaybackController, Jukebox), which
+            // silently kills playback: their Schedule callbacks never run, so PlayAsync never
+            // completes and the jukebox wedges with nothing playing.
+            Add(screenStack = new ScreenStack { RelativeSizeAxes = Axes.Both });
 
             // Single online TextureStore for beatmap set cover thumbnails
             // (https://b.ppy.sh/thumb/{setId}l.jpg), shared by every SearchResultRow/NowPlayingBar
