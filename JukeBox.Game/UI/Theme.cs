@@ -49,6 +49,37 @@ internal static class Theme
     /// search dropdown.</summary>
     public static readonly Color4 ModalScrim = Color4.Black.Opacity(0.7f);
 
+    // ---- Beatmap status / difficulty ---------------------------------------------------------
+
+    public static readonly Color4 StatusRanked = new Color4(0x6C, 0xCB, 0x5F, 0xFF);     // green
+    public static readonly Color4 StatusLoved = new Color4(0xFF, 0x66, 0xCC, 0xFF);      // pink
+    public static readonly Color4 StatusQualified = new Color4(0x4F, 0xB2, 0xFF, 0xFF);  // blue
+    public static readonly Color4 StatusPending = new Color4(0xFF, 0xA5, 0x2B, 0xFF);    // orange
+    public static readonly Color4 StatusGraveyard = new Color4(0x8C, 0x8C, 0x9C, 0xFF);  // grey
+
+    /// <summary>Pill colour for a beatmap set's ranked-status string (case-insensitive; unknown
+    /// statuses fall back to the graveyard grey).</summary>
+    public static Color4 StatusColour(string status) => status.ToLowerInvariant() switch
+    {
+        "ranked" or "approved" => StatusRanked,
+        "loved" => StatusLoved,
+        "qualified" => StatusQualified,
+        "pending" or "wip" => StatusPending,
+        _ => StatusGraveyard,
+    };
+
+    /// <summary>Star-rating bucket colour following osu!'s difficulty spectrum (easy→green through
+    /// expert+→purple), used for the per-difficulty dots on listing cards.</summary>
+    public static Color4 DifficultyColour(double stars) => stars switch
+    {
+        < 2.0 => new Color4(0x88, 0xDA, 0x20, 0xFF),   // green
+        < 2.7 => new Color4(0x66, 0xCC, 0xFF, 0xFF),   // blue
+        < 4.0 => new Color4(0xFF, 0xD9, 0x66, 0xFF),   // yellow
+        < 5.3 => new Color4(0xFF, 0x8E, 0x5D, 0xFF),   // orange
+        < 6.5 => new Color4(0xFF, 0x5C, 0x5C, 0xFF),   // red
+        _ => new Color4(0x9B, 0x6F, 0xE0, 0xFF),       // purple
+    };
+
     // ---- Shape / spacing --------------------------------------------------------------------
 
     public const float CornerRadius = 8;
