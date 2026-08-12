@@ -38,6 +38,10 @@ public class ChartHitObject
 {
     public float X;
     public float Y;
+
+    /// <summary>Stack layer assigned by <see cref="ChartComputations.ApplyStacking"/>: 0 = not
+    /// stacked; each layer shifts the drawn position by −6.4 osu-px (radius-scaled) on both axes.</summary>
+    public int StackHeight;
     public double Time;
     public HitObjectKind Kind;
     public int HitSound;
@@ -73,6 +77,14 @@ public class ChartBeatmap
     public float ApproachRate = 5;
     public double SliderMultiplier = 1.4;
     public double SliderTickRate = 1;
+
+    /// <summary>[General] StackLeniency — scales the time window within which overlapping
+    /// objects are considered a stack (osu! default 0.7).</summary>
+    public float StackLeniency = 0.7f;
+
+    /// <summary>Set once <see cref="ChartComputations.ApplyStacking"/> has run, so re-created
+    /// chart layers over the same parsed beatmap don't stack twice.</summary>
+    public bool StackingApplied;
 
     public List<ChartTimingPoint> TimingPoints = new();
     public List<ChartHitObject> HitObjects = new();
@@ -185,6 +197,15 @@ public static class BeatmapParser
             {
                 switch (section)
                 {
+                    case "General":
+                        int genColon = line.IndexOf(':');
+                        if (genColon < 0)
+                            break;
+
+                        if (line.Substring(0, genColon).Trim() == "StackLeniency")
+                            float.TryParse(line.Substring(genColon + 1).Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out beatmap.StackLeniency);
+                        break;
+
                     case "Difficulty":
                         int colon = line.IndexOf(':');
                         if (colon < 0)
