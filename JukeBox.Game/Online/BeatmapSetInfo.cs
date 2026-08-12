@@ -17,6 +17,10 @@ public class BeatmapSetInfo
     public string Status { get; set; } = "";
     public bool Video { get; set; }
     public bool Storyboard { get; set; }
+    public double Bpm { get; set; }
+    public System.DateTimeOffset? RankedDate { get; set; }
+    public NamedIdInfo? Genre { get; set; }
+    public NamedIdInfo? Language { get; set; }
     public AvailabilityInfo? Availability { get; set; }
     public List<BeatmapInfo> Beatmaps { get; set; } = new();
     // Prefer the romanized Title/Artist: the default font has no CJK (or other non-Latin) glyph
@@ -41,6 +45,16 @@ public class BeatmapSetInfo
 public class AvailabilityInfo
 {
     public bool DownloadDisabled { get; set; }
+}
+
+/// <summary>
+/// The response's nested <c>genre</c>/<c>language</c> objects — both id and name are nullable in
+/// the wild (NeriNyan serves <c>{"id":null,"name":null}</c> for sets that never had one assigned).
+/// </summary>
+public class NamedIdInfo
+{
+    public int? Id { get; set; }
+    public string? Name { get; set; }
 }
 
 public class BeatmapInfo
