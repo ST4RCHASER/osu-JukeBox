@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Net.Http;
+using System.Text;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -26,12 +28,41 @@ namespace JukeBox.Game.Online
                 SearchExtra.VideoAndStoryboard => "video.storyboard",
                 _ => ""
             };
+
+            // Star-range filters only exist on the b64 transport (a base64 JSON body passed as a
+            // query param — POST /search is broken, always 400), so route through it whenever a
+            // range is set. Everything else keeps using the plain legacy query string, which is
+            // trivially cacheable/debuggable and known-good.
+            if (r.HasStarRange)
+            {
+                string json = JsonSerializer.Serialize(new
+                {
+                    query = r.Query,
+                    m = r.Mode ?? "",
+                    sort = r.Sort,
+                    s = r.Status,
+                    page,
+                    pageSize = r.PageSize,
+                    extra,
+                    option = r.Option ?? "",
+                    difficultyRating = new
+                    {
+                        min = r.MinStars ?? 0,
+                        max = r.MaxStars ?? 10,
+                    },
+                });
+
+                string b64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(json));
+                return $"{API_BASE}/search?b64={Uri.EscapeDataString(b64)}";
+            }
+
             var q = new List<string>
             {
                 $"q={Uri.EscapeDataString(r.Query)}",
                 $"s={r.Status}", $"sort={r.Sort}", $"p={page}", $"ps={r.PageSize}"
             };
             if (extra.Length > 0) q.Add($"e={extra}");
+            if (r.Mode != null) q.Add($"m={r.Mode}");
             if (r.Option != null) q.Add($"option={r.Option}");
             return $"{API_BASE}/search?{string.Join("&", q)}";
         }

@@ -92,12 +92,12 @@ namespace JukeBox.Game.Tests.Visual
         }
 
         [Test]
-        public void TypingOpensSearchOverlayWithFullscreenLayout()
+        public void TypingOpensListingWithFullscreenLayout()
         {
-            AddAssert("search overlay starts hidden", () => screen.ChildrenOfType<SearchOverlay>().Single().State.Value == Visibility.Hidden);
+            AddAssert("listing starts hidden", () => screen.ChildrenOfType<BeatmapListingOverlay>().Single().State.Value == Visibility.Hidden);
 
             AddStep("press 'a'", () => InputManager.Key(Key.A));
-            AddUntilStep("search overlay visible", () => screen.ChildrenOfType<SearchOverlay>().Single().State.Value == Visibility.Visible);
+            AddUntilStep("listing visible", () => screen.ChildrenOfType<BeatmapListingOverlay>().Single().State.Value == Visibility.Visible);
         }
 
         [Test]
@@ -116,23 +116,22 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("fullscreen layout visible again", () => screen.FullscreenLayoutContainer.Alpha == 1);
         }
 
-        // Regression test for the docked-search-panel-vanishing bug: Split's left column embeds
-        // the same SearchOverlay used as a fullscreen modal in the other layout, and that
-        // overlay's own pick()/Escape both Hide() unconditionally unless told it's docked. This
-        // drives Escape (not a real pick) deliberately: picking here would go through the real
-        // search.SetPicked -> jukebox.EnqueueAndMaybePlayAsync -> cache.GetAsync ->
-        // mirror.DownloadAsync wiring, and StubMirror's DownloadAsync always throws — Jukebox's
-        // advance loop would then retry forever against the same still-searchable stub set with
-        // no yield point, hanging the test. Escape exercises the same Docked gate without that risk.
+        // The listing replaces the old always-docked Split search panel: in Split the left column
+        // keeps only a compact search button that opens the (dismissable, visuals-covering)
+        // listing, and Escape closes it again in both layouts.
         [Test]
-        public void SplitLayoutSearchStaysVisibleAfterEscape()
+        public void SplitLayoutCompactSearchOpensListingAndEscapeClosesIt()
         {
             AddStep("press tab (switch to split)", () => InputManager.Key(Key.Tab));
             AddUntilStep("split shown", () => screen.SplitLayoutContainer.Alpha == 1);
-            AddUntilStep("search overlay visible in split layout", () => screen.ChildrenOfType<SearchOverlay>().Single().State.Value == Visibility.Visible);
+            AddAssert("listing starts hidden", () => screen.ChildrenOfType<BeatmapListingOverlay>().Single().State.Value == Visibility.Hidden);
+
+            AddStep("click the compact search button",
+                () => screen.ChildrenOfType<CompactSearchButton>().Single().TriggerClick());
+            AddUntilStep("listing visible", () => screen.ChildrenOfType<BeatmapListingOverlay>().Single().State.Value == Visibility.Visible);
 
             AddStep("press escape", () => InputManager.Key(Key.Escape));
-            AddAssert("search overlay still visible (docked)", () => screen.ChildrenOfType<SearchOverlay>().Single().State.Value == Visibility.Visible);
+            AddUntilStep("listing hidden again", () => screen.ChildrenOfType<BeatmapListingOverlay>().Single().State.Value == Visibility.Hidden);
         }
 
         // Regression test for the queue drawer being unreachable in the fullscreen layout:
@@ -168,25 +167,27 @@ namespace JukeBox.Game.Tests.Visual
             AddUntilStep("panel visible again", () => panel.X == 0);
         }
 
-        // Regression test for the Height bug: applyLayout's Split branch sets QueuePanel.Height to
-        // a 0.3f *relative* fraction; its fullscreen branch restored RelativeSizeAxes but, before
-        // the fix, never reset that stored Height back to full — leaving the drawer stuck at 30%
-        // height after any Split -> Fullscreen round trip.
+        // Regression test for stored-geometry bugs on layout round trips: applyLayout's Split
+        // branch switches QueuePanel to fully-relative sizing (Width/Height 1 inside the left
+        // panel's queue host); the fullscreen branch must restore the absolute drawer width and
+        // Y-only relative axes explicitly, since switching RelativeSizeAxes back never resets the
+        // stored Width/Height values.
         [Test]
         public void QueuePanelGeometryRestoredAfterSplitFullscreenRoundTrip()
         {
             QueuePanel panel = null!;
             AddStep("grab queue panel", () => panel = screen.ChildrenOfType<QueuePanel>().Single());
 
-            AddAssert("starts full height in fullscreen layout", () => panel.Height == 1f);
+            AddAssert("starts at absolute drawer width in fullscreen layout", () => panel.Width == 320f);
 
             AddStep("switch to split layout", () => InputManager.Key(Key.Tab));
             AddUntilStep("split shown", () => screen.SplitLayoutContainer.Alpha == 1);
-            AddAssert("split layout sets 30% relative height", () => panel.Height == 0.3f);
+            AddAssert("split layout sets fully-relative geometry", () => panel.RelativeSizeAxes == Axes.Both && panel.Width == 1f && panel.Height == 1f);
 
             AddStep("switch back to fullscreen layout", () => InputManager.Key(Key.Tab));
             AddUntilStep("fullscreen shown", () => screen.FullscreenLayoutContainer.Alpha == 1);
 
+            AddAssert("width restored to the absolute drawer width", () => panel.Width == 320f);
             AddAssert("height restored to full", () => panel.Height == 1f);
             AddAssert("relative axes restored to Y-only", () => panel.RelativeSizeAxes == Axes.Y);
         }

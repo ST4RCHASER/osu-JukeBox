@@ -135,7 +135,7 @@ public partial class Jukebox : Component
     /// Must be called from the update thread — it touches <see cref="queue"/> directly rather
     /// than via <see cref="onUpdateThread{T}"/>, same as <see cref="Start"/> and
     /// <see cref="SkipCurrent"/>. Every current caller (UI event handlers such as
-    /// MapIdOverlay/SearchOverlay's submit actions) already runs there.
+    /// MapIdOverlay/BeatmapListingOverlay's submit actions) already runs there.
     /// </remarks>
     public async Task EnqueueAndMaybePlayAsync(BeatmapSetInfo set)
     {
