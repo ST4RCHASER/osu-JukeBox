@@ -42,6 +42,7 @@ namespace JukeBox.Game.Tests.Visual
                 picked = null;
                 mirror.Sets.Clear();
                 mirror.Requests.Clear();
+                mirror.PageFactory = null;
                 mirror.Sets.AddRange(StubMirror.DefaultSets());
                 Child = overlay = new BeatmapListingOverlay { RelativeSizeAxes = Axes.Both };
                 overlay.SetPicked += set => picked = set;
@@ -127,6 +128,64 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("no new request was issued (client-side filter)", () => mirror.Requests.Count == requestsBefore);
         }
 
+        // Regression test for the client-filter scroll stall: a genre filter can reduce a full
+        // raw page to zero visible cards — with nothing to scroll, infinite scroll could never
+        // trigger and the user would be stuck on "no results" even though a later page matches.
+        // The overlay must auto-chain further page fetches until a match surfaces.
+        [Test]
+        public void GenreFilterAutoChainsToMatchOnLaterPage()
+        {
+            AddStep("mirror pages: page 0 all rock, page 1 contains one anime set", () =>
+            {
+                mirror.PageFactory = page =>
+                {
+                    var list = fullRockPage(page);
+                    if (page == 1)
+                        list[0] = new BeatmapSetInfo { Id = 1000, Title = "Anime Song", Artist = "a", Creator = "c", Status = "ranked", Genre = new NamedIdInfo { Id = 3, Name = "Anime" } };
+                    return list;
+                };
+            });
+
+            AddStep("type 'a'", () => overlay.ShowWithInitialChar('a'));
+            AddUntilStep("first page rendered", () => overlay.ChildrenOfType<BeatmapCard>().Count() == 30);
+
+            AddStep("click the 'Anime' genre chip",
+                () => overlay.ChildrenOfType<FilterChip>().Single(c => c.Text == "Anime").TriggerClick());
+
+            AddUntilStep("page-1 match auto-loaded without user interaction",
+                () => overlay.ChildrenOfType<BeatmapCard>().Any(c => c.Set.Id == 1000));
+            AddAssert("page 1 was requested automatically", () => mirror.Requests.Any(r => r.Page == 1));
+        }
+
+        [Test]
+        public void AutoChainStopsAtCapWhenNothingMatches()
+        {
+            AddStep("mirror serves endless all-rock pages", () => mirror.PageFactory = fullRockPage);
+
+            AddStep("type 'a'", () => overlay.ShowWithInitialChar('a'));
+            AddUntilStep("first page rendered", () => overlay.ChildrenOfType<BeatmapCard>().Count() == 30);
+
+            AddStep("click the 'Anime' genre chip",
+                () => overlay.ChildrenOfType<FilterChip>().Single(c => c.Text == "Anime").TriggerClick());
+
+            AddUntilStep("auto-chained exactly up to the cap (5 pages)",
+                () => mirror.Requests.Count(r => r.Page > 0) == 5);
+            AddWaitStep("let more frames pass", 5);
+            AddAssert("no further requests past the cap", () => mirror.Requests.Count(r => r.Page > 0) == 5);
+            AddAssert("still zero visible cards", () => !overlay.ChildrenOfType<BeatmapCard>().Any());
+        }
+
+        private static List<BeatmapSetInfo> fullRockPage(int page)
+        {
+            var list = new List<BeatmapSetInfo>();
+
+            // 30 == the overlay's page size, so every page reads as "more available".
+            for (int i = 0; i < 30; i++)
+                list.Add(new BeatmapSetInfo { Id = page * 100 + i + 1, Title = $"Rock {page}-{i}", Artist = "a", Creator = "c", Status = "ranked", Genre = new NamedIdInfo { Id = 4, Name = "Rock" } });
+
+            return list;
+        }
+
         [Test]
         public void DisabledSetCardIsNotClickable()
         {
@@ -196,6 +255,10 @@ namespace JukeBox.Game.Tests.Visual
 
             public List<SearchRequest> Requests { get; } = new();
 
+            /// <summary>When set, produces the response for a given page number instead of
+            /// <see cref="Sets"/> — for pagination/auto-chain tests.</summary>
+            public Func<int, List<BeatmapSetInfo>>? PageFactory;
+
             public SearchRequest? LastRequest => Requests.Count == 0 ? null : Requests[^1];
 
             public static List<BeatmapSetInfo> DefaultSets() => new()
@@ -208,7 +271,7 @@ namespace JukeBox.Game.Tests.Visual
             public Task<List<BeatmapSetInfo>> SearchAsync(SearchRequest request, CancellationToken ct = default)
             {
                 Requests.Add(request);
-                return Task.FromResult(new List<BeatmapSetInfo>(Sets));
+                return Task.FromResult(PageFactory?.Invoke(request.Page) ?? new List<BeatmapSetInfo>(Sets));
             }
 
             public Task DownloadAsync(int setId, bool noVideo, Stream destination, CancellationToken ct = default)
