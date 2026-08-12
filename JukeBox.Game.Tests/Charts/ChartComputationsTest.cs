@@ -289,6 +289,56 @@ namespace JukeBox.Game.Tests.Charts
             Assert.That(keyframes[^1].Position.X, Is.EqualTo(0f).Within(0.5f));
         }
 
+        // ---- Hostile repeat counts (MaxRenderedSlides clamp) -----------------------------------
+
+        [Test]
+        public void AbsurdSlideCountIsClampedEverywhereAndComputesPromptly()
+        {
+            var beatmap = new ChartBeatmap
+            {
+                SliderTickRate = 2,
+                TimingPoints = { new ChartTimingPoint { Time = 0, BeatLength = 500, Uninherited = true } },
+            };
+
+            var slider = makeSlider(0, 100_000, 100, 200);
+
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+            var arrows = ChartComputations.ReverseArrows(slider, straight_path_200, 600);
+            var keyframes = ChartComputations.BallKeyframes(slider, straight_path_200);
+            var ticks = ChartComputations.SliderTicks(slider, beatmap, straight_path_200, 600);
+            stopwatch.Stop();
+
+            Assert.That(arrows.Count, Is.EqualTo(ChartComputations.MaxRenderedSlides - 1));
+            Assert.That(keyframes.Count, Is.LessThanOrEqualTo(601)); // 1 + ~600 bounded travel samples
+            Assert.That(ticks.Count, Is.LessThanOrEqualTo(64));
+
+            // The whole spec computation for a 100k-repeat slider must be effectively instant —
+            // this is what stands between a hostile .osu and a 100k-drawable load.
+            Assert.That(stopwatch.ElapsedMilliseconds, Is.LessThan(2000));
+        }
+
+        [Test]
+        public void SlideCountJustAboveTheClampBoundaryIsTruncated()
+        {
+            var justAbove = makeSlider(0, ChartComputations.MaxRenderedSlides + 1, 100, 200);
+            var atLimit = makeSlider(0, ChartComputations.MaxRenderedSlides, 100, 200);
+            var below = makeSlider(0, ChartComputations.MaxRenderedSlides - 1, 100, 200);
+
+            Assert.That(ChartComputations.ReverseArrows(justAbove, straight_path_200, 600),
+                Has.Count.EqualTo(ChartComputations.MaxRenderedSlides - 1));
+            Assert.That(ChartComputations.ReverseArrows(atLimit, straight_path_200, 600),
+                Has.Count.EqualTo(ChartComputations.MaxRenderedSlides - 1));
+            Assert.That(ChartComputations.ReverseArrows(below, straight_path_200, 600),
+                Has.Count.EqualTo(ChartComputations.MaxRenderedSlides - 2));
+
+            // Keyframes stay bounded on either side of the boundary and remain monotonic.
+            var keyframes = ChartComputations.BallKeyframes(justAbove, straight_path_200);
+            Assert.That(keyframes.Count, Is.LessThanOrEqualTo(601));
+
+            for (int i = 1; i < keyframes.Count; i++)
+                Assert.That(keyframes[i].Time, Is.GreaterThan(keyframes[i - 1].Time));
+        }
+
         // ---- Follow points ---------------------------------------------------------------------
 
         [Test]

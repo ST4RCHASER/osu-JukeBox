@@ -245,6 +245,14 @@ public partial class ChartLayer : CompositeDrawable
         [BackgroundDependencyLoader]
         private void load()
         {
+            // One log per absurd slider — every renderer input (ball keyframes, arrows, ticks)
+            // derives from the same clamped span count inside ChartComputations.
+            if (obj.Slides > ChartComputations.MaxRenderedSlides)
+            {
+                osu.Framework.Logging.Logger.Log(
+                    $"ChartLayer: slider at t={obj.Time} has {obj.Slides} slides; rendering only the first {ChartComputations.MaxRenderedSlides}");
+            }
+
             var head = new Vector2(obj.X, obj.Y);
             List<Vector2> vertices = SliderCurve.Sample(obj.CurveType, obj.ControlPoints, obj.PixelLength)
                                                 .Select(v => v - head)
@@ -395,8 +403,6 @@ public partial class ChartLayer : CompositeDrawable
                     ball.FadeOut(hit_fade_duration);
             }
 
-            children.Add(ball);
-
             // ---- head circle (explodes at hit time; body stays until the tail) -------------
 
             var headPiece = new Container
@@ -414,6 +420,10 @@ public partial class ChartLayer : CompositeDrawable
 
             children.Add(headPiece);
             children.Add(approach);
+
+            // Ball on top of the head piece (the head is already exploding when the ball sets
+            // off, and the travelling ball must never disappear under it).
+            children.Add(ball);
 
             InternalChildren = children.ToArray();
 
