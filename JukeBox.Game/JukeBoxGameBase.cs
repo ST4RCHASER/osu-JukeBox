@@ -25,7 +25,7 @@ namespace JukeBox.Game
         // protected (not private): JukeBoxGame's own [BackgroundDependencyLoader] caches the
         // real online thumbnail store here too — kept out of THIS class's load() specifically so
         // JukeBoxTestScene's test-runner (which derives from JukeBoxGameBase, not JukeBoxGame)
-        // never wires up a real network-backed store, and SearchResultRow/NowPlayingBar's
+        // never wires up a real network-backed store, and BeatmapCard/NowPlayingBar's
         // [Resolved(canBeNull: true)] reliably resolves null across every existing test scene.
         protected DependencyContainer dependencies = null!;
 

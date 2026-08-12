@@ -17,6 +17,33 @@ namespace JukeBox.Game.Tests.Online
             Assert.That(sets[0].Title, Is.Not.Empty);
             Assert.That(sets[0].Beatmaps, Is.Not.Empty);
             Assert.That(sets[0].Beatmaps[0].Version, Is.Not.Empty);
+
+            // The fixture's genre/language are the null-id/null-name shape NeriNyan serves for
+            // sets without one assigned — must deserialize (not throw), with null members.
+            Assert.That(sets[0].Genre, Is.Not.Null);
+            Assert.That(sets[0].Genre!.Id, Is.Null);
+            Assert.That(sets[0].Language, Is.Not.Null);
+            Assert.That(sets[0].Bpm, Is.GreaterThan(0));
+            Assert.That(sets[0].RankedDate, Is.Not.Null);
+        }
+
+        [Test]
+        public void ParsesPopulatedGenreAndLanguage()
+        {
+            const string json = """
+                [{"id":42,"title":"t","artist":"a","creator":"c","bpm":180.5,
+                  "genre":{"id":3,"name":"Anime"},"language":{"id":2,"name":"English"},
+                  "ranked_date":"2020-01-02T03:04:05Z","beatmaps":[]}]
+                """;
+
+            var sets = BeatmapSetInfo.ParseList(json);
+
+            Assert.That(sets[0].Genre!.Id, Is.EqualTo(3));
+            Assert.That(sets[0].Genre!.Name, Is.EqualTo("Anime"));
+            Assert.That(sets[0].Language!.Id, Is.EqualTo(2));
+            Assert.That(sets[0].Language!.Name, Is.EqualTo("English"));
+            Assert.That(sets[0].Bpm, Is.EqualTo(180.5));
+            Assert.That(sets[0].RankedDate!.Value.Year, Is.EqualTo(2020));
         }
 
         [Test]

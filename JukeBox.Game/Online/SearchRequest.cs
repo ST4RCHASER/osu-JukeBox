@@ -23,4 +23,17 @@ public class SearchRequest
     // Only NerinyanMirror honours this — the fallback mirrors (CatboyMirror/OsuDirectMirror)
     // ignore it and match their own default field(s) instead.
     public string? Option;
+
+    // Ruleset filter as NeriNyan's legacy `m` value ("o"/"t"/"c"/"m"); null = any mode.
+    // NerinyanMirror-only — the fallback mirrors ignore it (accepted degradation, their search
+    // APIs take neither ruleset nor range filters).
+    public string? Mode;
+
+    // Star-rating range. When either bound is set, NerinyanMirror routes the whole search through
+    // its `?b64=` base64-JSON body (the only transport that supports range filters — the legacy
+    // query string can't express them and POST /search is broken). Fallback mirrors ignore ranges.
+    public double? MinStars;
+    public double? MaxStars;
+
+    public bool HasStarRange => MinStars.HasValue || MaxStars.HasValue;
 }

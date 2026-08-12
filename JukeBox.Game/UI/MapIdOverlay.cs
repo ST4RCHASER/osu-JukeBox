@@ -149,7 +149,7 @@ public partial class MapIdOverlay : FocusedOverlayContainer
         statusText.Text = string.Empty;
         idBox.Text = string.Empty;
 
-        // Scheduled for the same reason as SearchOverlay.ShowWithInitialChar: FocusedOverlayContainer
+        // Scheduled for the same reason as BeatmapListingOverlay.ShowWithInitialChar: FocusedOverlayContainer
         // runs its own focus-contention pass when State flips to Visible, which would otherwise wipe
         // a synchronous focus grab made right here.
         Schedule(() => GetContainingFocusManager()?.ChangeFocus(idBox));
@@ -172,7 +172,7 @@ public partial class MapIdOverlay : FocusedOverlayContainer
             case Key.KeypadEnter:
                 // Also handled via idBox.OnCommit when the text box itself has focus; kept here
                 // too as a fallback for whenever the overlay itself ends up focused instead (see
-                // SearchOverlay.OnKeyDown for the same pattern).
+                // BeatmapListingOverlay.OnKeyDown for the same pattern).
                 _ = lookUpAsync();
                 return true;
         }

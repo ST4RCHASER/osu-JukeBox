@@ -18,21 +18,23 @@ using osuTK.Input;
 namespace JukeBox.Game.Screens;
 
 /// <summary>
-/// Top-level screen: hosts <see cref="NowPlayingScreen"/>'s visuals behind the search overlay,
+/// Top-level screen: hosts <see cref="NowPlayingScreen"/>'s visuals behind the beatmap listing,
 /// queue panel and now-playing bar, and switches between the two pre-built layout containers
 /// (<see cref="FullscreenLayoutContainer"/>/<see cref="SplitLayoutContainer"/>) driven by
-/// <see cref="JukeBoxSetting.UiLayout"/> (defaults to <see cref="UiLayout.Split"/> — the styled,
-/// always-docked left panel is the primary experience; the fullscreen "type anywhere" dropdown
-/// remains available as the alternate layout). Typing a printable character (with no modifiers
-/// held, and nothing else already consuming the key — e.g. the search box itself when focused)
-/// opens the search overlay via <see cref="SearchOverlay.ShowWithInitialChar"/>; Tab or the corner
-/// "layout" button toggles the layout. In the fullscreen layout, the queue drawer (permanently
-/// docked and always visible in Split) is otherwise unreachable, so Ctrl+Q or the corner "queue"
-/// button toggles it there — Ctrl+Q rather than a bare letter so it doesn't collide with the
-/// type-anywhere-to-search behaviour above (which explicitly excludes Ctrl/Alt/Super combinations).
-/// The top-right corner hosts a small translucent pill of icon buttons: gear (opens
-/// <see cref="SettingsOverlay"/>), "#" (opens <see cref="MapIdOverlay"/>, for queueing a set
-/// directly by beatmapset ID instead of searching) and the layout toggle.
+/// <see cref="JukeBoxSetting.UiLayout"/>. The osu!-web-style <see cref="BeatmapListingOverlay"/>
+/// replaces the old dropdown search in BOTH layouts: it lives inside <c>visualsHost</c>, so it
+/// covers exactly the visuals area (in Split, the left panel stays uncovered). Typing a printable
+/// character (with no modifiers held, and nothing else already consuming the key — e.g. the
+/// listing's own keyword box when focused) opens the listing via
+/// <see cref="BeatmapListingOverlay.ShowWithInitialChar"/>; in Split, the left panel keeps a
+/// <see cref="CompactSearchButton"/> that opens it too, with the queue drawer permanently docked
+/// below. Tab or the corner "layout" button toggles the layout. In the fullscreen layout the
+/// queue drawer is otherwise unreachable, so Ctrl+Q or the corner "queue" button toggles it there
+/// — Ctrl+Q rather than a bare letter so it doesn't collide with the type-anywhere-to-search
+/// behaviour above (which explicitly excludes Ctrl/Alt/Super combinations). The top-right corner
+/// hosts a small translucent pill of icon buttons: gear (opens <see cref="SettingsOverlay"/>),
+/// "#" (opens <see cref="MapIdOverlay"/>, for queueing a set directly by beatmapset ID instead of
+/// searching) and the layout toggle.
 /// </summary>
 public partial class MainScreen : Screen
 {
@@ -50,9 +52,10 @@ public partial class MainScreen : Screen
     private Container visualsHost = null!;
     private ScreenStack visualsStack = null!;
 
-    private Container currentChromeParent = null!;
+    private Container currentQueueParent = null!;
 
-    private SearchOverlay search = null!;
+    private BeatmapListingOverlay listing = null!;
+    private Container splitQueueHost = null!;
     private QueuePanel queuePanel = null!;
     private SettingsOverlay settingsOverlay = null!;
     private MapIdOverlay mapIdOverlay = null!;
@@ -74,7 +77,7 @@ public partial class MainScreen : Screen
     {
         RelativeSizeAxes = Axes.Both;
 
-        search = new SearchOverlay { RelativeSizeAxes = Axes.Both };
+        listing = new BeatmapListingOverlay();
         queuePanel = new QueuePanel();
         settingsOverlay = new SettingsOverlay();
         mapIdOverlay = new MapIdOverlay();
@@ -84,7 +87,13 @@ public partial class MainScreen : Screen
             visualsHost = new Container
             {
                 RelativeSizeAxes = Axes.Both,
-                Child = visualsStack = new ScreenStack { RelativeSizeAxes = Axes.Both },
+                Children = new Drawable[]
+                {
+                    visualsStack = new ScreenStack { RelativeSizeAxes = Axes.Both },
+                    // Inside visualsHost (whose Padding tracks the layout) so the listing covers
+                    // exactly the visuals area in both layouts, never the Split left panel.
+                    listing,
+                },
             },
             FullscreenLayoutContainer = new Container
             {
@@ -103,8 +112,8 @@ public partial class MainScreen : Screen
                     Action = () => queuePanel.ToggleVisibility(),
                 },
             },
-            // Split's left column: a single rounded, shadowed panel-surface housing both the
-            // (transparent-when-docked, see SearchOverlay.Docked) search overlay on top and the
+            // Split's left column: a single rounded, shadowed panel-surface housing the compact
+            // search button (which opens the listing overlay) on top and the permanently-docked
             // queue drawer below it — one continuous "left panel" rather than two separate boxes.
             SplitLayoutContainer = new Container
             {
@@ -115,10 +124,32 @@ public partial class MainScreen : Screen
                 Masking = true,
                 CornerRadius = Theme.CornerRadius,
                 EdgeEffect = Theme.PanelShadow,
-                Child = new Box
+                Children = new Drawable[]
                 {
-                    RelativeSizeAxes = Axes.Both,
-                    Colour = Theme.PanelSurface,
+                    new Box
+                    {
+                        RelativeSizeAxes = Axes.Both,
+                        Colour = Theme.PanelSurface,
+                    },
+                    new Container
+                    {
+                        RelativeSizeAxes = Axes.Both,
+                        Padding = new MarginPadding(Theme.PanelPadding),
+                        Children = new Drawable[]
+                        {
+                            new CompactSearchButton
+                            {
+                                RelativeSizeAxes = Axes.X,
+                                Height = 40,
+                                Action = () => listing.ShowAndFocus(),
+                            },
+                            splitQueueHost = new Container
+                            {
+                                RelativeSizeAxes = Axes.Both,
+                                Padding = new MarginPadding { Top = 40 + Theme.SectionSpacing },
+                            },
+                        },
+                    },
                 },
             },
             new NowPlayingBar(),
@@ -171,17 +202,17 @@ public partial class MainScreen : Screen
             },
         };
 
-        // The fullscreen layout is the default (UiLayout.FullscreenOverlay) — start both the
-        // search overlay and the queue drawer parented there; applyLayout() reparents them into
-        // SplitLayoutContainer only if UiLayout is actually Split when it first runs.
-        currentChromeParent = FullscreenLayoutContainer;
-        currentChromeParent.Add(search);
-        currentChromeParent.Add(queuePanel);
+        // The fullscreen layout is the default (UiLayout.FullscreenOverlay) — start the queue
+        // drawer parented there; applyLayout() reparents it into the Split panel's queue host
+        // only if UiLayout is actually Split when it first runs. (The listing overlay lives in
+        // visualsHost permanently — it never reparents.)
+        currentQueueParent = FullscreenLayoutContainer;
+        currentQueueParent.Add(queuePanel);
 
         // Fire-and-forget by design: SetPicked is a synchronous event, and EnqueueAndMaybePlayAsync's
         // own failure paths already surface through jukebox.LastError (see the toast wiring in
         // LoadComplete) rather than through this call's returned Task.
-        search.SetPicked += set => _ = jukebox.EnqueueAndMaybePlayAsync(set);
+        listing.SetPicked += set => _ = jukebox.EnqueueAndMaybePlayAsync(set);
         mapIdOverlay.SetResolved += set => _ = jukebox.EnqueueAndMaybePlayAsync(set);
     }
 
@@ -230,7 +261,7 @@ public partial class MainScreen : Screen
 
             if (c != null)
             {
-                search.ShowWithInitialChar(c.Value);
+                listing.ShowWithInitialChar(c.Value);
                 return true;
             }
         }
@@ -250,56 +281,37 @@ public partial class MainScreen : Screen
 
         visualsHost.Padding = new MarginPadding { Left = split ? split_column_width : 0 };
 
-        var target = split ? SplitLayoutContainer : FullscreenLayoutContainer;
+        var target = split ? splitQueueHost : FullscreenLayoutContainer;
 
-        if (target != currentChromeParent)
+        if (target != currentQueueParent)
         {
-            currentChromeParent.Remove(search, false);
-            currentChromeParent.Remove(queuePanel, false);
-            target.Add(search);
+            currentQueueParent.Remove(queuePanel, false);
             target.Add(queuePanel);
-            currentChromeParent = target;
+            currentQueueParent = target;
         }
-
-        // Docked in Split (permanently visible left column, not a dismissable modal): picking a
-        // result or pressing Escape must not make it vanish. See SearchOverlay.Docked — flipping
-        // it also switches the overlay's own chrome from a fullscreen dim scrim to a transparent
-        // background, since SplitLayoutContainer already supplies the panel surface behind it.
-        search.Docked = split;
 
         if (split)
         {
-            // Docked left column: search on top ~70%, queue permanently expanded below it —
-            // overriding both drawables' own (floating-overlay-oriented) geometry from outside,
+            // Docked left column: the queue fills the host below the compact search button —
+            // overriding the drawable's own (floating-drawer-oriented) geometry from outside,
             // same technique NowPlayingBar/QueuePanel already use for their own children.
-            search.Anchor = Anchor.TopLeft;
-            search.Origin = Anchor.TopLeft;
-            search.RelativeSizeAxes = Axes.Both;
-            search.Height = 0.7f;
-            search.Show();
-
-            queuePanel.Anchor = Anchor.BottomLeft;
-            queuePanel.Origin = Anchor.BottomLeft;
+            queuePanel.Anchor = Anchor.TopLeft;
+            queuePanel.Origin = Anchor.TopLeft;
             queuePanel.RelativeSizeAxes = Axes.Both;
             queuePanel.Width = 1f;
-            queuePanel.Height = 0.3f;
+            queuePanel.Height = 1f;
             queuePanel.SetShown(true);
         }
         else
         {
-            search.Anchor = Anchor.TopLeft;
-            search.Origin = Anchor.TopLeft;
-            search.RelativeSizeAxes = Axes.Both;
-            search.Height = 1f;
-
             queuePanel.Anchor = Anchor.TopRight;
             queuePanel.Origin = Anchor.TopRight;
+            // Split's branch above switches RelativeSizeAxes to Both with relative Width/Height.
+            // Switching back to Y-only does NOT reset the stored Width — restore the absolute
+            // drawer width (and full relative height) explicitly, or a Split -> Fullscreen round
+            // trip leaves the drawer 1px wide.
             queuePanel.RelativeSizeAxes = Axes.Y;
             queuePanel.Width = queue_panel_width;
-            // Split's branch above sets Height to a 0.3f *relative* fraction (RelativeSizeAxes
-            // includes Y there). RelativeSizeAxes switching back to Y-only here does NOT reset
-            // that stored Height back to full — without this, a Split -> Fullscreen round trip
-            // leaves the drawer permanently stuck at 30% height.
             queuePanel.Height = 1f;
             queuePanel.SetShown(false);
         }

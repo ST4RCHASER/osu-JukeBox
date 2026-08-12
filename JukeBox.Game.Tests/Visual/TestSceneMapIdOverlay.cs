@@ -26,7 +26,7 @@ namespace JukeBox.Game.Tests.Visual
 
         // CreateChildDependencies runs once for the whole scene (shared across every [Test] in
         // this fixture), so StubMirror's contents are reset in SetUpSteps below rather than here
-        // — same approach as TestSceneSearchOverlay.
+        // — same approach as TestSceneBeatmapListing.
         protected override IReadOnlyDependencyContainer CreateChildDependencies(IReadOnlyDependencyContainer parent)
         {
             var deps = new DependencyContainer(parent);
