@@ -286,6 +286,22 @@ namespace JukeBox.Game.Tests.Visual
             AddUntilStep("video catches up and starts rendering synced frames",
                 () => (visuals.VideoFramesProcessed ?? 0) > 0);
 
+            // Regression for the residual-lag bug: freezing Video.IsPlaying during catch-up and
+            // then simply flipping it back on resumes tracking from the stale frozen value with no
+            // catch-up applied, baking the entire freeze duration in as a permanent constant lag
+            // that Video's own out-of-sync check (which only ever compares against its own
+            // PlaybackPosition, never the true clock) can never detect or correct. Measured against
+            // several real cached maps, an uncorrected freeze left a lag anywhere from tens of ms
+            // up to ~2.85s depending on how long the catch-up took — confirm PlaybackPosition
+            // tracks the video's own live clock (Time.Current) to within a couple of frames, not
+            // just that it advances at all.
+            AddAssert("no residual lag baked in after catch-up",
+                () =>
+                {
+                    var video = visuals.ChildrenOfType<osu.Framework.Graphics.Video.Video>().Single();
+                    return Math.Abs(video.PlaybackPosition - video.Time.Current) < 100;
+                });
+
             AddStep("remove visuals", () => Remove(visuals, true));
         }
 
