@@ -10,36 +10,43 @@ using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Lines;
 using osu.Framework.Graphics.Shapes;
+using osu.Framework.Graphics.Sprites;
 using osuTK;
 using osuTK.Graphics;
 
 namespace JukeBox.Game.Charts;
 
 /// <summary>
-/// Autoplay-style display of a difficulty's hit objects (circles + approach circles, slider
-/// bodies, spinners) in the standard 512×384 osu-pixel playfield. Every object's animation is
-/// compiled ONCE at load into framework transforms (same architecture as
-/// <see cref="Storyboard.TransformStoryboardLayer"/>): zero per-frame evaluation, and the internal
-/// <see cref="LifetimeManagementContainer"/> skips objects outside their lifetime window entirely.
-/// Seeking works in both directions (<c>RemoveCompletedTransforms</c> is false and dead objects
-/// stay children).
+/// Autoplay-style display of a difficulty's hit objects in the standard 512×384 osu-pixel
+/// playfield, modelled on lazer's default-skin visuals: numbered hitcircles with approach circles,
+/// bordered slider tracks with travelling ball + follow circle, reverse arrows and ticks, faint
+/// follow-point trails between combo neighbours, detailed spinners, and osu!'s stack-shift so
+/// jump stacks read correctly. Every animation is compiled ONCE at load into framework transforms
+/// (same architecture as <see cref="Storyboard.TransformStoryboardLayer"/>): zero per-frame
+/// evaluation, and the internal <see cref="LifetimeManagementContainer"/>s skip drawables outside
+/// their lifetime window entirely. Seeking works in both directions
+/// (<c>RemoveCompletedTransforms</c> is false and dead objects stay children).
 /// </summary>
 public partial class ChartLayer : CompositeDrawable
 {
     public override bool RemoveCompletedTransforms => false;
 
-    /// <summary>Objects currently inside their lifetime window. Exposed for tests.</summary>
-    internal int AliveObjectCount => objects?.AliveObjects.Count() ?? 0;
+    /// <summary>Hit objects currently inside their lifetime window. Exposed for tests.</summary>
+    internal int AliveObjectCount => objects?.AliveElements.Count() ?? 0;
 
-    /// <summary>Total object drawables constructed. Exposed for tests.</summary>
-    internal int TotalObjectCount => objects?.AllObjects.Count ?? 0;
+    /// <summary>Total hit-object drawables constructed. Exposed for tests.</summary>
+    internal int TotalObjectCount => objects?.AllElements.Count ?? 0;
 
-    /// <summary>How long a hit-circle pop/fade lingers after its hit time.</summary>
+    /// <summary>Total follow-point dot drawables constructed. Exposed for tests.</summary>
+    internal int FollowPointCount => followPoints?.AllElements.Count ?? 0;
+
+    /// <summary>How long a hit pop/fade lingers after its hit time.</summary>
     private const double hit_fade_duration = 150;
 
     private readonly ChartBeatmap beatmap;
 
-    private ObjectContainer? objects;
+    private ElementContainer? objects;
+    private ElementContainer? followPoints;
 
     public ChartLayer(ChartBeatmap beatmap)
     {
@@ -51,45 +58,48 @@ public partial class ChartLayer : CompositeDrawable
     {
         Size = new Vector2(512, 384);
 
-        AddInternal(objects = new ObjectContainer { RelativeSizeAxes = Axes.Both });
+        // Follow points sit UNDER the hit objects, in their own lifetime container so the
+        // object-count test accessors (and the objects' draw order) stay untouched.
+        AddInternal(followPoints = new ElementContainer { RelativeSizeAxes = Axes.Both });
+        AddInternal(objects = new ElementContainer { RelativeSizeAxes = Axes.Both });
 
         float radius = Math.Max(4, beatmap.CircleRadius);
         double preempt = beatmap.PreemptMs;
         double fadeIn = beatmap.FadeInMs;
 
-        int comboIndex = 0;
-        bool first = true;
+        ChartComputations.ApplyStacking(beatmap);
+        var combos = ChartComputations.AssignCombos(beatmap.HitObjects, Theme.ComboColours.Length);
 
         // Later objects must render UNDER earlier ones (osu! stacking rule), so depth increases
         // with index. LifetimeManagementContainer respects Depth for draw order.
         float depth = 0;
 
-        foreach (var obj in beatmap.HitObjects)
+        for (int i = 0; i < beatmap.HitObjects.Count; i++)
         {
-            if ((obj.NewCombo || first) && obj.Kind != HitObjectKind.Spinner)
-                comboIndex++;
-            first = false;
-
-            var colour = Theme.ComboColours[comboIndex % Theme.ComboColours.Length];
+            var obj = beatmap.HitObjects[i];
+            var colour = Theme.ComboColours[combos[i].ColourIndex % Theme.ComboColours.Length];
 
             Drawable drawable = obj.Kind switch
             {
-                HitObjectKind.Circle => new DrawableChartCircle(obj, radius, preempt, fadeIn, colour),
-                HitObjectKind.Slider => new DrawableChartSlider(obj, radius, preempt, fadeIn, colour),
+                HitObjectKind.Circle => new DrawableChartCircle(obj, radius, preempt, fadeIn, colour, combos[i].NumberInCombo),
+                HitObjectKind.Slider => new DrawableChartSlider(obj, beatmap, radius, preempt, fadeIn, colour, combos[i].NumberInCombo),
                 _ => new DrawableChartSpinner(obj, preempt),
             };
 
             drawable.Depth = depth++;
-            objects.AddObject(drawable);
+            objects.AddElement(drawable);
         }
+
+        foreach (var spec in ChartComputations.FollowPoints(beatmap, radius))
+            followPoints.AddElement(new DrawableFollowPoint(spec));
     }
 
-    private partial class ObjectContainer : LifetimeManagementContainer
+    private partial class ElementContainer : LifetimeManagementContainer
     {
-        public IEnumerable<Drawable> AliveObjects => AliveInternalChildren;
-        public IReadOnlyList<Drawable> AllObjects => InternalChildren;
+        public IEnumerable<Drawable> AliveElements => AliveInternalChildren;
+        public IReadOnlyList<Drawable> AllElements => InternalChildren;
 
-        public void AddObject(Drawable drawable) => AddInternal(drawable);
+        public void AddElement(Drawable drawable) => AddInternal(drawable);
     }
 
     /// <summary>An approach-circle ring: thin-bordered circle scaling 4→1 over the preempt window.</summary>
@@ -110,20 +120,30 @@ public partial class ChartLayer : CompositeDrawable
         },
     };
 
-    /// <summary>A filled hit-circle disc with a white rim.</summary>
+    /// <summary>A filled hit-circle disc (combo colour) with a white rim ~9% of the radius thick.</summary>
     private static CircularContainer makeDisc(float radius, Color4 colour) => new CircularContainer
     {
         Anchor = Anchor.Centre,
         Origin = Anchor.Centre,
         Size = new Vector2(radius * 2),
         Masking = true,
-        BorderThickness = Math.Max(3, radius * 0.12f),
+        BorderThickness = Math.Max(3, radius * 0.09f),
         BorderColour = Color4.White,
         Child = new Box
         {
             RelativeSizeAxes = Axes.Both,
             Colour = colour,
         },
+    };
+
+    /// <summary>The combo number, centred in the disc — font ≈ 40% of the circle's radius scale.</summary>
+    private static SpriteText makeNumber(float radius, int number) => new SpriteText
+    {
+        Anchor = Anchor.Centre,
+        Origin = Anchor.Centre,
+        Font = FontUsage.Default.With(size: radius * 0.8f),
+        Colour = Color4.White,
+        Text = number.ToString(),
     };
 
     internal partial class DrawableChartCircle : CompositeDrawable
@@ -136,17 +156,19 @@ public partial class ChartLayer : CompositeDrawable
         private readonly double preempt;
         private readonly double fadeIn;
         private readonly Color4 colour;
+        private readonly int number;
 
-        public DrawableChartCircle(ChartHitObject obj, float radius, double preempt, double fadeIn, Color4 colour)
+        public DrawableChartCircle(ChartHitObject obj, float radius, double preempt, double fadeIn, Color4 colour, int number)
         {
             this.obj = obj;
             this.radius = radius;
             this.preempt = preempt;
             this.fadeIn = fadeIn;
             this.colour = colour;
+            this.number = number;
 
             Origin = Anchor.Centre;
-            Position = new Vector2(obj.X, obj.Y);
+            Position = ChartComputations.StackedPosition(obj, radius);
             Size = new Vector2(radius * 2);
             Alpha = 0;
 
@@ -162,6 +184,7 @@ public partial class ChartLayer : CompositeDrawable
             InternalChildren = new Drawable[]
             {
                 makeDisc(radius, colour),
+                makeNumber(radius, number),
                 approach = makeApproachRing(radius, colour),
             };
 
@@ -174,6 +197,8 @@ public partial class ChartLayer : CompositeDrawable
             using (BeginAbsoluteSequence(obj.Time))
             {
                 approach.FadeOut();
+
+                // Explode: ring, fill and number pop together (they're all children of this).
                 this.ScaleTo(1.4f, hit_fade_duration, Easing.OutQuint).FadeOut(hit_fade_duration);
             }
         }
@@ -184,23 +209,33 @@ public partial class ChartLayer : CompositeDrawable
         public override bool RemoveWhenNotAlive => false;
         public override bool RemoveCompletedTransforms => false;
 
+        /// <summary>Test-only: number of reverse-arrow drawables constructed.</summary>
+        internal int ReverseArrowCount { get; private set; }
+
+        /// <summary>Test-only: number of tick drawables constructed.</summary>
+        internal int TickCount { get; private set; }
+
         private readonly ChartHitObject obj;
+        private readonly ChartBeatmap beatmap;
         private readonly float radius;
         private readonly double preempt;
         private readonly double fadeIn;
         private readonly Color4 colour;
+        private readonly int number;
 
-        public DrawableChartSlider(ChartHitObject obj, float radius, double preempt, double fadeIn, Color4 colour)
+        public DrawableChartSlider(ChartHitObject obj, ChartBeatmap beatmap, float radius, double preempt, double fadeIn, Color4 colour, int number)
         {
             this.obj = obj;
+            this.beatmap = beatmap;
             this.radius = radius;
             this.preempt = preempt;
             this.fadeIn = fadeIn;
             this.colour = colour;
+            this.number = number;
 
             // Children are positioned in coordinates relative to the slider head, which sits at
             // this container's Position within the playfield.
-            Position = new Vector2(obj.X, obj.Y);
+            Position = ChartComputations.StackedPosition(obj, radius);
             Alpha = 0;
 
             LifetimeStart = obj.Time - preempt;
@@ -217,23 +252,30 @@ public partial class ChartLayer : CompositeDrawable
             if (vertices.Count == 0)
                 vertices.Add(Vector2.Zero);
 
-            var body = new SmoothPath
+            // Track look, lazer-style: a lighter outline path underneath and a darker
+            // semi-transparent fill path (smaller radius) layered on top of it.
+            var bodyBorder = new SmoothPath
             {
                 PathRadius = radius,
-                Colour = colour.Darken(0.35f),
+                Colour = Color4.White,
+                Alpha = 0.75f,
+                Vertices = vertices,
+            };
+            bodyBorder.Position = -bodyBorder.PositionInBoundingBox(Vector2.Zero);
+
+            var bodyFill = new SmoothPath
+            {
+                PathRadius = radius * 0.86f,
+                Colour = colour.Darken(0.65f),
                 Alpha = 0.85f,
                 Vertices = vertices,
             };
+            bodyFill.Position = -bodyFill.PositionInBoundingBox(Vector2.Zero);
 
-            // A Path's drawable quad spans its vertex bounding box (plus radius); shift it so the
-            // vertex at the head lands on this container's origin.
-            body.Position = -body.PositionInBoundingBox(Vector2.Zero);
-
-            CircularContainer approach;
-
-            InternalChildren = new Drawable[]
+            var children = new List<Drawable>
             {
-                body,
+                bodyBorder,
+                bodyFill,
                 new CircularContainer // tail marker
                 {
                     Anchor = Anchor.TopLeft,
@@ -245,9 +287,135 @@ public partial class ChartLayer : CompositeDrawable
                     BorderColour = Color4.White,
                     Child = new Box { RelativeSizeAxes = Axes.Both, Colour = colour, Alpha = 0.6f },
                 },
-                makeDisc(radius, colour),
-                approach = makeApproachRing(radius, colour),
             };
+
+            // ---- ticks (pop as the ball passes them, per span) ----------------------------
+
+            foreach (var tick in ChartComputations.SliderTicks(obj, beatmap, vertices, preempt))
+            {
+                var dot = new Circle
+                {
+                    Origin = Anchor.Centre,
+                    Position = tick.Position,
+                    Size = new Vector2(Math.Max(3, radius * 0.3f)),
+                    Colour = Color4.White,
+                    Alpha = 0,
+                };
+
+                using (dot.BeginAbsoluteSequence(tick.AppearTime))
+                    dot.FadeTo(0.9f, fadeIn);
+
+                using (dot.BeginAbsoluteSequence(tick.Time))
+                    dot.ScaleTo(1.6f, 120, Easing.OutQuint).FadeOut(120);
+
+                children.Add(dot);
+                TickCount++;
+            }
+
+            // ---- reverse arrows -----------------------------------------------------------
+
+            foreach (var arrow in ChartComputations.ReverseArrows(obj, vertices, preempt))
+            {
+                var chevron = new SpriteIcon
+                {
+                    Anchor = Anchor.TopLeft,
+                    Origin = Anchor.Centre,
+                    Position = arrow.Position,
+                    Size = new Vector2(radius * 1.1f),
+                    Icon = FontAwesome.Solid.ChevronRight,
+                    Colour = Color4.White,
+                    Rotation = arrow.RotationDegrees,
+                    Alpha = 0,
+                };
+
+                using (chevron.BeginAbsoluteSequence(arrow.AppearTime))
+                    chevron.FadeTo(1, fadeIn);
+
+                using (chevron.BeginAbsoluteSequence(arrow.Time))
+                    chevron.ScaleTo(1.3f, hit_fade_duration, Easing.OutQuint).FadeOut(hit_fade_duration);
+
+                children.Add(chevron);
+                ReverseArrowCount++;
+            }
+
+            // ---- ball + follow circle -----------------------------------------------------
+
+            var ball = new Container
+            {
+                Origin = Anchor.Centre,
+                Size = new Vector2(radius * 2),
+                Alpha = 0,
+                Children = new Drawable[]
+                {
+                    new CircularContainer // follow circle ring (~2.4× radius) around the ball
+                    {
+                        Anchor = Anchor.Centre,
+                        Origin = Anchor.Centre,
+                        Size = new Vector2(radius * 2 * 2.4f),
+                        Masking = true,
+                        BorderThickness = 4,
+                        BorderColour = Color4.White,
+                        Alpha = 0.55f,
+                        Child = new Box { RelativeSizeAxes = Axes.Both, Alpha = 0, AlwaysPresent = true },
+                    },
+                    new Circle // the ball itself
+                    {
+                        Anchor = Anchor.Centre,
+                        Origin = Anchor.Centre,
+                        Size = new Vector2(radius * 1.8f),
+                        Colour = colour.Lighten(0.2f),
+                    },
+                },
+            };
+
+            var keyframes = ChartComputations.BallKeyframes(obj, vertices);
+
+            if (keyframes.Count > 0)
+            {
+                ball.Position = keyframes[0].Position;
+
+                using (ball.BeginAbsoluteSequence(obj.Time))
+                    ball.FadeIn();
+
+                using (ball.BeginAbsoluteSequence(keyframes[0].Time))
+                {
+                    // Piecewise travel as one chained MoveTo sequence — compiled once, evaluated
+                    // lazily by the framework; ping-pong across repeats comes from the keyframes.
+                    var sequence = ball.MoveTo(keyframes[0].Position);
+                    double previousTime = keyframes[0].Time;
+
+                    for (int i = 1; i < keyframes.Count; i++)
+                    {
+                        sequence = sequence.Then().MoveTo(keyframes[i].Position, keyframes[i].Time - previousTime);
+                        previousTime = keyframes[i].Time;
+                    }
+                }
+
+                using (ball.BeginAbsoluteSequence(obj.EndTime))
+                    ball.FadeOut(hit_fade_duration);
+            }
+
+            children.Add(ball);
+
+            // ---- head circle (explodes at hit time; body stays until the tail) -------------
+
+            var headPiece = new Container
+            {
+                Origin = Anchor.Centre,
+                Size = new Vector2(radius * 2),
+                Children = new Drawable[]
+                {
+                    makeDisc(radius, colour),
+                    makeNumber(radius, number),
+                },
+            };
+
+            var approach = makeApproachRing(radius, colour);
+
+            children.Add(headPiece);
+            children.Add(approach);
+
+            InternalChildren = children.ToArray();
 
             using (BeginAbsoluteSequence(obj.Time - preempt))
             {
@@ -256,7 +424,10 @@ public partial class ChartLayer : CompositeDrawable
             }
 
             using (BeginAbsoluteSequence(obj.Time))
+            {
                 approach.FadeOut();
+                headPiece.ScaleTo(1.4f, hit_fade_duration, Easing.OutQuint).FadeOut(hit_fade_duration);
+            }
 
             using (BeginAbsoluteSequence(obj.EndTime))
                 this.FadeOut(hit_fade_duration);
@@ -291,10 +462,11 @@ public partial class ChartLayer : CompositeDrawable
         private void load()
         {
             Container rotor;
+            CircularContainer approach;
 
             InternalChildren = new Drawable[]
             {
-                new CircularContainer
+                new CircularContainer // outer ring
                 {
                     RelativeSizeAxes = Axes.Both,
                     Masking = true,
@@ -302,7 +474,18 @@ public partial class ChartLayer : CompositeDrawable
                     BorderColour = Color4.White,
                     Child = new Box { RelativeSizeAxes = Axes.Both, Alpha = 0, AlwaysPresent = true },
                 },
-                rotor = new Container
+                approach = new CircularContainer // approach: shrinks over the spin duration
+                {
+                    RelativeSizeAxes = Axes.Both,
+                    Anchor = Anchor.Centre,
+                    Origin = Anchor.Centre,
+                    Masking = true,
+                    BorderThickness = 3,
+                    BorderColour = Color4.White,
+                    Alpha = 0.5f,
+                    Child = new Box { RelativeSizeAxes = Axes.Both, Alpha = 0, AlwaysPresent = true },
+                },
+                rotor = new Container // rotating middle
                 {
                     RelativeSizeAxes = Axes.Both,
                     Anchor = Anchor.Centre,
@@ -315,6 +498,13 @@ public partial class ChartLayer : CompositeDrawable
                         Colour = Theme.Accent,
                     },
                 },
+                new Circle // centre dot
+                {
+                    Anchor = Anchor.Centre,
+                    Origin = Anchor.Centre,
+                    Size = new Vector2(12),
+                    Colour = Color4.White,
+                },
             };
 
             double duration = Math.Max(1, obj.EndTime - obj.Time);
@@ -326,6 +516,7 @@ public partial class ChartLayer : CompositeDrawable
             {
                 // One full revolution per 500ms of spinner duration — purely decorative.
                 rotor.RotateTo(0).RotateTo((float)(360 * duration / 500), duration);
+                approach.ScaleTo(1).ScaleTo(0.12f, duration);
             }
 
             using (BeginAbsoluteSequence(obj.EndTime))
@@ -333,5 +524,46 @@ public partial class ChartLayer : CompositeDrawable
         }
 
         private static double fadeIn_for(double preempt) => 400 * preempt / 1200;
+    }
+
+    internal partial class DrawableFollowPoint : CompositeDrawable
+    {
+        public override bool RemoveWhenNotAlive => false;
+        public override bool RemoveCompletedTransforms => false;
+
+        private const double fade_duration = 150;
+
+        private readonly FollowPointSpec spec;
+
+        public DrawableFollowPoint(FollowPointSpec spec)
+        {
+            this.spec = spec;
+
+            Origin = Anchor.Centre;
+            Position = spec.Position;
+            Rotation = spec.RotationDegrees;
+            Size = new Vector2(8, 3);
+            Alpha = 0;
+
+            LifetimeStart = spec.AppearTime;
+            LifetimeEnd = spec.DisappearTime + fade_duration + 50;
+        }
+
+        [BackgroundDependencyLoader]
+        private void load()
+        {
+            InternalChild = new Box
+            {
+                RelativeSizeAxes = Axes.Both,
+                Colour = Color4.White,
+            };
+
+            // Kept faint — a hint of the reading path, not a feature in itself.
+            using (BeginAbsoluteSequence(spec.AppearTime))
+                this.FadeTo(0.3f, fade_duration);
+
+            using (BeginAbsoluteSequence(spec.DisappearTime))
+                this.FadeOut(fade_duration);
+        }
     }
 }
