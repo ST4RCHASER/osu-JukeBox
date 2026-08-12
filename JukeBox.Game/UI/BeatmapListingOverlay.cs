@@ -33,7 +33,10 @@ namespace JukeBox.Game.UI;
 /// Mode/category/extras/sort/stars are server-side parameters — changing them restarts the search
 /// at page 0. Genre and language are CLIENT-SIDE filters over the already-loaded results (the
 /// legacy mirror API can't express them), so their rows are captioned accordingly and flipping
-/// them never issues a request.
+/// them never issues a request directly — but if the filtered results leave the viewport
+/// underfilled (possibly empty) while more pages exist, further pages are auto-chained, bounded
+/// by <see cref="max_auto_chain_pages"/> per user action, so a match on a later page still
+/// surfaces without the user being stuck on an unscrollable "no results".
 ///
 /// Interaction contract (kept from the old SearchOverlay): typing anywhere opens it seeded with
 /// the char (<see cref="ShowWithInitialChar"/>); Up/Down move the highlighted card; Enter fires
@@ -51,6 +54,15 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
     /// <summary>How close (px) to the bottom of the scroll the user must be before the next page
     /// is requested.</summary>
     private const float scroll_load_threshold = 200;
+
+    /// <summary>
+    /// Cap on consecutive automatically-chained page fetches (pages requested without the user
+    /// scrolling — e.g. when the client-side genre/language filter reduces every loaded page to
+    /// fewer cards than fill the viewport, possibly zero). Bounded per user action so an
+    /// all-filtered result stream can't hammer the mirror indefinitely; the budget refreshes
+    /// whenever content becomes scrollable again or the user changes the search/filters.
+    /// </summary>
+    private const int max_auto_chain_pages = 5;
 
     private const float label_width = 92;
 
@@ -95,6 +107,14 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
     private int currentPage;
     private bool isLoading;
     private bool hasMore;
+
+    /// <summary>Auto-chained fetches consumed since the last user action — see
+    /// <see cref="max_auto_chain_pages"/>.</summary>
+    private int autoChainedPages;
+
+    /// <summary>Frames to skip auto-fetch decisions for after a card rebuild, while the flow's
+    /// autosize/scroll extents still reflect the previous content (or nothing at all).</summary>
+    private int settleFrames;
 
     [BackgroundDependencyLoader]
     private void load()
@@ -185,13 +205,13 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
                     ("Any", null), ("Video Game", 2), ("Anime", 3), ("Rock", 4), ("Pop", 5), ("Other", 6),
                     ("Novelty", 7), ("Hip Hop", 9), ("Electronic", 10), ("Metal", 11), ("Classical", 12),
                     ("Folk", 13), ("Jazz", 14),
-                }, genreId, v => { genreId = v; rebuildCards(); })),
+                }, genreId, v => { genreId = v; applyClientFilterChange(); })),
                 createChipRow("Language", "filters loaded results", singleSelect(new (string, int?)[]
                 {
                     ("Any", null), ("English", 2), ("Japanese", 3), ("Chinese", 4), ("Korean", 6),
                     ("Instrumental", 5), ("German", 8), ("French", 7), ("Italian", 11), ("Spanish", 10),
                     ("Swedish", 9), ("Russian", 12), ("Polish", 13), ("Other", 14),
-                }, languageId, v => { languageId = v; rebuildCards(); })),
+                }, languageId, v => { languageId = v; applyClientFilterChange(); })),
                 createChipRow("Extra", null, new[]
                 {
                     toggleChip("Has Video", v => { hasVideo = v; scheduleSearch(); }),
@@ -487,15 +507,41 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
                 card.Width = cardWidth;
         }
 
-        // Infinite scroll: request the next page once the user nears the bottom (also naturally
-        // fills a viewport taller than one page, since an unfilled scroll counts as "at end").
-        // The AvailableContent guard skips the first frame after a rebuild, where the flow's
-        // autosize hasn't been computed yet — a zero-height content trivially reads as "at end"
-        // and would fire a phantom next-page request before anything is even laid out.
-        if (State.Value == Visibility.Visible && hasMore && !isLoading && cardsFlow.Count > 0
-            && scroll.AvailableContent > 0 && scroll.IsScrolledToEnd(scroll_load_threshold))
+        // Skip auto-fetch decisions while the scroll extents still describe the previous content
+        // (autosize is computed after Update) — a not-yet-laid-out content trivially reads as
+        // "at end"/"underfilled" and would fire phantom page requests.
+        if (settleFrames > 0)
         {
+            settleFrames--;
+            return;
+        }
+
+        // Driven off the RAW loaded count, not the filtered card count: the client-side
+        // genre/language filter can legitimately reduce a full page to zero visible cards, and
+        // later pages may still contain matches.
+        if (State.Value != Visibility.Visible || isLoading || !hasMore || loadedSets.Count == 0)
+            return;
+
+        if (scroll.AvailableContent > scroll.DisplayableContent + 1)
+        {
+            // Content overflows the viewport: further paging is user-driven (infinite scroll), so
+            // the auto-chain budget refreshes for whenever the next stall happens.
+            autoChainedPages = 0;
+
+            if (scroll.IsScrolledToEnd(scroll_load_threshold))
+                _ = runSearchAsync(fresh: false);
+        }
+        else if (autoChainedPages < max_auto_chain_pages)
+        {
+            // Loaded content doesn't fill the viewport — possibly zero visible cards after the
+            // client-side filter — so the user has nothing to scroll and infinite scroll could
+            // never trigger. Chain the next page automatically, bounded per user action.
+            autoChainedPages++;
             _ = runSearchAsync(fresh: false);
+        }
+        else if (cardsFlow.Count == 0)
+        {
+            statusText.Text = $"no matches in the first {loadedSets.Count} loaded results — refine the filters or keywords";
         }
     }
 
@@ -565,6 +611,9 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
             {
                 loadedSets.Clear();
                 scroll.ScrollToStart();
+
+                // A fresh search is a user action — the auto-chain budget starts over.
+                autoChainedPages = 0;
             }
 
             loadedSets.AddRange(results);
@@ -604,10 +653,20 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
         }
     }
 
+    /// <summary>Genre/language changed — a user action: reset the auto-chain budget and
+    /// re-filter the loaded results. If the new filter leaves the viewport underfilled (or
+    /// empty) with more pages available, <see cref="Update"/> auto-chains further fetches.</summary>
+    private void applyClientFilterChange()
+    {
+        autoChainedPages = 0;
+        rebuildCards();
+    }
+
     private void rebuildCards()
     {
         cardsFlow.Clear();
         selectedIndex = -1;
+        settleFrames = 2;
 
         var visible = loadedSets.Where(s => MatchesClientFilters(s, genreId, languageId)).ToList();
 
