@@ -227,6 +227,68 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("remove visuals", () => Remove(visuals, true));
         }
 
+        // Pumps a FramedOffsetClock off a real StopwatchClock so PlaybackPosition genuinely
+        // advances in real time, like the production playbackClock (pumped by PlaybackController)
+        // does — a frozen/manual clock wouldn't exercise Video's own per-frame catch-up logic.
+        private partial class RealTimeClockPump : Component
+        {
+            public new readonly FramedOffsetClock Clock;
+
+            public RealTimeClockPump(double startOffsetMs)
+            {
+                Clock = new FramedOffsetClock(new StopwatchClock(true), true) { Offset = startOffsetMs };
+            }
+
+            protected override void Update()
+            {
+                base.Update();
+                Clock.ProcessFrame();
+            }
+        }
+
+        // Regression test for the mid-song video seek-storm: a video-having set (re)built with
+        // the clock already well past 0 — the normal case here, since radio songs start mid-track
+        // and diff switches land mid-song — used to leave Video.Update()'s per-frame out-of-sync
+        // check chasing a constantly-advancing PlaybackPosition target while the decoder was still
+        // catching up, so it never actually landed a frame (permanent black video, re-seeking
+        // every frame; see BeatmapVisuals.videoWarmedUp). The fixture video has a single keyframe
+        // at t=0 covering its whole ~8s (forced via a large libx264 GOP), so seeking 6s in forces
+        // exactly the deep decode-forward-through-the-GOP catch-up that triggered the storm.
+        [Test]
+        public void VideoCatchesUpWhenSeekedDeepIntoSongOnConstruction()
+        {
+            RealTimeClockPump pump = null!;
+            BeatmapVisuals visuals = null!;
+
+            AddStep("create real-time clock 6s into the song", () => Add(pump = new RealTimeClockPump(6000)));
+
+            AddStep("create visuals with the single-keyframe fixture video", () =>
+            {
+                string videoFile = Path.Combine(tmp, "sync-test-video.mp4");
+                File.Copy(Path.Combine(TestContext.CurrentContext.TestDirectory, "Fixtures", "sync-test-video.mp4"), videoFile, true);
+
+                var set = new CachedBeatmapSet
+                {
+                    SetId = 6,
+                    Directory = tmp,
+                    VideoFile = videoFile,
+                };
+
+                Add(visuals = new BeatmapVisuals(set, pump.Clock) { RelativeSizeAxes = Axes.Both });
+            });
+
+            AddUntilStep("visuals loaded", () => visuals.IsLoaded);
+
+            // Generous real-time bound: a healthy catch-up lands a synced frame within a couple of
+            // hundred ms even decoding through a multi-second GOP (confirmed empirically against
+            // several real cached maps) — 4s leaves comfortable headroom without the test itself
+            // hanging on a genuine regression (a re-seek storm never produces a frame at all).
+            AddUntilStep("video catches up and starts rendering synced frames",
+                () => (visuals.VideoFramesProcessed ?? 0) > 0);
+
+            AddStep("remove visuals", () => Remove(visuals, true));
+        }
+
         // 1x1 red pixel PNG — content is irrelevant, only that it decodes to a valid texture.
         private static byte[] solidPng() => Convert.FromBase64String(
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==");
