@@ -37,6 +37,7 @@ public partial class BeatmapVisuals : CompositeDrawable
     private readonly IFrameBasedClock playbackClock;
 
     private TextureStore? backgroundTextures;
+    private Sprite? backgroundSprite;
     private TransformStoryboardLayer storyboardLayer = null!;
 
     private Box dimScrim = null!;
@@ -80,6 +81,15 @@ public partial class BeatmapVisuals : CompositeDrawable
     /// <summary>Test-only: current alpha of the background-dim scrim.</summary>
     internal float DimAlpha => dimScrim.Alpha;
 
+    /// <summary>
+    /// Test-only: whether our own background <see cref="Sprite"/> is currently visible. Auto-hidden
+    /// whenever a video or non-empty storyboard is present (matching osu! stable/lazer behaviour),
+    /// so video/storyboard render as the top visual layer instead of fighting the flat background
+    /// for prominence. Storyboards that intentionally draw the background image as one of their own
+    /// sprites are unaffected — that dedup already happens inside <see cref="TransformStoryboardLayer"/>.
+    /// </summary>
+    internal bool BackgroundVisible => backgroundSprite is { Alpha: > 0 };
+
     /// <summary>The .osu file this stack was built for (selected difficulty).</summary>
     internal string? OsuFile => osuFile;
 
@@ -105,6 +115,16 @@ public partial class BeatmapVisuals : CompositeDrawable
         Clock = playbackClock;
         ProcessCustomClock = false;
 
+        // Plain black backdrop, always present and always fully opaque — video (FillMode.Fit) and
+        // the storyboard (uniform-scaled, possibly narrower than widescreen) don't necessarily
+        // cover the full width/height, so without this the letterboxing would show whatever's
+        // behind this drawable instead of black, same as osu! stable/lazer's own letterboxing.
+        AddInternal(new Box
+        {
+            RelativeSizeAxes = Axes.Both,
+            Colour = Color4.Black,
+        });
+
         if (set.BackgroundFile != null)
         {
             backgroundTextures = new TextureStore(host.Renderer,
@@ -116,7 +136,7 @@ public partial class BeatmapVisuals : CompositeDrawable
 
             if (texture != null)
             {
-                AddInternal(new Sprite
+                AddInternal(backgroundSprite = new Sprite
                 {
                     RelativeSizeAxes = Axes.Both,
                     Anchor = Anchor.Centre,
@@ -173,6 +193,12 @@ public partial class BeatmapVisuals : CompositeDrawable
             Origin = Anchor.Centre,
         });
 
+        // Real osu! behaviour: a video or a non-empty storyboard renders as the top visual layer,
+        // and the flat background image auto-hides behind it (the black Box above still backs the
+        // letterboxing). AddInternal above runs the storyboard's own BackgroundDependencyLoader
+        // synchronously, so HasObjects already reflects the compiled result here.
+        updateBackgroundVisibility();
+
         // Background-dim scrim: sits between the storyboard/video/background stack and the chart
         // so the chart stays readable. Applies whenever the setting is > 0, even with chart off.
         AddInternal(dimScrim = new Box
@@ -224,6 +250,20 @@ public partial class BeatmapVisuals : CompositeDrawable
         backgroundDim.BindValueChanged(e => dimScrim.Alpha = (float)e.NewValue, true);
     }
 
+    /// <summary>
+    /// Hides our own background sprite whenever a video layer or a non-empty storyboard is
+    /// present, so they render as the top visual layer instead of the flat background competing
+    /// with them — matching real osu! behaviour. Re-run after the video layer's presence changes
+    /// (initial load, and torn down on decoder fault) so a fault with no storyboard restores it.
+    /// </summary>
+    private void updateBackgroundVisibility()
+    {
+        if (backgroundSprite == null)
+            return;
+
+        backgroundSprite.Alpha = videoContainer != null || storyboardLayer.HasObjects ? 0 : 1;
+    }
+
     private void updateChartLayer()
     {
         if (renderChart.Value && chartBeatmap != null)
@@ -265,6 +305,10 @@ public partial class BeatmapVisuals : CompositeDrawable
                 LoggingTarget.Runtime, LogLevel.Error);
             videoContainer = null;
             video = null;
+
+            // No video anymore — if there's no storyboard either, the background must come back
+            // rather than leaving the user staring at pure black.
+            updateBackgroundVisibility();
         }
 
         // Storyboard space is always 480 units tall (640 or 854 wide); scale it uniformly to fit

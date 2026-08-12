@@ -76,6 +76,46 @@ namespace JukeBox.Game.Tests.Visual
             }));
 
             AddUntilStep("visuals loaded", () => visuals.IsLoaded);
+            AddAssert("background visible (no video/storyboard)", () => visuals.BackgroundVisible);
+
+            AddStep("remove visuals", () => Remove(visuals, true));
+        }
+
+        // Regression test for the "background auto-hides under video/storyboard" requirement: a
+        // set with a non-empty storyboard must hide our own separate background sprite so the
+        // storyboard renders as the top visual layer, matching real osu! behaviour.
+        [Test]
+        public void BackgroundHidesUnderNonEmptyStoryboard()
+        {
+            BeatmapVisuals visuals = null!;
+
+            AddStep("create visuals with bg + storyboard", () =>
+            {
+                string osbFile = Path.Combine(tmp, "map.osb");
+                File.WriteAllText(osbFile, """
+                    osu file format v14
+
+                    [Events]
+                    //Storyboard Layer 0 (Background)
+                    Sprite,Background,Centre,"bg.png",320,240
+                    _F,0,0,5000,0,1
+                    _M,0,0,5000,320,240,320,240
+                    """);
+
+                var set = new CachedBeatmapSet
+                {
+                    SetId = 5,
+                    Directory = tmp,
+                    BackgroundFile = fixtureSetA.BackgroundFile,
+                    OsbFile = osbFile,
+                };
+
+                Add(visuals = new BeatmapVisuals(set, playbackClock) { RelativeSizeAxes = Axes.Both });
+            });
+
+            AddUntilStep("visuals loaded", () => visuals.IsLoaded);
+            AddAssert("storyboard has objects", () => visuals.ChildrenOfType<TransformStoryboardLayer>().Single().HasObjects);
+            AddAssert("background hidden", () => !visuals.BackgroundVisible);
 
             AddStep("remove visuals", () => Remove(visuals, true));
         }
@@ -133,6 +173,10 @@ namespace JukeBox.Game.Tests.Visual
 
             AddUntilStep("visuals loaded despite bad video", () => visuals.IsLoaded);
 
+            // Not asserted here: the background being hidden while the (still-present) video
+            // layer is up front — the decoder can fault fast enough that by this point the
+            // teardown below has already happened, making that checkpoint inherently racy.
+
             // The garbage file doesn't fail Video's constructor synchronously — the decoder
             // faults asynchronously on its own thread a little later (confirmed empirically: the
             // runtime logs "VideoDecoder faulted: ... Invalid data found when processing input").
@@ -140,6 +184,7 @@ namespace JukeBox.Game.Tests.Visual
             // happens; assert that actually occurs rather than just that nothing crashed.
             AddUntilStep("video layer torn down after decoder fault", () => !visuals.HasVideoLayer);
             AddAssert("visuals still alive (no crash from the bad video)", () => !visuals.Disposed);
+            AddAssert("background restored after fault teardown (no storyboard)", () => visuals.BackgroundVisible);
 
             AddStep("remove visuals", () => Remove(visuals, true));
         }
