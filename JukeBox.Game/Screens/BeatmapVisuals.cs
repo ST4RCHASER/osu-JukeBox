@@ -78,6 +78,22 @@ public partial class BeatmapVisuals : CompositeDrawable
     /// <summary>Test-only: whether a hitsound player is currently present.</summary>
     internal bool HasHitSoundPlayer => hitSoundPlayer != null;
 
+    /// <summary>Test-only: number of hit-object drawables the chart layer compiled (0 = none/absent).</summary>
+    internal int ChartObjectCount => chartLayer?.TotalObjectCount ?? 0;
+
+    /// <summary>
+    /// Why the chart (and hitsounds) are unavailable for this difficulty, or null when a chart
+    /// beatmap was parsed. Always logged — "Render chart is on but nothing shows" must never be
+    /// silent again.
+    /// </summary>
+    internal string? ChartUnavailableReason { get; private set; }
+
+    private void markChartUnavailable(string reason)
+    {
+        ChartUnavailableReason = reason;
+        Logger.Log($"Chart unavailable: {reason} (chart + hitsounds stay off for this track; storyboard/audio unaffected)");
+    }
+
     /// <summary>Test-only: current alpha of the background-dim scrim.</summary>
     internal float DimAlpha => dimScrim.Alpha;
 
@@ -217,13 +233,33 @@ public partial class BeatmapVisuals : CompositeDrawable
             Size = new Vector2(512, 384),
         });
 
-        // Only Mode 0 (osu!std) difficulties are chart-renderable.
-        if (osuFile != null)
+        // Only Mode 0 (osu!std) difficulties are chart-renderable. Every skip reason is recorded
+        // and logged — a silently-absent chart cost a real debugging round (storyboard-heavy sets
+        // are often mania/taiko-only, which used to fall through here without a trace).
+        if (osuFile == null)
+        {
+            markChartUnavailable($"set {set.SetId} has no .osu difficulty to chart");
+        }
+        else
         {
             try
             {
-                if (OsuFileScanner.Scan(osuFile).Mode == 0)
+                int mode = OsuFileScanner.Scan(osuFile).Mode;
+
+                if (mode != 0)
+                {
+                    markChartUnavailable($"'{Path.GetFileName(osuFile)}' is game mode {mode} — only osu!std (mode 0) difficulties are chart-renderable");
+                }
+                else
+                {
                     chartBeatmap = BeatmapParser.Parse(osuFile);
+
+                    if (chartBeatmap.HitObjects.Count == 0)
+                    {
+                        markChartUnavailable($"'{Path.GetFileName(osuFile)}' parsed to 0 hit objects");
+                        chartBeatmap = null;
+                    }
+                }
             }
             catch (Exception e)
             {
