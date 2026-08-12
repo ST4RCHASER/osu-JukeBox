@@ -60,11 +60,37 @@ public partial class BeatmapVisuals : CompositeDrawable
     private Container? videoContainer;
     private Video? video;
 
+    // Video's own per-frame out-of-sync check (osu.Framework.Graphics.Video.Video.Update) issues
+    // a fresh decoder seek every time PlaybackPosition has drifted from the newest decoded frame
+    // by more than ~2.5s. When a set is (re)built with playbackClock already well past 0 — the
+    // normal case here: radio songs start mid-track and diff switches land mid-song — the very
+    // first frames the decoder produces are near its own 0, so that first out-of-sync check fires
+    // immediately. If PlaybackPosition keeps climbing on every subsequent Update() while the
+    // decoder is still mid-catch-up (decoding forward through the GOP to reach the seek target),
+    // each new frame re-seeks to a slightly-later target before the previous seek ever converges —
+    // a moving target the decoder can never land on, observed in production as a permanent black
+    // video stuck re-seeking every frame. Freezing Video.IsPlaying immediately after construction
+    // holds PlaybackPosition at the single value it was seeded with (via startAtCurrentTime:
+    // false), giving the decoder a fixed target; we release the freeze once FramesProcessed proves
+    // a frame within sync actually landed. Bounded by videoWarmUpDeadline so a genuinely stuck
+    // decoder (rather than one that's merely catching up) still starts tracking eventually instead
+    // of leaving the video frozen forever.
+    private bool videoWarmedUp = true;
+    private double videoWarmUpDeadline;
+
+    private const double video_warm_up_timeout_ms = 5000;
+
     /// <summary>
     /// Test-only access to disposal state (JukeBox.Game.Tests has InternalsVisibleTo) —
     /// <see cref="Drawable.IsDisposed"/> itself is protected.
     /// </summary>
     internal bool Disposed => IsDisposed;
+
+    /// <summary>Test-only: frames actually rendered by the video layer, or null with no video.
+    /// Only increments once a decoded frame within sync of the playback position is displayed
+    /// (see <see cref="Video.FramesProcessed"/>) — the definitive signal that the video isn't
+    /// stuck re-seeking. Used to regression-test the mid-song seek-storm fix.</summary>
+    internal int? VideoFramesProcessed => video?.FramesProcessed;
 
     /// <summary>
     /// Test-only access to whether the video layer is currently present (JukeBox.Game.Tests has
@@ -162,7 +188,13 @@ public partial class BeatmapVisuals : CompositeDrawable
                     FillMode = FillMode.Fit,
                     Anchor = Anchor.Centre,
                     Origin = Anchor.Centre,
+                    // See videoWarmedUp: held paused until the decoder proves it has caught up to
+                    // the seeded start position, so the sync-seek target doesn't move out from
+                    // under it while it's still decoding forward to reach that position.
+                    IsPlaying = false,
                 };
+                videoWarmedUp = false;
+                videoWarmUpDeadline = Clock.CurrentTime + video_warm_up_timeout_ms;
 
                 videoContainer = new Container
                 {
@@ -309,6 +341,18 @@ public partial class BeatmapVisuals : CompositeDrawable
             // No video anymore — if there's no storyboard either, the background must come back
             // rather than leaving the user staring at pure black.
             updateBackgroundVisibility();
+        }
+
+        // See videoWarmedUp: release the pause once the decoder proves it landed a frame at the
+        // (frozen) seeded position, or once the bounded catch-up window has elapsed regardless —
+        // whichever comes first, so a video that's merely slow to seek isn't held back forever.
+        if (!videoWarmedUp && video != null)
+        {
+            if (video.FramesProcessed > 0 || Clock.CurrentTime >= videoWarmUpDeadline)
+            {
+                video.IsPlaying = true;
+                videoWarmedUp = true;
+            }
         }
 
         // Storyboard space is always 480 units tall (640 or 854 wide); scale it uniformly to fit
