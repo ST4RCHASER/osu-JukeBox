@@ -114,17 +114,32 @@ public partial class TransformStoryboardLayer : CompositeDrawable
                 bg.AdjustScale(tex.Height);
         }
 
-        // From Core's StoryboardUpdater ctor: if a normal storyboard object reuses the background
-        // image, the standalone background object is dropped entirely; otherwise it renders
-        // behind everything (Z = -1 → framework Depth = +1).
-        var background = objects.FirstOrDefault(o => o is StoryboardBackgroundObject);
-
-        if (background != null)
+        if (set.VideoFile != null)
         {
-            if (objects.Any(o => o.ImageFilePath == background.ImageFilePath && o is not StoryboardBackgroundObject))
-                objects.RemoveAll(o => o is StoryboardBackgroundObject);
-            else
-                background.Z = -1;
+            // Core's parser emits the map background as a StoryboardBackgroundObject (Z = -1, so
+            // TransformStoryboardLayer would paint it above the video layer) — but real osu shows
+            // the video in place of the background whenever both exist. Drop these objects
+            // entirely rather than let them cover the video; BeatmapVisuals already renders the
+            // video in the background slot. Normal (non-background-object) sprites that happen to
+            // reuse the background image are untouched. If the video later faults, BeatmapVisuals
+            // falls back to black + storyboard (no background object to restore) — acceptable,
+            // matches the existing fault path.
+            objects.RemoveAll(o => o is StoryboardBackgroundObject);
+        }
+        else
+        {
+            // From Core's StoryboardUpdater ctor: if a normal storyboard object reuses the
+            // background image, the standalone background object is dropped entirely; otherwise
+            // it renders behind everything (Z = -1 → framework Depth = +1).
+            var background = objects.FirstOrDefault(o => o is StoryboardBackgroundObject);
+
+            if (background != null)
+            {
+                if (objects.Any(o => o.ImageFilePath == background.ImageFilePath && o is not StoryboardBackgroundObject))
+                    objects.RemoveAll(o => o is StoryboardBackgroundObject);
+                else
+                    background.Z = -1;
+            }
         }
 
         // Trigger ("T") commands are unsupported, same as the previous renderer — an object's
