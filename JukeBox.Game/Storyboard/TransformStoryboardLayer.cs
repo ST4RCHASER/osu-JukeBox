@@ -40,6 +40,14 @@ public partial class TransformStoryboardLayer : CompositeDrawable
     public int VisibleSpriteCount => elements?.AliveElements.Count(d => d.IsPresent) ?? 0;
 
     /// <summary>
+    /// Whether the storyboard compiled at least one renderable object (independent of the current
+    /// playback position — unlike <see cref="VisibleSpriteCount"/>, this doesn't depend on any
+    /// object currently being inside its lifetime window). Callers use this to decide whether the
+    /// storyboard is "present" at all, e.g. to auto-hide a separate background layer behind it.
+    /// </summary>
+    public bool HasObjects => elements?.AllElements.Count > 0;
+
+    /// <summary>
     /// Test-only access to the first storyboard sprite (JukeBox.Game.Tests has
     /// InternalsVisibleTo), to assert per-sprite state (e.g. OriginPosition) that
     /// <see cref="VisibleSpriteCount"/> alone can't cover.
