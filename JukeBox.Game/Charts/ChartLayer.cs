@@ -215,6 +215,9 @@ public partial class ChartLayer : CompositeDrawable
         /// <summary>Test-only: number of tick drawables constructed.</summary>
         internal int TickCount { get; private set; }
 
+        /// <summary>Test-only: the travelling ball + follow circle container.</summary>
+        internal Container BallContainer { get; private set; } = null!;
+
         private readonly ChartHitObject obj;
         private readonly ChartBeatmap beatmap;
         private readonly float radius;
@@ -299,6 +302,15 @@ public partial class ChartLayer : CompositeDrawable
 
             // ---- ticks (pop as the ball passes them, per span) ----------------------------
 
+            // NOTE (root cause of the invisible-ball bug, applies to ticks/arrows/ball alike):
+            // transforms added to a drawable that has no clock yet — i.e. constructed here but
+            // not yet attached via InternalChildren — are applied INSTANTLY to their end state
+            // and never registered (osu.framework's clock-less AddTransform behaviour). So all
+            // per-child animation specs are collected first and only compiled into transforms
+            // AFTER the children are attached (attachment during load() loads them with a clock).
+            var tickAnimations = new List<(Circle Dot, SliderTickSpec Spec)>();
+            var arrowAnimations = new List<(SpriteIcon Chevron, ReverseArrowSpec Spec)>();
+
             foreach (var tick in ChartComputations.SliderTicks(obj, beatmap, vertices, preempt))
             {
                 var dot = new Circle
@@ -310,13 +322,8 @@ public partial class ChartLayer : CompositeDrawable
                     Alpha = 0,
                 };
 
-                using (dot.BeginAbsoluteSequence(tick.AppearTime))
-                    dot.FadeTo(0.9f, fadeIn);
-
-                using (dot.BeginAbsoluteSequence(tick.Time))
-                    dot.ScaleTo(1.6f, 120, Easing.OutQuint).FadeOut(120);
-
                 children.Add(dot);
+                tickAnimations.Add((dot, tick));
                 TickCount++;
             }
 
@@ -336,13 +343,8 @@ public partial class ChartLayer : CompositeDrawable
                     Alpha = 0,
                 };
 
-                using (chevron.BeginAbsoluteSequence(arrow.AppearTime))
-                    chevron.FadeTo(1, fadeIn);
-
-                using (chevron.BeginAbsoluteSequence(arrow.Time))
-                    chevron.ScaleTo(1.3f, hit_fade_duration, Easing.OutQuint).FadeOut(hit_fade_duration);
-
                 children.Add(chevron);
+                arrowAnimations.Add((chevron, arrow));
                 ReverseArrowCount++;
             }
 
@@ -376,32 +378,12 @@ public partial class ChartLayer : CompositeDrawable
                 },
             };
 
+            BallContainer = ball;
+
             var keyframes = ChartComputations.BallKeyframes(obj, vertices);
 
             if (keyframes.Count > 0)
-            {
                 ball.Position = keyframes[0].Position;
-
-                using (ball.BeginAbsoluteSequence(obj.Time))
-                    ball.FadeIn();
-
-                using (ball.BeginAbsoluteSequence(keyframes[0].Time))
-                {
-                    // Piecewise travel as one chained MoveTo sequence — compiled once, evaluated
-                    // lazily by the framework; ping-pong across repeats comes from the keyframes.
-                    var sequence = ball.MoveTo(keyframes[0].Position);
-                    double previousTime = keyframes[0].Time;
-
-                    for (int i = 1; i < keyframes.Count; i++)
-                    {
-                        sequence = sequence.Then().MoveTo(keyframes[i].Position, keyframes[i].Time - previousTime);
-                        previousTime = keyframes[i].Time;
-                    }
-                }
-
-                using (ball.BeginAbsoluteSequence(obj.EndTime))
-                    ball.FadeOut(hit_fade_duration);
-            }
 
             // ---- head circle (explodes at hit time; body stays until the tail) -------------
 
@@ -425,7 +407,50 @@ public partial class ChartLayer : CompositeDrawable
             // off, and the travelling ball must never disappear under it).
             children.Add(ball);
 
+            // Attaching loads every child against this drawable's clock; ONLY NOW is it safe to
+            // compile their transforms (see the note above the tick loop).
             InternalChildren = children.ToArray();
+
+            foreach (var (dot, spec) in tickAnimations)
+            {
+                using (dot.BeginAbsoluteSequence(spec.AppearTime))
+                    dot.FadeTo(0.9f, fadeIn);
+
+                using (dot.BeginAbsoluteSequence(spec.Time))
+                    dot.ScaleTo(1.6f, 120, Easing.OutQuint).FadeOut(120);
+            }
+
+            foreach (var (chevron, spec) in arrowAnimations)
+            {
+                using (chevron.BeginAbsoluteSequence(spec.AppearTime))
+                    chevron.FadeTo(1, fadeIn);
+
+                using (chevron.BeginAbsoluteSequence(spec.Time))
+                    chevron.ScaleTo(1.3f, hit_fade_duration, Easing.OutQuint).FadeOut(hit_fade_duration);
+            }
+
+            if (keyframes.Count > 0)
+            {
+                using (ball.BeginAbsoluteSequence(obj.Time))
+                    ball.FadeIn();
+
+                using (ball.BeginAbsoluteSequence(keyframes[0].Time))
+                {
+                    // Piecewise travel as one chained MoveTo sequence — compiled once, evaluated
+                    // lazily by the framework; ping-pong across repeats comes from the keyframes.
+                    var sequence = ball.MoveTo(keyframes[0].Position);
+                    double previousTime = keyframes[0].Time;
+
+                    for (int i = 1; i < keyframes.Count; i++)
+                    {
+                        sequence = sequence.Then().MoveTo(keyframes[i].Position, keyframes[i].Time - previousTime);
+                        previousTime = keyframes[i].Time;
+                    }
+                }
+
+                using (ball.BeginAbsoluteSequence(obj.EndTime))
+                    ball.FadeOut(hit_fade_duration);
+            }
 
             using (BeginAbsoluteSequence(obj.Time - preempt))
             {
