@@ -22,7 +22,7 @@ namespace JukeBox.Game
             Add(screenStack = new ScreenStack { RelativeSizeAxes = Axes.Both });
 
             // Single online TextureStore for beatmap set cover thumbnails
-            // (https://b.ppy.sh/thumb/{setId}l.jpg), shared by every SearchResultRow/NowPlayingBar
+            // (https://b.ppy.sh/thumb/{setId}l.jpg), shared by every BeatmapCard/NowPlayingBar
             // rather than one per row. CreateOnlineStore() (not CreateTextureLoaderStore's own
             // NativeStorage-backed overload) is what actually knows how to fetch a bare https://
             // URL as raw bytes. Deliberately wired here rather than in JukeBoxGameBase.load() —

@@ -1,0 +1,62 @@
+#nullable enable
+
+using JukeBox.Game.Online;
+using JukeBox.Game.UI;
+using NUnit.Framework;
+
+namespace JukeBox.Game.Tests.Online
+{
+    // Covers BeatmapListingOverlay.MatchesClientFilters in isolation: genre/language can't be
+    // expressed on the legacy mirror search, so the listing filters already-loaded results
+    // client-side — these are the semantics that filtering relies on.
+    [TestFixture]
+    public class ListingClientFilterTest
+    {
+        private static BeatmapSetInfo set(int? genreId = null, int? languageId = null) => new BeatmapSetInfo
+        {
+            Genre = genreId == null ? null : new NamedIdInfo { Id = genreId },
+            Language = languageId == null ? null : new NamedIdInfo { Id = languageId },
+        };
+
+        [Test]
+        public void NoFiltersMatchEverything()
+        {
+            Assert.That(BeatmapListingOverlay.MatchesClientFilters(set(), null, null), Is.True);
+            Assert.That(BeatmapListingOverlay.MatchesClientFilters(set(3, 2), null, null), Is.True);
+        }
+
+        [Test]
+        public void GenreFilterMatchesOnlySameGenreId()
+        {
+            Assert.That(BeatmapListingOverlay.MatchesClientFilters(set(genreId: 3), 3, null), Is.True);
+            Assert.That(BeatmapListingOverlay.MatchesClientFilters(set(genreId: 4), 3, null), Is.False);
+        }
+
+        [Test]
+        public void LanguageFilterMatchesOnlySameLanguageId()
+        {
+            Assert.That(BeatmapListingOverlay.MatchesClientFilters(set(languageId: 2), null, 2), Is.True);
+            Assert.That(BeatmapListingOverlay.MatchesClientFilters(set(languageId: 3), null, 2), Is.False);
+        }
+
+        [Test]
+        public void BothFiltersMustMatch()
+        {
+            Assert.That(BeatmapListingOverlay.MatchesClientFilters(set(3, 2), 3, 2), Is.True);
+            Assert.That(BeatmapListingOverlay.MatchesClientFilters(set(3, 3), 3, 2), Is.False);
+            Assert.That(BeatmapListingOverlay.MatchesClientFilters(set(4, 2), 3, 2), Is.False);
+        }
+
+        [Test]
+        public void UnassignedGenreOrLanguageOnlyPassesAnyFilter()
+        {
+            // NeriNyan serves {"id":null,"name":null} (or omits the object) for sets that never
+            // had a genre/language assigned — they must only show under "Any".
+            var missing = new BeatmapSetInfo { Genre = new NamedIdInfo(), Language = null };
+
+            Assert.That(BeatmapListingOverlay.MatchesClientFilters(missing, null, null), Is.True);
+            Assert.That(BeatmapListingOverlay.MatchesClientFilters(missing, 3, null), Is.False);
+            Assert.That(BeatmapListingOverlay.MatchesClientFilters(missing, null, 2), Is.False);
+        }
+    }
+}

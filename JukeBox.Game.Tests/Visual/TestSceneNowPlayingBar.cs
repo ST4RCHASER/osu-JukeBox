@@ -40,7 +40,7 @@ namespace JukeBox.Game.Tests.Visual
         private BeatmapSetInfo fixtureInfo = null!;
 
         // CreateChildDependencies runs once for the whole scene (shared across every [Test] in
-        // this fixture, see TestSceneSearchOverlay) — playback/jukebox/queue are created here once
+        // this fixture, see TestSceneBeatmapListing) — playback/jukebox/queue are created here once
         // and reused/reset across tests in SetUpSteps rather than recreated, so the cached
         // instances [Resolved] fields pick up stay valid.
         protected override IReadOnlyDependencyContainer CreateChildDependencies(IReadOnlyDependencyContainer parent)
