@@ -453,6 +453,85 @@ namespace JukeBox.Game.Tests.Visual
             });
         }
 
+        // Regression test: maps with BOTH a video and a storyboard background event must not have
+        // that background painted as a storyboard sprite (Z=-1, above the video layer) — real osu
+        // shows the video in place of the background. The .osu Background event ("0,0,...") is
+        // parsed as a StoryboardBackgroundObject, which is otherwise compiled into a normal
+        // DrawableStoryboardSprite, so with a video present and no other objects the layer must
+        // compile nothing at all.
+        [Test]
+        public void BackgroundObjectDroppedWhenSetHasVideo()
+        {
+            TransformStoryboardLayer videoBgLayer = null!;
+
+            AddStep("create layer with background event + VideoFile set", () =>
+            {
+                string osuFile = Path.Combine(tmp, "video-bg.osu");
+                File.WriteAllText(osuFile, """
+                    osu file format v14
+
+                    [Events]
+                    0,0,"bg.png",0,0
+                    """);
+
+                var videoBgSet = new CachedBeatmapSet
+                {
+                    SetId = 8,
+                    Directory = tmp,
+                    OsbFile = null,
+                    VideoFile = Path.Combine(tmp, "movie.mp4"),
+                };
+
+                // Clock before Add — see SetUpSteps for why (loop transforms bake load-time clock).
+                videoBgLayer = new TransformStoryboardLayer(videoBgSet, osuFile) { Clock = new FramedClock(manual) };
+                Add(videoBgLayer);
+            });
+
+            AddUntilStep("layer loaded", () => videoBgLayer.IsLoaded);
+
+            AddAssert("no objects compiled (background object dropped)", () => !videoBgLayer.HasObjects);
+
+            AddStep("t=2500", () => manual.CurrentTime = 2500);
+            AddAssert("nothing visible", () => videoBgLayer.VisibleSpriteCount == 0);
+        }
+
+        // Same fixture, but without VideoFile: existing behavior is preserved — the background
+        // event still compiles into a visible sprite (Z=-1, behind everything else).
+        [Test]
+        public void BackgroundObjectKeptWhenSetHasNoVideo()
+        {
+            TransformStoryboardLayer noVideoBgLayer = null!;
+
+            AddStep("create layer with background event, no VideoFile", () =>
+            {
+                string osuFile = Path.Combine(tmp, "no-video-bg.osu");
+                File.WriteAllText(osuFile, """
+                    osu file format v14
+
+                    [Events]
+                    0,0,"bg.png",0,0
+                    """);
+
+                var noVideoBgSet = new CachedBeatmapSet
+                {
+                    SetId = 9,
+                    Directory = tmp,
+                    OsbFile = null,
+                };
+
+                // Clock before Add — see SetUpSteps for why (loop transforms bake load-time clock).
+                noVideoBgLayer = new TransformStoryboardLayer(noVideoBgSet, osuFile) { Clock = new FramedClock(manual) };
+                Add(noVideoBgLayer);
+            });
+
+            AddUntilStep("layer loaded", () => noVideoBgLayer.IsLoaded);
+
+            AddAssert("background object compiled (no video to replace it)", () => noVideoBgLayer.HasObjects);
+
+            AddStep("t=2500", () => manual.CurrentTime = 2500);
+            AddAssert("background sprite visible", () => noVideoBgLayer.VisibleSpriteCount == 1);
+        }
+
         // 1x1 red pixel PNG — content is irrelevant, only that it decodes to a valid texture.
         private static byte[] solidPng() => Convert.FromBase64String(
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==");
