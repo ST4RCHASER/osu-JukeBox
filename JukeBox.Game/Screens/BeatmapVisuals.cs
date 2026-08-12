@@ -69,16 +69,52 @@ public partial class BeatmapVisuals : CompositeDrawable
     // decoder is still mid-catch-up (decoding forward through the GOP to reach the seek target),
     // each new frame re-seeks to a slightly-later target before the previous seek ever converges —
     // a moving target the decoder can never land on, observed in production as a permanent black
-    // video stuck re-seeking every frame. Freezing Video.IsPlaying immediately after construction
-    // holds PlaybackPosition at the single value it was seeded with (via startAtCurrentTime:
-    // false), giving the decoder a fixed target; we release the freeze once FramesProcessed proves
-    // a frame within sync actually landed. Bounded by videoWarmUpDeadline so a genuinely stuck
-    // decoder (rather than one that's merely catching up) still starts tracking eventually instead
-    // of leaving the video frozen forever.
+    // video stuck re-seeking every frame.
+    //
+    // Video.IsPlaying=false holds PlaybackPosition at a fixed value, giving the decoder a stable
+    // target instead of a moving one — once it's confirmed caught up (FramesProcessed > 0: a
+    // decoded frame actually passed Video.checkNextFrameValid, i.e. landed at-or-before that fixed
+    // target), it's safe to resume live tracking: the decoder is warm and any further drift is
+    // ordinary steady-state playback, which osu.Framework's own per-frame check already handles
+    // fine (confirmed empirically across several real cached maps — never storms once already
+    // caught up, only during that first cold catch-up). But two more things go wrong if the freeze
+    // is otherwise left exactly as simple as "hold it, wait for a frame, unpause":
+    //
+    //  1. AnimationClockComposite.Update() still calls consumeClockTime() every frame while paused
+    //     (updating its internal lastConsumedTime bookkeeping) — it just doesn't *apply* the
+    //     elapsed delta to PlaybackPosition. So real time keeps passing while frozen, and blindly
+    //     flipping IsPlaying back on resumes tracking from the STALE frozen value with zero
+    //     catch-up: the entire freeze duration becomes a permanent lag baked into PlaybackPosition
+    //     forever (Video's own out-of-sync check only ever compares against its own
+    //     PlaybackPosition, never against the true clock, so a lag under lenience_before_seek never
+    //     self-corrects). Fix: snap PlaybackPosition to video.Time.Current (the real target — the
+    //     same clock startAtCurrentTime:false's LoadComplete seed reads from) right before
+    //     unpausing, cancelling the lag out in one shot.
+    //
+    //  2. Video.checkNextFrameValid requires frame.Time <= PlaybackPosition to display a decoded
+    //     frame. With PlaybackPosition held perfectly still at its initial seed, a landed frame
+    //     whose timestamp overshoots that exact value by even a few ms (unavoidable — decode lands
+    //     on frame boundaries, not our arbitrary seeded millisecond) never satisfies that check, so
+    //     FramesProcessed never increments and "wait for a frame" never fires — even though the
+    //     decoder is sitting there ready. Confirmed empirically: a real cached .avi map sat at
+    //     FramesProcessed=0 for the entire 5s timeout despite its own out-of-sync log showing the
+    //     decoder had reached the target within a fraction of a second. Fix: nudge PlaybackPosition
+    //     forward by a small fixed margin (video_warm_up_nudge_ms, roughly a frame's worth) every
+    //     video_warm_up_nudge_interval_ms while still waiting — enough to clear a boundary-hair
+    //     overshoot on an already-decoded frame, nowhere near the lenience_before_seek(2500ms)
+    //     needed to provoke a fresh decoder seek, and utterly unlike the ~16ms-cadence, unbounded
+    //     climb that produced the original storm.
+    //
+    // Bounded by videoWarmUpDeadline regardless, so a genuinely stuck decoder (as opposed to one
+    // merely catching up or clearing the boundary hair above) still starts tracking eventually
+    // instead of being held back forever.
     private bool videoWarmedUp = true;
     private double videoWarmUpDeadline;
+    private double videoNextWarmUpNudge;
 
     private const double video_warm_up_timeout_ms = 5000;
+    private const double video_warm_up_nudge_interval_ms = 150;
+    private const double video_warm_up_nudge_ms = 100;
 
     /// <summary>
     /// Test-only access to disposal state (JukeBox.Game.Tests has InternalsVisibleTo) —
@@ -211,6 +247,7 @@ public partial class BeatmapVisuals : CompositeDrawable
                 };
                 videoWarmedUp = false;
                 videoWarmUpDeadline = Clock.CurrentTime + video_warm_up_timeout_ms;
+                videoNextWarmUpNudge = Clock.CurrentTime + video_warm_up_nudge_interval_ms;
 
                 videoContainer = new Container
                 {
@@ -379,15 +416,26 @@ public partial class BeatmapVisuals : CompositeDrawable
             updateBackgroundVisibility();
         }
 
-        // See videoWarmedUp: release the pause once the decoder proves it landed a frame at the
-        // (frozen) seeded position, or once the bounded catch-up window has elapsed regardless —
-        // whichever comes first, so a video that's merely slow to seek isn't held back forever.
+        // See videoWarmedUp: FramesProcessed > 0 is the real confirmation the decoder has caught
+        // up to the frozen target (a frame genuinely passed Video's frame.Time <= PlaybackPosition
+        // check) — accept it, cancel the freeze-duration lag with one snap to the live target, and
+        // resume real-time tracking. Otherwise nudge the frozen target forward a little so a
+        // boundary-hair overshoot on an already-decoded frame doesn't deadlock the wait, or give up
+        // waiting once the bounded deadline passes regardless.
         if (!videoWarmedUp && video != null)
         {
-            if (video.FramesProcessed > 0 || Clock.CurrentTime >= videoWarmUpDeadline)
+            bool timedOut = Clock.CurrentTime >= videoWarmUpDeadline;
+
+            if (video.FramesProcessed > 0 || timedOut)
             {
+                video.PlaybackPosition = video.Time.Current;
                 video.IsPlaying = true;
                 videoWarmedUp = true;
+            }
+            else if (Clock.CurrentTime >= videoNextWarmUpNudge)
+            {
+                video.PlaybackPosition += video_warm_up_nudge_ms;
+                videoNextWarmUpNudge = Clock.CurrentTime + video_warm_up_nudge_interval_ms;
             }
         }
 
