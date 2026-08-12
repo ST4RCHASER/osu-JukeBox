@@ -40,6 +40,18 @@ public static class ChartComputations
     /// <summary>Follow-point dot spacing along the connecting line, in osu-px.</summary>
     public const float follow_point_spacing = 32;
 
+    /// <summary>
+    /// Authoritative cap on how many slider spans get render data (ball keyframes, reverse
+    /// arrows, tick passes). Real maps rarely exceed a dozen repeats; a hostile
+    /// <c>slides=100000</c> .osu must not translate into ~100k drawables/transforms at load.
+    /// Spans beyond the cap are visually truncated (the ball freezes at its last keyframe until
+    /// the slider fades) — acceptable for a display layer.
+    /// </summary>
+    public const int MaxRenderedSlides = 64;
+
+    /// <summary>The clamped span count all slider render data derives from.</summary>
+    public static int RenderedSlides(ChartHitObject slider) => Math.Clamp(slider.Slides, 1, MaxRenderedSlides);
+
     // ---- Combo assignment ----------------------------------------------------------------------
 
     /// <summary>
@@ -258,7 +270,9 @@ public static class ChartComputations
         if (path.Count == 0 || slider.SpanDuration <= 0)
             return result;
 
-        int slides = Math.Max(1, slider.Slides);
+        // Both factors are bounded: slides ≤ MaxRenderedSlides and samples shrinks as slides
+        // grows, so the total keyframe count stays ≤ ~600 regardless of the input.
+        int slides = RenderedSlides(slider);
         int samples = Math.Clamp(600 / slides, 4, Math.Max(4, samplesPerSpan));
 
         var cumulative = CumulativeLengths(path);
@@ -303,7 +317,10 @@ public static class ChartComputations
         var cumulative = CumulativeLengths(path);
         float total = cumulative[^1];
 
-        for (int r = 1; r < slider.Slides; r++)
+        // ≤ MaxRenderedSlides − 1 arrows, however absurd the .osu's repeat count.
+        int slides = RenderedSlides(slider);
+
+        for (int r = 1; r < slides; r++)
         {
             bool atTail = r % 2 == 1;
 
@@ -367,7 +384,7 @@ public static class ChartComputations
             spanTicks.Add((offset, PositionAtDistance(path, cumulative, distance)));
         }
 
-        int slides = Math.Max(1, slider.Slides);
+        int slides = RenderedSlides(slider);
 
         for (int span = 0; span < slides && result.Count < max_ticks_per_slider; span++)
         {

@@ -50,6 +50,33 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("three objects compiled", () => layer.TotalObjectCount == 3);
         }
 
+        // A hostile repeat count must not turn into ~100k drawables/transforms: the
+        // MaxRenderedSlides clamp bounds every slider's render data, so the layer still loads
+        // within the step's timeout (the AddUntilStep IS the time box).
+        [Test]
+        public void AbsurdRepeatSliderStillLoadsPromptly()
+        {
+            ChartLayer hostileLayer = null!;
+
+            AddStep("create 100k-repeat slider layer", () =>
+            {
+                var beatmap = BeatmapParser.ParseLines(new[]
+                {
+                    "[Difficulty]", "CircleSize:4", "ApproachRate:5", "SliderMultiplier:1.4",
+                    "[TimingPoints]", "0,500,4,1,0,100,1,0",
+                    "[HitObjects]", "100,100,1000,2,0,B|200:100|300:100,100000,140",
+                });
+
+                Child = hostileLayer = new ChartLayer(beatmap)
+                {
+                    Clock = new FramedClock(manual),
+                };
+            });
+
+            AddUntilStep("hostile layer loaded", () => hostileLayer.IsLoaded);
+            AddAssert("one object compiled", () => hostileLayer.TotalObjectCount == 1);
+        }
+
         [Test]
         public void ObjectAliveOnlyWithinPreemptWindow()
         {
