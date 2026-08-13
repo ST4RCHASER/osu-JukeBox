@@ -28,6 +28,8 @@ public enum JukeBoxSetting
     BackgroundBlur,
     ShowStoryboardVideo,
     UiScale,
+    /// <summary>Global audio offset in ms, added to the per-beatmap offset (BeatmapOffsetStore).</summary>
+    GlobalAudioOffset,
 }
 
 /// <summary>
@@ -88,5 +90,6 @@ public class JukeBoxConfigManager : IniConfigManager<JukeBoxSetting>
         SetDefault(JukeBoxSetting.BackgroundBlur, 0.0, 0.0, 1.0);
         SetDefault(JukeBoxSetting.ShowStoryboardVideo, true);
         SetDefault(JukeBoxSetting.UiScale, 1.0, 0.8, 1.6);
+        SetDefault(JukeBoxSetting.GlobalAudioOffset, 0.0, -250.0, 250.0);
     }
 }

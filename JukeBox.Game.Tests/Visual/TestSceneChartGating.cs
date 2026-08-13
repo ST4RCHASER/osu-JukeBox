@@ -30,6 +30,9 @@ namespace JukeBox.Game.Tests.Visual
         [Resolved]
         private JukeBoxConfigManager config { get; set; } = null!;
 
+        [Resolved]
+        private BeatmapOffsetStore offsetStore { get; set; } = null!;
+
         [Cached]
         private readonly PlaybackController controller = new PlaybackController();
 
@@ -122,6 +125,48 @@ namespace JukeBox.Game.Tests.Visual
             {
                 config.SetValue(JukeBoxSetting.RenderChart, false);
                 config.SetValue(JukeBoxSetting.PlayHitSounds, false);
+            });
+        }
+
+        // The per-beatmap/global audio offsets shift the whole visual clock relative to the track:
+        // visual time = playback time + (beatmap offset + global offset).
+        [Test]
+        public void AudioOffsetShiftsVisualClock()
+        {
+            var manual = new ManualClock();
+            var framed = new FramedClock(manual);
+            BeatmapVisuals visuals = null!;
+
+            AddStep("reset offsets", () =>
+            {
+                offsetStore.CurrentOffset.Value = 0;
+                config.SetValue(JukeBoxSetting.GlobalAudioOffset, 0.0);
+            });
+
+            AddStep("create visuals", () => Add(visuals = new BeatmapVisuals(plainSet, framed)
+            {
+                RelativeSizeAxes = Axes.Both,
+            }));
+            AddUntilStep("visuals loaded", () => visuals.IsLoaded);
+
+            AddStep("advance source to 5000ms", () =>
+            {
+                manual.CurrentTime = 5000;
+                framed.ProcessFrame();
+            });
+            AddUntilStep("visual clock at source time", () => System.Math.Abs(visuals.VisualClockTime - 5000) < 1);
+
+            AddStep("beatmap offset +150", () => offsetStore.CurrentOffset.Value = 150);
+            AddUntilStep("visual clock shifted +150", () => System.Math.Abs(visuals.VisualClockTime - 5150) < 1);
+
+            AddStep("global offset -50", () => config.SetValue(JukeBoxSetting.GlobalAudioOffset, -50.0));
+            AddUntilStep("offsets sum to +100", () => System.Math.Abs(visuals.VisualClockTime - 5100) < 1);
+
+            AddStep("restore offsets and remove", () =>
+            {
+                offsetStore.CurrentOffset.Value = 0;
+                config.SetValue(JukeBoxSetting.GlobalAudioOffset, 0.0);
+                Remove(visuals, true);
             });
         }
 

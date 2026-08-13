@@ -13,6 +13,7 @@ using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.IO.Stores;
 using osu.Framework.Platform;
+using osu.Framework.Testing;
 using osu.Framework.Timing;
 using osu.Game.Audio;
 using osu.Game.Beatmaps;
@@ -107,6 +108,9 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
 
     /// <summary>The hosted lazer DrawableRuleset (test hook).</summary>
     internal DrawableRuleset? DrawableRuleset => drawableRuleset;
+
+    /// <summary>Whether the osu! replay-analysis overlay got attached (test hook).</summary>
+    internal bool HasAnalysisOverlay => this.ChildrenOfType<osu.Game.Rulesets.Osu.UI.ReplayAnalysisOverlay>().Any();
 
     private DependencyContainer dependencies = null!;
 
@@ -247,6 +251,39 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
         // here the autoplay replay drives gameplay entirely off our inherited playback clock.
         if (autoplayScore != null)
             drawableRuleset?.SetReplayScore(autoplayScore);
+
+        attachOsuReplayAnalysis();
+    }
+
+    // Live binding for the "Hide gameplay cursor" replay setting (field: config bindables are
+    // weak-referenced back to the master).
+    private Bindable<bool>? cursorHideEnabled;
+
+    [Resolved(canBeNull: true)]
+    private IRulesetConfigCache rulesetConfigs { get; set; } = null!;
+
+    /// <summary>
+    /// osu!-only replay-analysis overlays (click markers / frame markers / cursor path / display
+    /// length) plus the hide-cursor toggle — the exact wiring lazer's DrawableOsuRuleset performs
+    /// when a ReplayPlayer is present in DI. That gate never opens here (ReplayPlayer is the full
+    /// Player screen; we host the bare DrawableRuleset), but ReplayAnalysisOverlay itself only
+    /// resolves OsuRulesetConfigManager — provided inside the DrawableRuleset subtree — so
+    /// attaching it from outside reproduces lazer's behaviour 1:1, driven by our autoplay replay.
+    /// </summary>
+    private void attachOsuReplayAnalysis()
+    {
+        if (drawableRuleset is not osu.Game.Rulesets.Osu.UI.DrawableOsuRuleset osuRuleset || autoplayScore?.Replay == null)
+            return;
+
+        var analysisOverlay = new osu.Game.Rulesets.Osu.UI.ReplayAnalysisOverlay(autoplayScore.Replay);
+        osuRuleset.PlayfieldAdjustmentContainer.Add(analysisOverlay);
+        osuRuleset.Overlays.Add(analysisOverlay.CreateProxy().With(p => p.Depth = float.NegativeInfinity));
+
+        if (rulesetConfigs?.GetConfigFor(Ruleset!) is osu.Game.Rulesets.Osu.Configuration.OsuRulesetConfigManager osuConfig)
+        {
+            cursorHideEnabled = osuConfig.GetBindable<bool>(osu.Game.Rulesets.Osu.Configuration.OsuRulesetSetting.ReplayCursorHideEnabled);
+            cursorHideEnabled.BindValueChanged(e => osuRuleset.Playfield.Cursor?.FadeTo(e.NewValue ? 0 : 1), true);
+        }
     }
 
     protected override void Update()

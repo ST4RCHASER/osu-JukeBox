@@ -82,6 +82,15 @@ public partial class SettingsOverlay : FocusedOverlayContainer
     [Resolved(canBeNull: true)]
     private IRulesetConfigCache? rulesetConfigs { get; set; }
 
+    [Resolved(canBeNull: true)]
+    private JukeBox.Game.Playback.PlaybackController? playback { get; set; }
+
+    [Resolved(canBeNull: true)]
+    private JukeBox.Game.Playback.Jukebox? jukebox { get; set; }
+
+    [Resolved(canBeNull: true)]
+    private JukeBox.Game.Playback.BeatmapOffsetStore? offsetStore { get; set; }
+
     // Only ever assigned (and used) in the floating branch of load() — a docked instance has no
     // card to pop, and its PopIn/PopOut are both guarded no-ops (see their own comments below).
     private Container? panelCard;
@@ -120,6 +129,24 @@ public partial class SettingsOverlay : FocusedOverlayContainer
     private SliderRow<float> comboNormalisationRow = null!;
     private SliderRow<double> inactiveVolumeRow = null!;
     private SliderRow<float> positionalHitsoundsRow = null!;
+
+    // ---- playback (controller-bound; only built when a PlaybackController is present) ----
+    private SliderRow<double> playbackRateRow = null!;
+    private SliderRow<double> beatmapOffsetRow = null!;
+    private SliderRow<double> globalOffsetRow = null!;
+
+    // ---- replay analysis (osu! ruleset config; only built with the ruleset config cache) ----
+    private BasicCheckbox clickMarkersCheckbox = null!;
+    private BasicCheckbox frameMarkersCheckbox = null!;
+    private BasicCheckbox cursorPathCheckbox = null!;
+    private BasicCheckbox hideCursorCheckbox = null!;
+    private SliderRow<int> analysisLengthRow = null!;
+
+    // Ranged local for the display-length slider, synced two-way with the config value: the config
+    // bindable is declared rangeless upstream, and BindTo would copy that (unusable) range onto
+    // whatever binds it.
+    private readonly BindableInt analysisDisplayLength = new BindableInt(800) { MinValue = 200, MaxValue = 2000, Precision = 100 };
+    private Bindable<int>? analysisLengthConfig;
 
     // ---- ruleset settings; only built when the ruleset config cache is present ----
     private BasicCheckbox snakingInCheckbox = null!;
@@ -231,6 +258,13 @@ public partial class SettingsOverlay : FocusedOverlayContainer
                 })),
         };
 
+        if (playback != null)
+        {
+            sections.Add(section("Playback",
+                new TransportRow(playback, jukebox),
+                playbackRateRow = new SliderRow<double>("Playback speed", v => $"{v:0.00}x")));
+        }
+
         // Per-ruleset settings need the ruleset config cache (realm-backed); a bare test scene
         // without it gets no dead controls.
         if (rulesetConfigs != null)
@@ -258,6 +292,15 @@ public partial class SettingsOverlay : FocusedOverlayContainer
                 }),
                 maniaScrollSpeedRow = new SliderRow<double>("Scroll speed", v => $"{v:0.0}"),
                 maniaTimingColourCheckbox = new BasicCheckbox { LabelText = "Timing-based note colouring" }));
+
+            // Replay-analysis overlays: our autoplay chart IS replay-driven, and LazerChartLayer
+            // attaches lazer's ReplayAnalysisOverlay for osu! charts, bound to these keys.
+            sections.Add(section("Analysis (osu!)",
+                clickMarkersCheckbox = new BasicCheckbox { LabelText = "Show click markers" },
+                frameMarkersCheckbox = new BasicCheckbox { LabelText = "Show frame markers" },
+                cursorPathCheckbox = new BasicCheckbox { LabelText = "Show cursor path" },
+                hideCursorCheckbox = new BasicCheckbox { LabelText = "Hide gameplay cursor" },
+                analysisLengthRow = new SliderRow<int>("Display length", v => $"{v} ms")));
         }
 
         var gameplayRows = new List<Drawable>();
@@ -296,6 +339,11 @@ public partial class SettingsOverlay : FocusedOverlayContainer
 
         audioRows.Add(effectVolumeRow = new SliderRow<double>("Effect", v => $"{v:P0}"));
         audioRows.Add(musicVolumeRow = new SliderRow<double>("Music", v => $"{v:P0}"));
+
+        if (offsetStore != null)
+            audioRows.Add(beatmapOffsetRow = new SliderRow<double>("Audio offset (this beatmap)", v => $"{v:+0;-0;0} ms"));
+
+        audioRows.Add(globalOffsetRow = new SliderRow<double>("Audio offset (global)", v => $"{v:+0;-0;0} ms"));
 
         if (lazerConfig != null)
             audioRows.Add(positionalHitsoundsRow = new SliderRow<float>("Hitsound stereo separation", v => $"{v:P0}"));
@@ -375,7 +423,16 @@ public partial class SettingsOverlay : FocusedOverlayContainer
         backgroundDimRow.Slider.Current = config.GetBindable<double>(JukeBoxSetting.BackgroundDim);
         backgroundBlurRow.Slider.Current = config.GetBindable<double>(JukeBoxSetting.BackgroundBlur);
         uiScaleRow.Slider.Current = config.GetBindable<double>(JukeBoxSetting.UiScale);
+        globalOffsetRow.Slider.Current = config.GetBindable<double>(JukeBoxSetting.GlobalAudioOffset);
         mirrorDropdown.Current = config.GetBindable<MirrorSource>(JukeBoxSetting.PreferredMirror);
+
+        // Session-only, like lazer's replay playback control (deliberately not persisted).
+        if (playback != null)
+            playbackRateRow.Slider.Current = playback.PlaybackRate;
+
+        // Per-set offset: the store retargets this bindable on every song change and persists edits.
+        if (offsetStore != null)
+            beatmapOffsetRow.Slider.Current = offsetStore.CurrentOffset;
 
         // ---- framework (all apply live; renderer takes effect on restart) ----
         audioDeviceDropdown.Current = frameworkConfig.GetBindable<string>(FrameworkSetting.AudioDevice);
@@ -461,6 +518,21 @@ public partial class SettingsOverlay : FocusedOverlayContainer
             maniaDirectionDropdown.Current = maniaRulesetConfig.GetBindable<ManiaScrollingDirection>(ManiaRulesetSetting.ScrollDirection);
             maniaScrollSpeedRow.Slider.Current = maniaRulesetConfig.GetBindable<double>(ManiaRulesetSetting.ScrollSpeed);
             maniaTimingColourCheckbox.Current = maniaRulesetConfig.GetBindable<bool>(ManiaRulesetSetting.TimingBasedNoteColouring);
+        }
+
+        if (rulesetConfigs.GetConfigFor(new OsuRuleset()) is OsuRulesetConfigManager osuAnalysisConfig)
+        {
+            clickMarkersCheckbox.Current = osuAnalysisConfig.GetBindable<bool>(OsuRulesetSetting.ReplayClickMarkersEnabled);
+            frameMarkersCheckbox.Current = osuAnalysisConfig.GetBindable<bool>(OsuRulesetSetting.ReplayFrameMarkersEnabled);
+            cursorPathCheckbox.Current = osuAnalysisConfig.GetBindable<bool>(OsuRulesetSetting.ReplayCursorPathEnabled);
+            hideCursorCheckbox.Current = osuAnalysisConfig.GetBindable<bool>(OsuRulesetSetting.ReplayCursorHideEnabled);
+
+            // Two-way sync (see analysisDisplayLength remarks) instead of a direct bind.
+            analysisLengthConfig = osuAnalysisConfig.GetBindable<int>(OsuRulesetSetting.ReplayAnalysisDisplayLength);
+            analysisDisplayLength.Value = analysisLengthConfig.Value;
+            analysisDisplayLength.BindValueChanged(e => analysisLengthConfig!.Value = e.NewValue);
+            analysisLengthConfig.BindValueChanged(e => analysisDisplayLength.Value = e.NewValue);
+            analysisLengthRow.Slider.Current = analysisDisplayLength;
         }
     }
 
@@ -649,5 +721,72 @@ public partial class SettingsOverlay : FocusedOverlayContainer
     {
         protected override LocalisableString GenerateItemText(string item)
             => string.IsNullOrEmpty(item) ? "System default" : item;
+    }
+
+    /// <summary>
+    /// The lazer replay-player transport strip: restart, −5s, play/pause, +5s, skip-next — all
+    /// routed through the existing controller/jukebox methods (no new playback machinery). The
+    /// play/pause icon tracks <see cref="Playback.PlaybackController.IsPlaying"/> (a plain
+    /// property, hence the per-frame refresh).
+    /// </summary>
+    internal partial class TransportRow : FillFlowContainer
+    {
+        private readonly Playback.PlaybackController playback;
+        private readonly IconButton playPause;
+
+        private const double seek_step_ms = 5000;
+
+        public TransportRow(Playback.PlaybackController playback, Playback.Jukebox? jukebox)
+        {
+            this.playback = playback;
+
+            RelativeSizeAxes = Axes.X;
+            AutoSizeAxes = Axes.Y;
+            Direction = FillDirection.Horizontal;
+            Spacing = new Vector2(Theme.RowSpacing, 0);
+
+            Add(new IconButton
+            {
+                Icon = FontAwesome.Solid.UndoAlt,
+                Size = new Vector2(32),
+                Action = () => playback.Seek(0),
+            });
+            Add(new IconButton
+            {
+                Icon = FontAwesome.Solid.Backward,
+                Size = new Vector2(32),
+                Action = () => playback.Seek(Math.Max(0, playback.CurrentTimeMs - seek_step_ms)),
+            });
+            Add(playPause = new IconButton
+            {
+                Icon = FontAwesome.Solid.Play,
+                Size = new Vector2(32),
+                IdleColour = Theme.AccentDim,
+                HoverColour = Theme.Accent,
+                Action = playback.TogglePause,
+            });
+            Add(new IconButton
+            {
+                Icon = FontAwesome.Solid.Forward,
+                Size = new Vector2(32),
+                Action = () => playback.Seek(Math.Min(playback.LengthMs, playback.CurrentTimeMs + seek_step_ms)),
+            });
+
+            if (jukebox != null)
+            {
+                Add(new IconButton
+                {
+                    Icon = FontAwesome.Solid.StepForward,
+                    Size = new Vector2(32),
+                    Action = jukebox.SkipCurrent,
+                });
+            }
+        }
+
+        protected override void Update()
+        {
+            base.Update();
+            playPause.Icon = playback.IsPlaying ? FontAwesome.Solid.Pause : FontAwesome.Solid.Play;
+        }
     }
 }

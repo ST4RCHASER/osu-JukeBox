@@ -42,6 +42,17 @@ namespace JukeBox.Game.Tests.Visual
         [Test]
         public void OsuLayerRendersGameplay() => runForMode(0, typeof(OsuRuleset));
 
+        // The osu! replay-analysis overlay (click markers / cursor path / frame markers) attaches
+        // to the hosted DrawableRuleset exactly as lazer's ReplayPlayer path does — driven by the
+        // autoplay replay, config-bound to the real OsuRulesetConfigManager keys.
+        [Test]
+        public void OsuLayerAttachesReplayAnalysisOverlay()
+        {
+            createLayer(0);
+            AddUntilStep("layer loaded", () => layer.IsLoaded && layer.DrawableRuleset != null);
+            AddUntilStep("analysis overlay attached", () => layer.HasAnalysisOverlay);
+        }
+
         [Test]
         public void TaikoLayerRendersGameplay() => runForMode(1, typeof(TaikoRuleset));
 

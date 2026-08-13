@@ -34,6 +34,7 @@ public partial class BeatmapVisuals : CompositeDrawable
     private readonly CachedBeatmapSet set;
     private readonly string? osuFile;
     private readonly IFrameBasedClock playbackClock;
+    private FramedOffsetClock offsetClock = null!;
 
     private TextureStore? backgroundTextures;
     private Sprite? backgroundSprite;
@@ -75,6 +76,15 @@ public partial class BeatmapVisuals : CompositeDrawable
 
     [Resolved(canBeNull: true)]
     private SkinSelection? skinSelection { get; set; }
+
+    [Resolved(canBeNull: true)]
+    private BeatmapOffsetStore? offsetStore { get; set; }
+
+    private readonly BindableDouble beatmapOffset = new();
+    private readonly BindableDouble globalOffset = new();
+
+    /// <summary>Test-only: the offset-adjusted clock time driving the visual stack.</summary>
+    internal double VisualClockTime => offsetClock.CurrentTime;
 
     /// <summary>
     /// Test-only access to disposal state (JukeBox.Game.Tests has InternalsVisibleTo) —
@@ -157,11 +167,14 @@ public partial class BeatmapVisuals : CompositeDrawable
     {
         RelativeSizeAxes = Axes.Both;
 
-        // PlaybackController pumps this clock's ProcessFrame() itself every Update() — leaving
-        // ProcessCustomClock at its default (true) would pump it a second time here and corrupt
-        // its ElapsedFrameTime bookkeeping.
-        Clock = playbackClock;
-        ProcessCustomClock = false;
+        // Audio-offset wrapper around the shared playback clock: shifts the ENTIRE visual stack
+        // (storyboard, chart, hitsound timing) relative to the track — positive offset runs the
+        // visuals earlier (compensates audio that sounds late). processSource: false because
+        // PlaybackController pumps the underlying clock's ProcessFrame() itself every Update() —
+        // pumping it from here too would corrupt its ElapsedFrameTime bookkeeping. The wrapper
+        // still needs its own per-frame latch, hence ProcessCustomClock stays true.
+        Clock = offsetClock = new FramedOffsetClock(playbackClock, false);
+        ProcessCustomClock = true;
 
         // Plain black backdrop, always present and always fully opaque — video (FillMode.Fit) and
         // the storyboard (uniform-scaled, possibly narrower than widescreen) don't necessarily
@@ -300,6 +313,11 @@ public partial class BeatmapVisuals : CompositeDrawable
         if (skinSelection != null)
             effectiveSkin.BindTo(skinSelection.Effective);
 
+        if (offsetStore != null)
+            beatmapOffset.BindTo(offsetStore.CurrentOffset);
+
+        config?.BindWith(JukeBoxSetting.GlobalAudioOffset, globalOffset);
+
         // Build the lazer layer during async load when a setting already wants it, so the
         // (conversion + autoplay-generation) cost stays off the update thread for the common path.
         updateLazerLayer();
@@ -325,6 +343,10 @@ public partial class BeatmapVisuals : CompositeDrawable
             updateBackgroundVisibility();
         }, true);
 
+        beatmapOffset.BindValueChanged(_ => updateClockOffset());
+        globalOffset.BindValueChanged(_ => updateClockOffset());
+        updateClockOffset();
+
         // A skin choice change (dropdown flip, or Random's per-song re-roll) rebuilds the chart
         // layer — the skin chain is constructed once per LazerChartLayer, so a rebuild is the
         // application mechanism (documented; the ruleset checkboxes by contrast apply live).
@@ -338,6 +360,8 @@ public partial class BeatmapVisuals : CompositeDrawable
             updateLazerLayer();
         });
     }
+
+    private void updateClockOffset() => offsetClock.Offset = beatmapOffset.Value + globalOffset.Value;
 
     /// <summary>
     /// Hides our own background sprite when the storyboard replaces it or a working video plays,

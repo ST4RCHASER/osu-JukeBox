@@ -30,6 +30,15 @@ public partial class PlaybackController : Component
 
     public readonly BindableDouble Volume = new(1) { MinValue = 0, MaxValue = 1 };
 
+    /// <summary>
+    /// Playback speed multiplier (0.5×–2×), applied as a Tempo adjustment — speed changes
+    /// without pitch shift, matching lazer's replay-player playback control. Session-only (not
+    /// persisted), same as lazer. Visuals need no extra wiring: the storyboard and chart run off
+    /// <see cref="PlaybackClock"/>, whose source is the tempo-adjusted track, so gameplay time
+    /// follows the audible rate automatically.
+    /// </summary>
+    public readonly BindableDouble PlaybackRate = new(1) { MinValue = 0.5, MaxValue = 2, Precision = 0.05 };
+
     // Stable across the controller's lifetime: consumers hold onto this reference while the
     // underlying track (the actual clock source) is swapped out on every PlayAsync.
     private readonly DecouplingFramedClock decoupledClock = new() { AllowDecoupling = true };
@@ -133,6 +142,7 @@ public partial class PlaybackController : Component
             // AddAdjustment multiplies the track's own (default 1) volume by ours on every
             // change, including immediately — no separate initial-value assignment needed.
             track.AddAdjustment(AdjustableProperty.Volume, Volume);
+            track.AddAdjustment(AdjustableProperty.Tempo, PlaybackRate);
             track.Completed += () => Schedule(() => TrackCompleted?.Invoke());
 
             decoupledClock.ChangeSource(track);
@@ -226,6 +236,7 @@ public partial class PlaybackController : Component
             currentAudioPath = newAudio;
 
             track.AddAdjustment(AdjustableProperty.Volume, Volume);
+            track.AddAdjustment(AdjustableProperty.Tempo, PlaybackRate);
             track.Completed += () => Schedule(() => TrackCompleted?.Invoke());
 
             decoupledClock.ChangeSource(track);
@@ -260,6 +271,9 @@ public partial class PlaybackController : Component
     }
 
     public void Seek(double ms) => decoupledClock.Seek(ms);
+
+    /// <summary>Test-only access to the live track (JukeBox.Game.Tests has InternalsVisibleTo).</summary>
+    internal Track? CurrentTrack => currentTrack;
 
     protected override void Dispose(bool isDisposing)
     {

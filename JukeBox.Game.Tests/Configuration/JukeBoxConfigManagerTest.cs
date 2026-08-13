@@ -27,6 +27,7 @@ namespace JukeBox.Game.Tests.Configuration
             Assert.That(config.Get<bool>(JukeBoxSetting.ShowStoryboardVideo), Is.True);
             Assert.That(config.Get<double>(JukeBoxSetting.UiScale), Is.EqualTo(1.0));
             Assert.That(config.Get<bool>(JukeBoxSetting.VolumeMigrated), Is.False);
+            Assert.That(config.Get<double>(JukeBoxSetting.GlobalAudioOffset), Is.EqualTo(0.0));
 
             // UiScale range must clamp to the supported 0.8–1.6 window.
             config.SetValue(JukeBoxSetting.UiScale, 5.0);
