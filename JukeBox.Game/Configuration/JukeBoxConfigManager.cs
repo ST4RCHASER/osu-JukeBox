@@ -55,15 +55,22 @@ public enum JukeBoxSetting
     /// <summary>One-shot guard for the <see cref="FpsDisplay"/> (legacy) → <see cref="FpsDisplayMode"/> migration.</summary>
     FpsDisplayModeMigrated,
     /// <summary>
-    /// Uniform scale applied around the chart host (wrapping <see cref="JukeBox.Game.LazerPlayer.LazerChartLayer"/>'s
-    /// container, outside the ruleset-specific sizing/scale in BeatmapVisuals' chartContainer) —
-    /// 1.0 is the nominal size. Below 1.0 shrinks the whole chart view so content that would
-    /// otherwise render past the player box's edge (e.g. a note's spawn position, or catch's
-    /// deliberately-overflowing playfield — see catch_reserved_height's remarks) becomes visible
-    /// sooner; above 1.0 magnifies it. Storyboard/video/background are unaffected — only the chart
-    /// host is scaled. See BeatmapVisuals.load/LoadComplete.
+    /// Uniform scale applied to <see cref="Screens.MainScreen"/>'s own sceneContainer (the fixed
+    /// design-canvas host of the ENTIRE visuals stack — background, storyboard/video, and chart
+    /// together — that <c>updateSceneScale</c> already aspect-fits into <c>playerBox</c> every
+    /// frame; this factor multiplies into that same computed scale), not anything inside
+    /// BeatmapVisuals — 1.0 is the nominal (unzoomed) size. Below 1.0 shrinks the whole scene;
+    /// above 1.0 magnifies it. <c>playerBox</c>'s own masking is what clips it at the box's edges
+    /// either way — nothing here relaxes or extends that. See MainScreen.updateSceneScale.
+    ///
+    /// Renamed from the short-lived ChartZoom (chart-only scale, applied inside BeatmapVisuals
+    /// instead — see that type's git history) directly, without a migration path: ChartZoom was
+    /// never in a released build (added and reworked within the same development cycle), so there
+    /// is no real persisted value anywhere that would need remapping — unlike e.g. <see cref="Volume"/>
+    /// or the FpsDisplay pair above, which DO carry real legacy ini values and so keep their old key
+    /// around as a one-shot migration source.
     /// </summary>
-    ChartZoom,
+    PlayfieldZoom,
 }
 
 /// <summary>
@@ -171,6 +178,6 @@ public class JukeBoxConfigManager : IniConfigManager<JukeBoxSetting>
         SetDefault(JukeBoxSetting.ShowStoryboardVideo, true);
         SetDefault(JukeBoxSetting.UiScale, 1.0, 0.8, 1.6);
         SetDefault(JukeBoxSetting.GlobalAudioOffset, 0.0, -250.0, 250.0);
-        SetDefault(JukeBoxSetting.ChartZoom, 1.0, 0.5, 1.5);
+        SetDefault(JukeBoxSetting.PlayfieldZoom, 1.0, 0.01, 2.0);
     }
 }

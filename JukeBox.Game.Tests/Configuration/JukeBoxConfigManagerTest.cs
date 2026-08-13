@@ -107,17 +107,17 @@ namespace JukeBox.Game.Tests.Configuration
         }
 
         [Test]
-        public void ChartZoomDefaultsTo100PercentAndClampsToSupportedRange()
+        public void PlayfieldZoomDefaultsTo100PercentAndClampsToSupportedRange()
         {
             var config = new JukeBoxConfigManager(new TemporaryNativeStorage(Path.Combine("jukebox-config-test", Path.GetRandomFileName())));
 
-            Assert.That(config.Get<double>(JukeBoxSetting.ChartZoom), Is.EqualTo(1.0));
+            Assert.That(config.Get<double>(JukeBoxSetting.PlayfieldZoom), Is.EqualTo(1.0));
 
-            // ChartZoom range must clamp to the supported 50%–150% window.
-            config.SetValue(JukeBoxSetting.ChartZoom, 5.0);
-            Assert.That(config.Get<double>(JukeBoxSetting.ChartZoom), Is.EqualTo(1.5));
-            config.SetValue(JukeBoxSetting.ChartZoom, 0.1);
-            Assert.That(config.Get<double>(JukeBoxSetting.ChartZoom), Is.EqualTo(0.5));
+            // PlayfieldZoom range must clamp to the supported 1%–200% window.
+            config.SetValue(JukeBoxSetting.PlayfieldZoom, 5.0);
+            Assert.That(config.Get<double>(JukeBoxSetting.PlayfieldZoom), Is.EqualTo(2.0));
+            config.SetValue(JukeBoxSetting.PlayfieldZoom, -1.0);
+            Assert.That(config.Get<double>(JukeBoxSetting.PlayfieldZoom), Is.EqualTo(0.01));
         }
 
         [Test]
