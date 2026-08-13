@@ -105,19 +105,36 @@ namespace JukeBox.Game.Tests.Visual
         }
 
         [Test]
-        public void ChangingChartZoomSliderUpdatesConfigValueAndPersistsAcrossRecreation()
+        public void ChangingPlayfieldZoomSliderUpdatesConfigValueAndPersistsAcrossRecreation()
         {
             AddStep("show overlay", () => overlay.Show());
-            AddAssert("config starts 100%", () => config.Get<double>(JukeBoxSetting.ChartZoom) == 1.0);
-            AddAssert("slider starts 100%", () => overlay.ChartZoomSlider.Current.Value == 1.0);
+            AddAssert("config starts 100%", () => config.Get<double>(JukeBoxSetting.PlayfieldZoom) == 1.0);
+            AddAssert("slider starts 100%", () => overlay.PlayfieldZoomSlider.Current.Value == 1.0);
 
-            AddStep("set chart zoom to 60%", () => overlay.ChartZoomSlider.Current.Value = 0.6);
-            AddAssert("config bindable updated to 60%", () => config.Get<double>(JukeBoxSetting.ChartZoom) == 0.6);
+            AddStep("set playfield zoom to 60%", () => overlay.PlayfieldZoomSlider.Current.Value = 0.6);
+            AddAssert("config bindable updated to 60%", () => config.Get<double>(JukeBoxSetting.PlayfieldZoom) == 0.6);
 
             AddStep("recreate overlay", () => Child = overlay = new SettingsOverlay());
-            AddAssert("slider starts at the persisted 60%", () => overlay.ChartZoomSlider.Current.Value == 0.6);
+            AddAssert("slider starts at the persisted 60%", () => overlay.PlayfieldZoomSlider.Current.Value == 0.6);
 
-            AddStep("restore default 100%", () => overlay.ChartZoomSlider.Current.Value = 1.0);
+            AddStep("restore default 100%", () => overlay.PlayfieldZoomSlider.Current.Value = 1.0);
+        }
+
+        // Regression coverage for the ChartZoom -> PlayfieldZoom rework's widened 1%-200% range
+        // (was 50%-150%) — the slider must actually reach both new extremes, not just clamp back
+        // to the old window.
+        [Test]
+        public void PlayfieldZoomSliderReachesWidenedRangeExtremes()
+        {
+            AddStep("show overlay", () => overlay.Show());
+
+            AddStep("set playfield zoom to 1%", () => overlay.PlayfieldZoomSlider.Current.Value = 0.01);
+            AddAssert("config bindable updated to 1%", () => config.Get<double>(JukeBoxSetting.PlayfieldZoom) == 0.01);
+
+            AddStep("set playfield zoom to 200%", () => overlay.PlayfieldZoomSlider.Current.Value = 2.0);
+            AddAssert("config bindable updated to 200%", () => config.Get<double>(JukeBoxSetting.PlayfieldZoom) == 2.0);
+
+            AddStep("restore default 100%", () => overlay.PlayfieldZoomSlider.Current.Value = 1.0);
         }
 
         [Test]

@@ -123,7 +123,7 @@ public partial class SettingsOverlay : FocusedOverlayContainer
     private SettingsSlider<double> backgroundDimRow = null!;
     private SettingsSlider<double> backgroundBlurRow = null!;
     private SettingsSlider<double> uiScaleRow = null!;
-    private SettingsSlider<double> chartZoomRow = null!;
+    private SettingsSlider<double> playfieldZoomRow = null!;
     private SettingsEnumDropdown<MirrorSource> mirrorDropdown = null!;
 
     // ---- framework settings ----
@@ -197,7 +197,7 @@ public partial class SettingsOverlay : FocusedOverlayContainer
     internal SettingsCheckbox RenderChartCheckbox => renderChartCheckbox;
     internal SettingsCheckbox PlayHitSoundsCheckbox => playHitSoundsCheckbox;
     internal SettingsSlider<double> BackgroundDimSlider => backgroundDimRow;
-    internal SettingsSlider<double> ChartZoomSlider => chartZoomRow;
+    internal SettingsSlider<double> PlayfieldZoomSlider => playfieldZoomRow;
     internal SettingsDropdown<JukeBoxSkin> SkinDropdown => skinDropdown;
     internal SettingsSlider<double>? ManiaScrollSpeedSlider => rulesetConfigs != null ? maniaScrollSpeedRow : null;
     internal SettingsDropdown<string> AudioDeviceDropdown => audioDeviceDropdown;
@@ -379,7 +379,7 @@ public partial class SettingsOverlay : FocusedOverlayContainer
         gameplayRows.Add(backgroundBlurRow = new SettingsSlider<double> { LabelText = "Background blur", DisplayAsPercentage = true, KeyboardStep = 0.01f });
         gameplayRows.Add(renderChartCheckbox = new SettingsCheckbox { LabelText = "Render chart" });
         gameplayRows.Add(playHitSoundsCheckbox = new SettingsCheckbox { LabelText = "Play hit sounds" });
-        gameplayRows.Add(chartZoomRow = new SettingsSlider<double> { LabelText = "Chart zoom", DisplayAsPercentage = true, KeyboardStep = 0.01f });
+        gameplayRows.Add(playfieldZoomRow = new SettingsSlider<double> { LabelText = "Playfield zoom", DisplayAsPercentage = true, KeyboardStep = 0.01f });
         sections.Add(new Section("Gameplay", FontAwesome.Regular.DotCircle) { Children = gameplayRows });
 
         var beatmapRows = new List<Drawable>();
@@ -484,7 +484,7 @@ public partial class SettingsOverlay : FocusedOverlayContainer
         showStoryboardVideoCheckbox.Current = config.GetBindable<bool>(JukeBoxSetting.ShowStoryboardVideo);
         backgroundDimRow.Current = config.GetBindable<double>(JukeBoxSetting.BackgroundDim);
         backgroundBlurRow.Current = config.GetBindable<double>(JukeBoxSetting.BackgroundBlur);
-        chartZoomRow.Current = config.GetBindable<double>(JukeBoxSetting.ChartZoom);
+        playfieldZoomRow.Current = config.GetBindable<double>(JukeBoxSetting.PlayfieldZoom);
         uiScaleRow.Current = config.GetBindable<double>(JukeBoxSetting.UiScale);
         globalOffsetRow.Current = config.GetBindable<double>(JukeBoxSetting.GlobalAudioOffset);
         mirrorDropdown.Current = config.GetBindable<MirrorSource>(JukeBoxSetting.PreferredMirror);
