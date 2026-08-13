@@ -99,6 +99,37 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("settings tab inactive", () => screen.ChildrenOfType<SettingsOverlay>().Single().Alpha == 0);
         }
 
+        // Regression coverage for a true contained player: the video/storyboard/background
+        // visuals must never render outside the boxed centre panel — not behind the side columns,
+        // not behind the bottom bar. Masking on the box is what actually enforces this (it clips
+        // everything inside, however far the visuals try to overflow); the geometry assertions
+        // below confirm the box itself is never positioned/sized to reach under a panel in the
+        // first place.
+        [Test]
+        public void PlayerBoxMasksVisualsAndNeverExtendsUnderAPanel()
+        {
+            AddAssert("player box masks its own content", () => screen.PlayerBox.Masking);
+            AddAssert("box has a gutter on every side in normal mode", () =>
+                screen.VisualsHostPadding.Left > 0 && screen.VisualsHostPadding.Right > 0
+                && screen.VisualsHostPadding.Top > 0 && screen.VisualsHostPadding.Bottom > 0);
+            AddAssert("the visuals stack lives inside the masked box, not some other unmasked parent",
+                () => screen.PlayerBox.ChildrenOfType<ScreenStack>().Any(s => s == screen.VisualsStack));
+
+            AddAssert("box never reaches under the left column", () =>
+                screen.PlayerBox.ScreenSpaceDrawQuad.TopLeft.X >= screen.LeftColumn.ScreenSpaceDrawQuad.TopRight.X);
+            AddAssert("box never reaches under the right column", () =>
+                screen.PlayerBox.ScreenSpaceDrawQuad.TopRight.X <= screen.RightColumn.ScreenSpaceDrawQuad.TopLeft.X);
+            AddAssert("box never reaches under the bottom bar", () =>
+                screen.PlayerBox.ScreenSpaceDrawQuad.BottomLeft.Y
+                <= screen.ChildrenOfType<NowPlayingBar>().Single().ScreenSpaceDrawQuad.TopLeft.Y);
+
+            AddStep("enter focus mode", () => InputManager.Key(Key.Tab));
+            AddUntilStep("box padding animated away to full-bleed", () =>
+                screen.VisualsHostPadding.Left == 0 && screen.VisualsHostPadding.Right == 0
+                && screen.VisualsHostPadding.Top == 0 && screen.VisualsHostPadding.Bottom == 0);
+            AddAssert("still masked in focus mode", () => screen.PlayerBox.Masking);
+        }
+
         [Test]
         public void TypingFocusesAndSeedsTheDockedSearchBox()
         {

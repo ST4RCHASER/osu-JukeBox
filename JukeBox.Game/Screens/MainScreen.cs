@@ -95,6 +95,27 @@ public partial class MainScreen : Screen
     /// </summary>
     internal Container RightColumn { get; private set; } = null!;
 
+    /// <summary>
+    /// Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the boxed player panel —
+    /// asserts it actually masks its content (so the visuals stack can never render outside its
+    /// own bounds, however it tries to overflow internally) without depending on layout internals.
+    /// </summary>
+    internal Container PlayerBox => playerBox;
+
+    /// <summary>
+    /// Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the visuals stack, to
+    /// assert it's parented inside <see cref="PlayerBox"/> (the masked box) rather than some
+    /// other, unmasked part of the hierarchy.
+    /// </summary>
+    internal ScreenStack VisualsStack => visualsStack;
+
+    /// <summary>
+    /// Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the padding that insets
+    /// <see cref="PlayerBox"/> away from the columns/bottom bar — non-zero on every side in
+    /// ThreeColumn mode is what makes it a gutter-framed box rather than a full-bleed underlay.
+    /// </summary>
+    internal MarginPadding VisualsHostPadding => visualsHost.Padding;
+
     private enum RightPanelTab
     {
         Queue,
@@ -113,6 +134,16 @@ public partial class MainScreen : Screen
 
         InternalChildren = new Drawable[]
         {
+            // The app's own background, sitting behind absolutely everything — the columns and
+            // bottom bar each paint their own opaque PanelSurface, and playerBox is masked to its
+            // own gutter-inset bounds (see below), so this is only ever actually visible in the
+            // thin SectionSpacing gutters between them. Without it those gutters fell through to
+            // the raw GL clear colour instead of the intended Theme background.
+            new Box
+            {
+                RelativeSizeAxes = Axes.Both,
+                Colour = Theme.Background,
+            },
             // The player is a BOXED panel (same card language as the columns: rounded, shadowed,
             // masked), not a full-bleed underlay the panels float over. visualsHost's padding
             // carves out the centre cell (applyLayout); the box inside it holds the actual player.
