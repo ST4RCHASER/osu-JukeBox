@@ -52,6 +52,13 @@ namespace JukeBox.Game.UI;
 /// keyword box (no popping in/out), Escape blurs the keyword box instead of closing anything, and
 /// confirming a selection with Enter no longer closes the (non-existent, in this mode) overlay.
 /// </para>
+///
+/// <para>
+/// The keyword box also carries an inline "#" button docked at its right edge, firing
+/// <see cref="MapIdRequested"/> to open <c>MapIdOverlay</c> for queueing a set directly by
+/// beatmapset ID — moved here (from a top-right corner button) so it sits with the rest of the
+/// search affordances rather than floating separately.
+/// </para>
 /// </summary>
 public partial class BeatmapListingOverlay : FocusedOverlayContainer
 {
@@ -102,6 +109,15 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
     private const float label_width = 92;
 
     public event Action<BeatmapSetInfo>? SetPicked;
+
+    /// <summary>
+    /// Fired when the inline "#" button docked at the right edge of the search box is clicked —
+    /// the caller (<see cref="Screens.MainScreen"/>) opens <see cref="MapIdOverlay"/> in response.
+    /// Kept as an event (rather than this overlay owning a <see cref="MapIdOverlay"/> itself) so
+    /// there's still exactly one overlay instance shared across layout modes, same as before this
+    /// button lived in a corner pill instead of here.
+    /// </summary>
+    public event Action? MapIdRequested;
 
     [Resolved]
     private IBeatmapMirror mirror { get; set; } = null!;
@@ -253,12 +269,30 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
             LayoutEasing = Theme.EaseEnter,
             Children = new Drawable[]
             {
-                searchBox = new ListingSearchBox
+                new Container
                 {
                     RelativeSizeAxes = Axes.X,
                     Height = 44,
-                    PlaceholderText = "type in keywords…",
-                    Exit = docked ? unfocusSearch : Hide,
+                    Children = new Drawable[]
+                    {
+                        searchBox = new ListingSearchBox
+                        {
+                            RelativeSizeAxes = Axes.Both,
+                            // Leaves room for the docked map-ID button below, matching the same
+                            // textbox+docked-button pattern MapIdOverlay's own idBox/addButton use.
+                            Padding = new MarginPadding { Right = 48 },
+                            PlaceholderText = "type in keywords…",
+                            Exit = docked ? unfocusSearch : Hide,
+                        },
+                        new IconButton
+                        {
+                            Anchor = Anchor.CentreRight,
+                            Origin = Anchor.CentreRight,
+                            Size = new Vector2(40),
+                            Icon = FontAwesome.Solid.Hashtag,
+                            Action = () => MapIdRequested?.Invoke(),
+                        },
+                    },
                 },
                 createFiltersToggle(),
                 // Wrapping the chip rows in their own FillFlowContainer (rather than flattening

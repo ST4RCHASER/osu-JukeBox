@@ -1,5 +1,6 @@
 #nullable enable
 
+using System;
 using JukeBox.Game.Configuration;
 using JukeBox.Game.Playback;
 using JukeBox.Game.UI;
@@ -41,10 +42,23 @@ namespace JukeBox.Game.Screens;
 /// Tab is repurposed from "toggle layout" to "focus mode": it hides both side columns (letting the
 /// visuals go full-bleed; the bottom bar stays) and pressing it again restores the three-column
 /// layout. Ctrl+Q switches the right column to its Queue tab (kept, despite the drawer no longer
-/// being independently hideable, as a quick "jump to queue" shortcut); the corner gear button now
-/// switches to the Settings tab instead of popping a modal (that overlay no longer floats — its
-/// content lives inline in the tab); the corner "#" button is unchanged, still opening
-/// <see cref="MapIdOverlay"/> to queue a set directly by beatmapset ID.
+/// being independently hideable, as a quick "jump to queue" shortcut). There is no separate
+/// settings shortcut/corner button any more — the Settings tab header in the right column is
+/// always reachable directly (see <see cref="createTabHeader"/>). The map-ID lookup
+/// (<see cref="MapIdOverlay"/>) is opened from an icon button docked inline at the right edge of
+/// the left column's search box (see <see cref="BeatmapListingOverlay.MapIdRequested"/>) rather
+/// than a corner button.
+/// </para>
+///
+/// <para>
+/// The boxed player never crops the scene: <see cref="visualsStack"/> renders into a fixed
+/// <see cref="scene_width"/>×<see cref="scene_height"/> design canvas (<see cref="sceneContainer"/>)
+/// that is uniformly scaled to CONTAIN within <see cref="playerBox"/> (aspect-preserving, letterboxed
+/// on whichever axis has slack) whenever the three-column layout is active — recomputed every
+/// <see cref="Update"/> so it tracks the box through the focus-mode transition and window resizes.
+/// Focus mode deliberately keeps the old height-only scale (full-bleed; the box there is normally
+/// wider than the canvas so this already reads as contained in practice, and is left alone rather
+/// than switched to the same uniform-min formula).
 /// </para>
 /// </summary>
 public partial class MainScreen : Screen
@@ -58,6 +72,14 @@ public partial class MainScreen : Screen
     // internals.
     private const float bottom_bar_height = 88;
 
+    // The design canvas the visuals render into before being scaled to fit the box. 854 covers
+    // lazer's own widescreen storyboard width (16:9 at height 480 ≈ 853.3, rounded up); the lazer
+    // storyboard renderer centres itself within its parent's width regardless of whether the
+    // current beatmap is a plain 4:3 storyboard or a widescreen one, so a single generic canvas
+    // works for every beatmap without inspecting the current track.
+    private const float scene_width = 854;
+    private const float scene_height = 480;
+
     [Resolved]
     private Jukebox jukebox { get; set; } = null!;
 
@@ -70,6 +92,7 @@ public partial class MainScreen : Screen
 
     private Container visualsHost = null!;
     private Container playerBox = null!;
+    private Container sceneContainer = null!;
     private ScreenStack visualsStack = null!;
     private NowPlayingBar bottomBar = null!;
 
@@ -165,7 +188,17 @@ public partial class MainScreen : Screen
                             RelativeSizeAxes = Axes.Both,
                             Colour = Colour4.Black,
                         },
-                        visualsStack = new ScreenStack { RelativeSizeAxes = Axes.Both },
+                        // Fixed design-size canvas, scaled uniformly to fit playerBox (see
+                        // updateSceneScale) instead of visualsStack stretching RelativeSizeAxes
+                        // straight to the box — that's what let the scene overflow (and get
+                        // masked/cropped) whenever the box got narrower than the design aspect.
+                        sceneContainer = new Container
+                        {
+                            Anchor = Anchor.Centre,
+                            Origin = Anchor.Centre,
+                            Size = new Vector2(scene_width, scene_height),
+                            Child = visualsStack = new ScreenStack { RelativeSizeAxes = Axes.Both },
+                        },
                     },
                 },
             },
@@ -249,7 +282,6 @@ public partial class MainScreen : Screen
             },
             bottomBar = new NowPlayingBar(),
             mapIdOverlay,
-            createCornerPill(),
         };
 
         // Fire-and-forget by design: SetPicked is a synchronous event, and EnqueueAndMaybePlayAsync's
@@ -257,6 +289,10 @@ public partial class MainScreen : Screen
         // LoadComplete) rather than through this call's returned Task.
         listing.SetPicked += set => _ = jukebox.EnqueueAndMaybePlayAsync(set);
         mapIdOverlay.SetResolved += set => _ = jukebox.EnqueueAndMaybePlayAsync(set);
+
+        // The map-ID button now lives inline in the docked search box (see
+        // BeatmapListingOverlay.MapIdRequested) rather than a corner button.
+        listing.MapIdRequested += () => mapIdOverlay.ToggleVisibility();
     }
 
     protected override void LoadComplete()
@@ -277,6 +313,36 @@ public partial class MainScreen : Screen
             if (e.NewValue != null)
                 showToast(e.NewValue);
         });
+    }
+
+    protected override void Update()
+    {
+        base.Update();
+        updateSceneScale();
+    }
+
+    /// <summary>
+    /// Keeps <see cref="sceneContainer"/>'s scale matched to the current box size every frame — the
+    /// box itself is continuously resizing during the focus-mode transition (padding/corner-radius
+    /// animate in <see cref="applyLayout"/>), so a one-shot computation on layout change would lag
+    /// a frame behind. Three-column: uniform-min "contain" scale, so the whole design canvas always
+    /// stays inside the box (letterboxed on whichever axis has slack) — never cropped, never
+    /// distorted. Focus: height-only scale, deliberately left as the pre-existing behaviour (the
+    /// box there is normally wider than the canvas, so this already reads as contained in
+    /// practice — see the class summary).
+    /// </summary>
+    private void updateSceneScale()
+    {
+        if (playerBox.DrawWidth <= 0 || playerBox.DrawHeight <= 0)
+            return;
+
+        bool focus = uiLayout != null && uiLayout.Value == UiLayout.Focus;
+
+        float scale = focus
+            ? playerBox.DrawHeight / scene_height
+            : Math.Min(playerBox.DrawWidth / scene_width, playerBox.DrawHeight / scene_height);
+
+        sceneContainer.Scale = new Vector2(scale);
     }
 
     protected override bool OnKeyDown(KeyDownEvent e)
@@ -436,48 +502,6 @@ public partial class MainScreen : Screen
             },
         };
     }
-
-    private Drawable createCornerPill() => new Container
-    {
-        Anchor = Anchor.TopRight,
-        Origin = Anchor.TopRight,
-        Position = new Vector2(-8, 8),
-        AutoSizeAxes = Axes.Both,
-        Masking = true,
-        CornerRadius = Theme.CornerRadius,
-        Children = new Drawable[]
-        {
-            new Box
-            {
-                RelativeSizeAxes = Axes.Both,
-                Colour = Theme.PanelSurface,
-            },
-            new FillFlowContainer
-            {
-                AutoSizeAxes = Axes.Both,
-                Direction = FillDirection.Horizontal,
-                Padding = new MarginPadding(4),
-                Spacing = new Vector2(4, 0),
-                Children = new Drawable[]
-                {
-                    // Settings no longer floats as its own modal — the gear is now a shortcut
-                    // straight to the right column's Settings tab.
-                    new IconButton
-                    {
-                        Size = new Vector2(28),
-                        Icon = FontAwesome.Solid.Cog,
-                        Action = () => selectTab(RightPanelTab.Settings),
-                    },
-                    new IconButton
-                    {
-                        Size = new Vector2(28),
-                        Icon = FontAwesome.Solid.Hashtag,
-                        Action = () => mapIdOverlay.ToggleVisibility(),
-                    },
-                }
-            }
-        }
-    };
 
     private static char? keyToChar(Key key)
     {
