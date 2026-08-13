@@ -198,11 +198,12 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
 
         // Classic stays the final legacy-name fallback even under non-legacy user skins, exactly
         // as before — unless classic IS the selection (no point stacking it twice).
+        DefaultLegacySkin? classic = null;
         var userSkins = new List<ISkin> { selected };
 
         if (selectedChoice != JukeBoxSkin.Classic)
         {
-            var classic = new DefaultLegacySkin(resourceProvider);
+            classic = new DefaultLegacySkin(resourceProvider);
             ownedSkins.Add(classic);
             userSkins.Add(classic);
         }
@@ -218,7 +219,29 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
         // which we can't use directly: its loader hard-resolves the realm-backed SkinManager.
         if (beatmapSkin != null)
         {
-            var gated = new BeatmapSkinGate(ruleset.CreateSkinTransformer(beatmapSkin, playableBeatmap) ?? beatmapSkin)
+            var beatmapSkinTransformed = ruleset.CreateSkinTransformer(beatmapSkin, playableBeatmap) ?? beatmapSkin;
+            var gateSources = new List<ISkin> { beatmapSkinTransformed };
+
+            // Mirrors BeatmapSkinProvidingContainer's own same-priority safety net: a beatmap
+            // that provides only a PARTIAL selection of legacy skin elements (e.g. just a
+            // taiko lane background/banner, a common "decorative flair only" authoring
+            // pattern) expects everything it doesn't cover to fall back to a consistent
+            // classic/legacy look — not to whatever non-legacy skin the user happens to have
+            // selected. Without this, a partially-legacy beatmap skin under e.g. Argon renders
+            // a jarring mix: the beatmap's own legacy backdrop pieces alongside Argon's
+            // completely different note/drum/target style for whatever it didn't cover (see
+            // TaikoArgonSkinTransformer — it unconditionally overrides every taiko component,
+            // unlike Triangles/ArgonPro's lighter touch). Only kicks in when the beatmap is
+            // actually offering legacy resources and the user's own selection isn't already
+            // legacy (nothing to add in that case — same condition BeatmapSkinProvidingContainer
+            // itself checks).
+            if (classic != null && selected is not LegacySkin
+                                 && beatmapSkinTransformed is LegacySkinTransformer { IsProvidingLegacyResources: true })
+            {
+                gateSources.Add(ruleset.CreateSkinTransformer(classic, playableBeatmap) ?? classic);
+            }
+
+            var gated = new BeatmapSkinGate(gateSources)
             {
                 RelativeSizeAxes = Axes.Both,
                 Child = drawableRuleset,
@@ -403,11 +426,13 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
 
     /// <summary>
     /// The beatmap-folder skin's providing layer, replicating the lookup gating of lazer's
-    /// <c>BeatmapSkinProvidingContainer</c> (same overrides, same storyboard-sample exemption) —
-    /// that class itself is unusable here because its loader hard-resolves the realm-backed
-    /// <c>SkinManager</c>. Falls back to the parent <see cref="LazerSkinProvider"/> (user skins)
-    /// for anything the beatmap doesn't provide or the settings disallow. The three bindables gate
-    /// live: flipping a "Beatmap ..." setting triggers a source-change re-lookup, no rebuild.
+    /// <c>BeatmapSkinProvidingContainer</c> (same overrides, same storyboard-sample exemption,
+    /// same same-priority classic-fallback-for-partial-legacy-skins behaviour — see its call
+    /// site) — that class itself is unusable here because its loader hard-resolves the
+    /// realm-backed <c>SkinManager</c>. Falls back to the parent <see cref="LazerSkinProvider"/>
+    /// (user skins) for anything none of its own sources provide or the settings disallow. The
+    /// three bindables gate live: flipping a "Beatmap ..." setting triggers a source-change
+    /// re-lookup, no rebuild.
     /// </summary>
     private partial class BeatmapSkinGate : SkinProvidingContainer
     {
@@ -423,9 +448,12 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
         protected override bool AllowSampleLookup(osu.Game.Audio.ISampleInfo sampleInfo)
             => sampleInfo is osu.Game.Storyboards.StoryboardSampleInfo || BeatmapHitsounds.Value;
 
-        public BeatmapSkinGate(ISkin skin)
-            : base(skin)
+        /// <param name="sources">The beatmap skin first, optionally followed by a same-priority
+        /// classic fallback (see the call site) — tried in order, first match wins, exactly like
+        /// lazer's own <c>BeatmapSkinProvidingContainer</c>.</param>
+        public BeatmapSkinGate(IEnumerable<ISkin> sources)
         {
+            SetSources(sources);
         }
 
         protected override void LoadComplete()

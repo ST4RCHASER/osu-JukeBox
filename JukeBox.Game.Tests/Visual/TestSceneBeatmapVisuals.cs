@@ -848,6 +848,127 @@ namespace JukeBox.Game.Tests.Visual
                    && inner.TopLeft.Y >= outer.TopLeft.Y - tolerance && inner.BottomLeft.Y <= outer.BottomLeft.Y + tolerance;
         }
 
+        // Regression coverage for reopen #5, this time against the user's ACTUAL screenshots (not
+        // a description): comparing jukebox-taiko.png/jukebox-taiko-2.png to real-game-taiko.png,
+        // the banner, mascot and dark lane background all match closely, but the notes render
+        // with ARGON's chevron-circle style (not the beatmap's own plain legacy circles) and the
+        // input drum shows no coloured background box at all (Argon's minimal style) where the
+        // real game shows a solid pink/cream legacy drum. This is a beatmap that provides only a
+        // PARTIAL legacy taiko skin (e.g. just its lane background/banner plus — very commonly for
+        // any "custom skin" beatmap — a combo-number font) but not "taikohitcircle"/"taiko-bar-left"
+        // specifically. Confirmed the mechanism: TaikoArgonSkinTransformer unconditionally
+        // overrides every taiko component (CentreHit, RimHit, InputDrum, ...) — unlike Triangles,
+        // which barely touches taiko — so once the beatmap's own lookup misses, JukeBox's ORIGINAL
+        // fallback chain (beatmap → user's selected skin → Classic, in that priority order) landed
+        // on Argon's own completely different style for whatever the beatmap didn't cover, instead
+        // of a consistent legacy look. Real lazer's BeatmapSkinProvidingContainer avoids exactly
+        // this by inserting the classic skin at the SAME priority as the beatmap itself (checked
+        // immediately after it, before ever reaching the user's actual non-legacy selection)
+        // whenever the beatmap "is providing legacy resources" (LegacySkinTransformer.
+        // IsProvidingLegacyResources) and the user's own skin isn't already legacy — the
+        // "structural priority difference" flagged (and prematurely dismissed against Triangles,
+        // which doesn't trigger it) in an earlier round of this investigation. LazerChartLayer now
+        // replicates that same-priority insertion.
+        [Test]
+        public void TaikoPartialLegacyBeatmapSkinFallsBackToClassicNotArgon()
+        {
+            BeatmapVisuals visuals = null!;
+            var manual = new osu.Framework.Timing.ManualClock();
+            osu.Framework.Timing.FramedClock? clock = null;
+
+            AddStep("enable chart, Argon skin (JukeBox's default)", () =>
+            {
+                config.SetValue(JukeBoxSetting.RenderChart, true);
+                config.SetValue(JukeBoxSetting.Skin, JukeBoxSkin.Argon);
+            });
+
+            AddStep("create visuals with a partial-legacy beatmap skin", () =>
+            {
+                string mapDir = Path.Combine(tmp, "partial-legacy-skin");
+                Directory.CreateDirectory(mapDir);
+
+                // Only the lane background and a combo-number font — no "taikohitcircle", no
+                // "taiko-bar-left" — the "decorative flair only" authoring pattern from the
+                // report. "score-0.png" is what LegacySkinTransformer.IsProvidingLegacyResources
+                // actually checks for by default (HasFont(LegacyFont.Combo) — ISkinExtensions.
+                // GetFontPrefix defaults the combo font prefix to "score", not "default") and is
+                // present on essentially every real "custom skin" beatmap, taiko or not.
+                File.WriteAllBytes(Path.Combine(mapDir, "taiko-bar-right.png"), solidPng());
+                File.WriteAllBytes(Path.Combine(mapDir, "score-0.png"), solidPng());
+                File.WriteAllBytes(Path.Combine(mapDir, "bg.png"), solidPng());
+
+                string osuFile = Path.Combine(mapDir, "taiko [x].osu");
+                File.WriteAllText(osuFile, """
+                    osu file format v14
+
+                    [General]
+                    AudioFilename: audio.mp3
+                    Mode: 1
+
+                    [Difficulty]
+                    HPDrainRate:5
+                    CircleSize:4
+                    OverallDifficulty:5
+                    ApproachRate:5
+                    SliderMultiplier:1.4
+                    SliderTickRate:1
+
+                    [TimingPoints]
+                    0,500,4,1,0,100,1,0
+
+                    [HitObjects]
+                    64,192,5000,1,0
+                    """);
+
+                var set = new CachedBeatmapSet
+                {
+                    SetId = 15,
+                    Directory = mapDir,
+                    BackgroundFile = Path.Combine(mapDir, "bg.png"),
+                    OsuFiles = { osuFile },
+                    PreferredOsuFile = osuFile,
+                };
+
+                clock = new osu.Framework.Timing.FramedClock(manual);
+                Add(visuals = new BeatmapVisuals(set, clock) { RelativeSizeAxes = Axes.Both });
+            });
+
+            AddUntilStep("chart loaded", () => visuals.IsLoaded && visuals.HasChartLayer && visuals.ChartRenderer?.DrawableRuleset != null);
+
+            AddStep("advance to just before the hit", () =>
+            {
+                manual.CurrentTime = 4990;
+                clock!.ProcessFrame();
+            });
+
+            AddUntilStep("note visible", () =>
+                visuals.ChartRenderer!.DrawableRuleset!.Playfield.AllHitObjects
+                       .OfType<osu.Game.Rulesets.Taiko.Objects.Drawables.DrawableHit>().Any());
+
+            AddAssert("note piece is the legacy circle, not Argon's", () =>
+            {
+                var note = visuals.ChartRenderer!.DrawableRuleset!.Playfield.AllHitObjects
+                                   .OfType<osu.Game.Rulesets.Taiko.Objects.Drawables.DrawableHit>().Single();
+
+                bool hasLegacyPiece = note.ChildrenOfType<osu.Game.Rulesets.Taiko.Skinning.Legacy.LegacyCirclePiece>().Any();
+                bool hasArgonPiece = note.ChildrenOfType<osu.Game.Rulesets.Taiko.Skinning.Argon.ArgonCirclePiece>().Any();
+
+                return hasLegacyPiece && !hasArgonPiece;
+            });
+
+            AddAssert("lane background is still the legacy one (unaffected by the fix)", () =>
+            {
+                var playfield = visuals.ChartRenderer!.DrawableRuleset!.Playfield;
+                return playfield.ChildrenOfType<osu.Game.Rulesets.Taiko.Skinning.Legacy.TaikoLegacyPlayfieldBackgroundRight>().Any();
+            });
+
+            AddStep("remove visuals", () =>
+            {
+                config.SetValue(JukeBoxSetting.RenderChart, false);
+                Remove(visuals, true);
+            });
+        }
+
         // 1x1 red pixel PNG — content is irrelevant, only that it decodes to a valid texture.
         private static byte[] solidPng() => Convert.FromBase64String(
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==");
