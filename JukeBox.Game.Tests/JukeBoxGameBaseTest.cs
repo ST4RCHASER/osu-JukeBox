@@ -1,3 +1,4 @@
+using JukeBox.Game.Configuration;
 using NUnit.Framework;
 using osu.Framework.Graphics.Performance;
 
@@ -10,15 +11,35 @@ namespace JukeBox.Game.Tests
     public class JukeBoxGameBaseTest
     {
         [Test]
-        public void TrueMapsToFull()
+        public void OffMapsToNone()
         {
-            Assert.That(JukeBoxGameBase.FrameStatisticsModeFor(true), Is.EqualTo(FrameStatisticsMode.Full));
+            Assert.That(JukeBoxGameBase.FrameStatisticsModeFor(FpsDisplayMode.Off), Is.EqualTo(FrameStatisticsMode.None));
         }
 
         [Test]
-        public void FalseMapsToNone()
+        public void CompactMapsToMinimal()
         {
-            Assert.That(JukeBoxGameBase.FrameStatisticsModeFor(false), Is.EqualTo(FrameStatisticsMode.None));
+            Assert.That(JukeBoxGameBase.FrameStatisticsModeFor(FpsDisplayMode.Compact), Is.EqualTo(FrameStatisticsMode.Minimal));
+        }
+
+        [Test]
+        public void DetailsMapsToFull()
+        {
+            Assert.That(JukeBoxGameBase.FrameStatisticsModeFor(FpsDisplayMode.Details), Is.EqualTo(FrameStatisticsMode.Full));
+        }
+
+        // Covers the one-shot ShowFps -> FpsDisplay migration mapping (JukeBoxGameBase.load) in
+        // isolation from the config manager itself.
+        [Test]
+        public void MigrateShowFpsTrueMapsToDetails()
+        {
+            Assert.That(JukeBoxGameBase.MigrateShowFps(true), Is.EqualTo(FpsDisplayMode.Details));
+        }
+
+        [Test]
+        public void MigrateShowFpsFalseMapsToOff()
+        {
+            Assert.That(JukeBoxGameBase.MigrateShowFps(false), Is.EqualTo(FpsDisplayMode.Off));
         }
     }
 }
