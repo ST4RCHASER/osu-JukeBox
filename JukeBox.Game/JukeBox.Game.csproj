@@ -4,7 +4,6 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\JukeBox.Resources\JukeBox.Resources.csproj" />
-    <ProjectReference Include="..\external\ReOsuStoryboardPlayer\ReOsuStoryboardPlayer.Core\ReOsuStoryboardPlayer.Core.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="ppy.osu.Framework" Version="2026.807.0" />
