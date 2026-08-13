@@ -9,6 +9,7 @@ using NUnit.Framework;
 using osu.Framework.Allocation;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
+using osu.Framework.Platform;
 using osu.Framework.Testing;
 using osuTK.Input;
 
@@ -28,6 +29,9 @@ namespace JukeBox.Game.Tests.Visual
 
         [Resolved]
         private osu.Framework.Configuration.FrameworkConfigManager frameworkConfig { get; set; } = null!;
+
+        [Resolved]
+        private GameHost host { get; set; } = null!;
 
         // CreateChildDependencies runs once for the whole scene — own isolated JukeBoxConfigManager
         // (TemporaryNativeStorage, same approach as TestSceneMainScreen) so tests never touch the
@@ -231,6 +235,23 @@ namespace JukeBox.Game.Tests.Visual
             // A headless host reports no devices; the "System default" (empty string) entry must
             // exist regardless, per AudioManager's documented convention.
             AddAssert("system default entry present", () => overlay.AudioDeviceDropdown.Items.Contains(string.Empty));
+        }
+
+        // This test project's GameHost (TestRunHeadlessGameHost, via JukeBoxManualInputTestScene)
+        // overrides CreateWindow to return null (osu.Framework.Platform.HeadlessGameHost) — so
+        // host.Window, and therefore the overlay's whole displayDropdown/onDisplaysChanged path,
+        // never exists here. The display-picker "snap back" fix itself (SettingsOverlay's
+        // DisplayListComparer, used to decide whether onDisplaysChanged should reassign
+        // displayDropdown.Items) is covered without a window in DisplayListComparerTest instead.
+        // What IS assertable here: the graphics section still builds cleanly with no window, and
+        // the window-bound rows are correctly absent rather than null-reffing.
+        [Test]
+        public void GraphicsSectionOmitsWindowBoundRowsWithNoWindow()
+        {
+            AddStep("show overlay", () => overlay.Show());
+
+            AddAssert("host has no window in this test environment", () => host.Window == null);
+            AddAssert("display dropdown was not created", () => overlay.ChildrenOfType<SettingsOverlay.DisplaySettingsDropdown>().Any() == false);
         }
     }
 }

@@ -584,10 +584,30 @@ public partial class SettingsOverlay : FocusedOverlayContainer
 
     private void onAudioDeviceChanged(string deviceName) => Schedule(updateAudioDevices);
 
+    /// <summary>
+    /// <see cref="IWindow.DisplaysChanged"/> fires even when only the current display's
+    /// <see cref="Display.Bounds"/> changed (e.g. a transient resolution/DPI blip while dragging
+    /// the window across monitors) — not just when the actual set of displays changed. Blindly
+    /// reassigning <c>displayDropdown.Items</c> on every such event makes the dropdown rebuild
+    /// its internal item map keyed by <see cref="Display.Equals(Display?)"/> (which compares
+    /// <see cref="Display.Bounds"/>); the previously-selected <see cref="Display"/> then fails that
+    /// lookup and the dropdown resets <c>Current</c> to its first item — which round-trips through
+    /// <see cref="currentDisplay"/>'s two-way bind into <see cref="GameHost.Window"/>'s
+    /// <see cref="IWindow.CurrentDisplayBindable"/> and drags the real window back to that
+    /// (usually primary) display, fighting the user's manual drag. Comparing first — ignoring
+    /// <see cref="Display.Bounds"/>/<see cref="Display.UsableBounds"/> — and only reassigning
+    /// <c>Items</c> on a genuine change avoids that reset. Mirrors lazer's own
+    /// <c>LayoutSettings.DisplayListComparer</c> guard.
+    /// </summary>
     private void onDisplaysChanged(IEnumerable<Display> displays) => Schedule(() =>
     {
-        if (displayDropdown != null)
-            displayDropdown.Items = displays;
+        if (displayDropdown == null)
+            return;
+
+        var newDisplays = displays as IReadOnlyCollection<Display> ?? displays.ToList();
+
+        if (!displayDropdown.Items.SequenceEqual(newDisplays, DisplayListComparer.Default))
+            displayDropdown.Items = newDisplays;
     });
 
     /// <summary>
@@ -708,6 +728,38 @@ public partial class SettingsOverlay : FocusedOverlayContainer
         {
             protected override LocalisableString GenerateItemText(Display item)
                 => $"{item.Index}: {item.Name}";
+        }
+    }
+
+    /// <summary>
+    /// Compares <see cref="Display"/>s while disregarding <see cref="Display.Bounds"/> and
+    /// <see cref="Display.UsableBounds"/> — see <see cref="onDisplaysChanged"/> for why those must
+    /// be ignored. Equivalent to (and named after) osu.Game's own internal
+    /// <c>LayoutSettings.DisplayListComparer</c>.
+    /// </summary>
+    internal sealed class DisplayListComparer : IEqualityComparer<Display>
+    {
+        public static readonly DisplayListComparer Default = new DisplayListComparer();
+
+        public bool Equals(Display? x, Display? y)
+        {
+            if (ReferenceEquals(x, y)) return true;
+            if (x is null || y is null) return false;
+
+            return x.Index == y.Index && x.Name == y.Name && x.DisplayModes.SequenceEqual(y.DisplayModes);
+        }
+
+        public int GetHashCode(Display obj)
+        {
+            var hash = new HashCode();
+            hash.Add(obj.Index);
+            hash.Add(obj.Name);
+            hash.Add(obj.DisplayModes.Length);
+
+            foreach (var mode in obj.DisplayModes)
+                hash.Add(mode);
+
+            return hash.ToHashCode();
         }
     }
 
