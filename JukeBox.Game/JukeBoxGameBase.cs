@@ -1,6 +1,7 @@
 using System.Net.Http;
 using JukeBox.Game.Beatmaps;
 using JukeBox.Game.Configuration;
+using JukeBox.Game.LazerPlayer;
 using JukeBox.Game.Online;
 using JukeBox.Game.Playback;
 using JukeBox.Resources;
@@ -10,6 +11,10 @@ using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Performance;
 using osu.Framework.IO.Stores;
+using osu.Game.Configuration;
+using osu.Game.Database;
+using osu.Game.Graphics;
+using osu.Game.Rulesets;
 using osuTK;
 
 namespace JukeBox.Game
@@ -62,10 +67,51 @@ namespace JukeBox.Game
         protected override IReadOnlyDependencyContainer CreateChildDependencies(IReadOnlyDependencyContainer parent)
             => dependencies = new DependencyContainer(base.CreateChildDependencies(parent));
 
+        // Lazer-side dependencies backing the LazerChartLayer's DrawableRuleset host — owned (and
+        // disposed) here because they're game-lifetime singletons, exactly like OsuGameBase owns
+        // its equivalents. The realm database only ever stores lazer-side settings (ruleset
+        // configs, key bindings if any) under its own "lazer" subdirectory.
+        private RealmAccess lazerRealm = null!;
+        private OsuConfigManager lazerConfig = null!;
+        private LazerRulesetConfigCache lazerRulesetConfigs = null!;
+
         [BackgroundDependencyLoader]
         private void load()
         {
             Resources.AddStore(new DllResourceStore(typeof(JukeBoxResources).Assembly));
+
+            // osu!lazer's default skin assets + fonts (osu.Game.Resources, CC-BY-NC — see
+            // docs/ATTRIBUTION.md). The gameplay renderer's skins resolve default textures and
+            // hitsound samples out of this store; the fonts below are the ones lazer's in-playfield
+            // text (judgements, combo counters) sets via OsuFont.
+            Resources.AddStore(new DllResourceStore(osu.Game.Resources.OsuResources.ResourceAssembly));
+
+            AddFont(Resources, @"Fonts/osuFont");
+            AddFont(Resources, @"Fonts/Torus/Torus-Regular");
+            AddFont(Resources, @"Fonts/Torus/Torus-Light");
+            AddFont(Resources, @"Fonts/Torus/Torus-SemiBold");
+            AddFont(Resources, @"Fonts/Torus/Torus-Bold");
+            AddFont(Resources, @"Fonts/Venera/Venera-Light");
+            AddFont(Resources, @"Fonts/Venera/Venera-Bold");
+            AddFont(Resources, @"Fonts/Venera/Venera-Black");
+
+            // The minimal game-level dependency set lazer's DrawableRuleset subtree resolves
+            // (mirroring what lazer's own DrawableRuleset test scenes cache): a realm instance
+            // (required non-null by DatabasedKeyBindingContainer; empty database means default key
+            // bindings, which is all autoplay needs), an OsuConfigManager (gameplay visual
+            // settings, kept isolated in the lazer subdirectory), the per-ruleset config cache and
+            // the game colour palette.
+            var lazerStorage = Host.Storage.GetStorageForDirectory("lazer");
+            lazerRealm = new RealmAccess(lazerStorage, "client.realm", Host.UpdateThread);
+            dependencies.Cache(lazerRealm);
+            dependencies.Cache(lazerConfig = new OsuConfigManager(lazerStorage));
+            // DrawableHitObject resolves the game-level IGameplaySettings for combo-colour
+            // normalisation; OsuConfigManager is lazer's implementation (same as OsuGameBase).
+            dependencies.CacheAs<IGameplaySettings>(lazerConfig);
+            dependencies.CacheAs<IRulesetConfigCache>(lazerRulesetConfigs = new LazerRulesetConfigCache(lazerRealm));
+            dependencies.Cache(new OsuColour());
+            dependencies.CacheAs<osu.Game.IO.IStorageResourceProvider>(
+                new LazerResourceProvider(Host, Audio, Resources, lazerRealm));
 
             var config = new JukeBoxConfigManager(Host.Storage);
             dependencies.Cache(config);
@@ -113,6 +159,9 @@ namespace JukeBox.Game
         {
             base.Dispose(isDisposing);
             http.Dispose();
+            lazerRulesetConfigs?.Dispose();
+            lazerConfig?.Dispose();
+            lazerRealm?.Dispose();
         }
     }
 }
