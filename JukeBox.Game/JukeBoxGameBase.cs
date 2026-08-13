@@ -83,15 +83,37 @@ namespace JukeBox.Game
 
             // osu!lazer's default skin assets + fonts (osu.Game.Resources, CC-BY-NC — see
             // docs/ATTRIBUTION.md). The gameplay renderer's skins resolve default textures and
-            // hitsound samples out of this store; the fonts below are the ones lazer's in-playfield
-            // text (judgements, combo counters) sets via OsuFont.
+            // hitsound samples out of this store; the fonts are the exact set OsuGameBase.load
+            // registers (osu-resources has no "Fonts/osuFont" — the legacy icon font is gone
+            // upstream, and requesting it NREs GlyphStore in a real windowed run).
             Resources.AddStore(new DllResourceStore(osu.Game.Resources.OsuResources.ResourceAssembly));
 
-            AddFont(Resources, @"Fonts/osuFont");
             AddFont(Resources, @"Fonts/Torus/Torus-Regular");
             AddFont(Resources, @"Fonts/Torus/Torus-Light");
             AddFont(Resources, @"Fonts/Torus/Torus-SemiBold");
             AddFont(Resources, @"Fonts/Torus/Torus-Bold");
+
+            AddFont(Resources, @"Fonts/Torus-Alternate/Torus-Alternate-Regular");
+            AddFont(Resources, @"Fonts/Torus-Alternate/Torus-Alternate-Light");
+            AddFont(Resources, @"Fonts/Torus-Alternate/Torus-Alternate-SemiBold");
+            AddFont(Resources, @"Fonts/Torus-Alternate/Torus-Alternate-Bold");
+
+            AddFont(Resources, @"Fonts/Inter/Inter-Regular");
+            AddFont(Resources, @"Fonts/Inter/Inter-RegularItalic");
+            AddFont(Resources, @"Fonts/Inter/Inter-Light");
+            AddFont(Resources, @"Fonts/Inter/Inter-LightItalic");
+            AddFont(Resources, @"Fonts/Inter/Inter-SemiBold");
+            AddFont(Resources, @"Fonts/Inter/Inter-SemiBoldItalic");
+            AddFont(Resources, @"Fonts/Inter/Inter-Bold");
+            AddFont(Resources, @"Fonts/Inter/Inter-BoldItalic");
+
+            AddFont(Resources, @"Fonts/Noto/Noto-Basic");
+            AddFont(Resources, @"Fonts/Noto/Noto-Bopomofo");
+            AddFont(Resources, @"Fonts/Noto/Noto-CJK-Basic");
+            AddFont(Resources, @"Fonts/Noto/Noto-CJK-Compatibility");
+            AddFont(Resources, @"Fonts/Noto/Noto-Hangul");
+            AddFont(Resources, @"Fonts/Noto/Noto-Thai");
+
             AddFont(Resources, @"Fonts/Venera/Venera-Light");
             AddFont(Resources, @"Fonts/Venera/Venera-Bold");
             AddFont(Resources, @"Fonts/Venera/Venera-Black");
@@ -109,7 +131,11 @@ namespace JukeBox.Game
             // DrawableHitObject resolves the game-level IGameplaySettings for combo-colour
             // normalisation; OsuConfigManager is lazer's implementation (same as OsuGameBase).
             dependencies.CacheAs<IGameplaySettings>(lazerConfig);
+            // A Component (added below) so its LoadComplete populates the configs on the update
+            // thread — see LazerRulesetConfigCache remarks; this game load runs on an async
+            // loader thread where realm reads are forbidden.
             dependencies.CacheAs<IRulesetConfigCache>(lazerRulesetConfigs = new LazerRulesetConfigCache(lazerRealm));
+            Add(lazerRulesetConfigs);
             dependencies.Cache(new OsuColour());
             dependencies.CacheAs<osu.Game.IO.IStorageResourceProvider>(
                 new LazerResourceProvider(Host, Audio, Resources, lazerRealm));
@@ -218,7 +244,8 @@ namespace JukeBox.Game
         {
             base.Dispose(isDisposing);
             http.Dispose();
-            lazerRulesetConfigs?.Dispose();
+            // lazerRulesetConfigs is a child Component — the drawable tree disposes it (and with
+            // it the ruleset configs) before we tear the realm down here.
             lazerConfig?.Dispose();
             lazerRealm?.Dispose();
         }
