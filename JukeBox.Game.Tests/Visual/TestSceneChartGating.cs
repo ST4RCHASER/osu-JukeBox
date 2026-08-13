@@ -8,6 +8,7 @@ using JukeBox.Game.Screens;
 using NUnit.Framework;
 using osu.Framework.Allocation;
 using osu.Framework.Graphics;
+using osu.Framework.Graphics.Containers;
 using osu.Framework.Screens;
 using osu.Framework.Testing;
 using osu.Framework.Timing;
@@ -283,6 +284,60 @@ namespace JukeBox.Game.Tests.Visual
                 () => visuals.ChartUnavailableReason?.Contains("unknown game mode 7") == true);
 
             AddStep("remove visuals", () => Remove(visuals, true));
+        }
+
+        // User-reported regression: toggling "Render chart" OFF then ON mid-song rebuilt the
+        // lazer layer from the song start and visibly fast-forwarded to the current position.
+        // A freshly-constructed layer attached with the clock already mid-song must engage the
+        // construction snap and land at the current time within a few updates.
+        [Test]
+        public void TogglingChartOnMidSongSnapsToCurrentTime()
+        {
+            BeatmapVisuals visuals = null!;
+            Container wrapper = null!;
+            var manual = new ManualClock();
+
+            AddStep("create visuals at t=0", () =>
+            {
+                var framed = new FramedClock(manual);
+
+                // BeatmapVisuals expects its playback clock to be pumped externally
+                // (PlaybackController does this in production) — the wrapper pumps it per frame.
+                Add(wrapper = new Container
+                {
+                    RelativeSizeAxes = Axes.Both,
+                    Clock = framed,
+                    Child = visuals = new BeatmapVisuals(storyboardSet, framed) { RelativeSizeAxes = Axes.Both },
+                });
+            });
+
+            AddUntilStep("visuals loaded with chart", () => visuals.IsLoaded && visuals.HasChartLayer);
+
+            AddStep("toggle chart + hitsounds off", () =>
+            {
+                config.SetValue(JukeBoxSetting.RenderChart, false);
+                config.SetValue(JukeBoxSetting.PlayHitSounds, false);
+            });
+            AddUntilStep("layer removed", () => visuals.ChartRenderer == null);
+
+            AddStep("advance mid-song", () => manual.CurrentTime = 60000);
+
+            AddStep("toggle chart back on", () =>
+            {
+                config.SetValue(JukeBoxSetting.RenderChart, true);
+                config.SetValue(JukeBoxSetting.PlayHitSounds, true);
+            });
+
+            AddUntilStep("fresh layer snapped to current time (no crawl)",
+                () => visuals.ChartRenderer?.LastSeekCatchupFrames is >= 1 and <= 3);
+            AddAssert("construction snap engaged exactly once", () => visuals.ChartRenderer?.SeekSnapsEngaged == 1);
+            AddUntilStep("frame-stable clock at 60s", () =>
+            {
+                var clock = visuals.ChartRenderer?.DrawableRuleset?.FrameStableClock;
+                return clock != null && !clock.IsCatchingUp.Value && System.Math.Abs(clock.CurrentTime - 60000) < 200;
+            });
+
+            AddStep("clean up", () => Remove(wrapper, true));
         }
 
         [Test]
