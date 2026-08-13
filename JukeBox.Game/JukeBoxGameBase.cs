@@ -1,6 +1,8 @@
+using System;
 using System.Net.Http;
 using JukeBox.Game.Beatmaps;
 using JukeBox.Game.Configuration;
+using JukeBox.Game.LazerPlayer;
 using JukeBox.Game.Online;
 using JukeBox.Game.Playback;
 using JukeBox.Resources;
@@ -10,6 +12,10 @@ using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Performance;
 using osu.Framework.IO.Stores;
+using osu.Game.Configuration;
+using osu.Game.Database;
+using osu.Game.Graphics;
+using osu.Game.Rulesets;
 using osuTK;
 
 namespace JukeBox.Game
@@ -62,10 +68,51 @@ namespace JukeBox.Game
         protected override IReadOnlyDependencyContainer CreateChildDependencies(IReadOnlyDependencyContainer parent)
             => dependencies = new DependencyContainer(base.CreateChildDependencies(parent));
 
+        // Lazer-side dependencies backing the LazerChartLayer's DrawableRuleset host — owned (and
+        // disposed) here because they're game-lifetime singletons, exactly like OsuGameBase owns
+        // its equivalents. The realm database only ever stores lazer-side settings (ruleset
+        // configs, key bindings if any) under its own "lazer" subdirectory.
+        private RealmAccess lazerRealm = null!;
+        private OsuConfigManager lazerConfig = null!;
+        private LazerRulesetConfigCache lazerRulesetConfigs = null!;
+
         [BackgroundDependencyLoader]
         private void load()
         {
             Resources.AddStore(new DllResourceStore(typeof(JukeBoxResources).Assembly));
+
+            // osu!lazer's default skin assets + fonts (osu.Game.Resources, CC-BY-NC — see
+            // docs/ATTRIBUTION.md). The gameplay renderer's skins resolve default textures and
+            // hitsound samples out of this store; the fonts below are the ones lazer's in-playfield
+            // text (judgements, combo counters) sets via OsuFont.
+            Resources.AddStore(new DllResourceStore(osu.Game.Resources.OsuResources.ResourceAssembly));
+
+            AddFont(Resources, @"Fonts/osuFont");
+            AddFont(Resources, @"Fonts/Torus/Torus-Regular");
+            AddFont(Resources, @"Fonts/Torus/Torus-Light");
+            AddFont(Resources, @"Fonts/Torus/Torus-SemiBold");
+            AddFont(Resources, @"Fonts/Torus/Torus-Bold");
+            AddFont(Resources, @"Fonts/Venera/Venera-Light");
+            AddFont(Resources, @"Fonts/Venera/Venera-Bold");
+            AddFont(Resources, @"Fonts/Venera/Venera-Black");
+
+            // The minimal game-level dependency set lazer's DrawableRuleset subtree resolves
+            // (mirroring what lazer's own DrawableRuleset test scenes cache): a realm instance
+            // (required non-null by DatabasedKeyBindingContainer; empty database means default key
+            // bindings, which is all autoplay needs), an OsuConfigManager (gameplay visual
+            // settings, kept isolated in the lazer subdirectory), the per-ruleset config cache and
+            // the game colour palette.
+            var lazerStorage = Host.Storage.GetStorageForDirectory("lazer");
+            lazerRealm = CreateLazerRealmWithRecovery(lazerStorage, Host.UpdateThread);
+            dependencies.Cache(lazerRealm);
+            dependencies.Cache(lazerConfig = new OsuConfigManager(lazerStorage));
+            // DrawableHitObject resolves the game-level IGameplaySettings for combo-colour
+            // normalisation; OsuConfigManager is lazer's implementation (same as OsuGameBase).
+            dependencies.CacheAs<IGameplaySettings>(lazerConfig);
+            dependencies.CacheAs<IRulesetConfigCache>(lazerRulesetConfigs = new LazerRulesetConfigCache(lazerRealm));
+            dependencies.Cache(new OsuColour());
+            dependencies.CacheAs<osu.Game.IO.IStorageResourceProvider>(
+                new LazerResourceProvider(Host, Audio, Resources, lazerRealm));
 
             var config = new JukeBoxConfigManager(Host.Storage);
             dependencies.Cache(config);
@@ -109,10 +156,71 @@ namespace JukeBox.Game
             showFps.BindValueChanged(e => FrameStatistics.Value = FrameStatisticsModeFor(e.NewValue), true);
         }
 
+        /// <summary>
+        /// Opens the lazer-side realm database, recovering from a corrupt/unopenable file by
+        /// deleting it and retrying once. A hard-crash on corrupt realm is a known lazer startup
+        /// failure mode (ppy/osu#16441) — but unlike lazer, this database is entirely throwaway
+        /// (default key bindings and ruleset configs regenerate), so deletion is always safe.
+        /// A second failure (a genuinely broken environment) propagates.
+        /// Internal for testing (JukeBox.Game.Tests has InternalsVisibleTo).
+        /// </summary>
+        internal static RealmAccess CreateLazerRealmWithRecovery(osu.Framework.Platform.Storage storage, osu.Framework.Threading.GameThread? updateThread)
+        {
+            try
+            {
+                return openAndProbeRealm(storage, updateThread);
+            }
+            catch (Exception e)
+            {
+                osu.Framework.Logging.Logger.Error(e, "lazer realm database failed to open — deleting it and retrying (it only holds regenerable key-binding/ruleset-config data)");
+
+                try
+                {
+                    foreach (string f in storage.GetFiles(string.Empty, "client.realm*"))
+                        storage.Delete(f);
+
+                    foreach (string d in storage.GetDirectories(string.Empty))
+                    {
+                        if (d.StartsWith("client.realm", StringComparison.Ordinal))
+                            storage.DeleteDirectory(d);
+                    }
+                }
+                catch (Exception deleteError)
+                {
+                    // Deletion failing means the retry below will fail too and propagate the
+                    // real, more useful error — don't mask it with the cleanup failure.
+                    osu.Framework.Logging.Logger.Error(deleteError, "failed to delete lazer realm files");
+                }
+
+                return openAndProbeRealm(storage, updateThread);
+            }
+        }
+
+        private static RealmAccess openAndProbeRealm(osu.Framework.Platform.Storage storage, osu.Framework.Threading.GameThread? updateThread)
+        {
+            var realm = new RealmAccess(storage, "client.realm", updateThread);
+
+            try
+            {
+                // Corruption can surface on first real access rather than construction — force it
+                // now so the recovery path above sees it.
+                realm.Run(_ => { });
+                return realm;
+            }
+            catch
+            {
+                realm.Dispose();
+                throw;
+            }
+        }
+
         protected override void Dispose(bool isDisposing)
         {
             base.Dispose(isDisposing);
             http.Dispose();
+            lazerRulesetConfigs?.Dispose();
+            lazerConfig?.Dispose();
+            lazerRealm?.Dispose();
         }
     }
 }

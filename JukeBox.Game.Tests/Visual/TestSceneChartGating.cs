@@ -2,7 +2,6 @@
 
 using System.IO;
 using JukeBox.Game.Beatmaps;
-using JukeBox.Game.Charts;
 using JukeBox.Game.Configuration;
 using JukeBox.Game.Playback;
 using JukeBox.Game.Screens;
@@ -147,9 +146,9 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("remove visuals", () => Remove(visuals, true));
         }
 
-        // Mania (and taiko/catch) sets now get NATIVE chart renderers — the old "mode 3 is
-        // chartless" gate is gone. The storyboard-heavy mania-only sets that motivated the
-        // silent-gate fix (cached 154156, 1986088) render a mania chart + hitsounds instead.
+        // Mania (and taiko/catch) sets render through lazer's real gameplay renderer — the old
+        // "mode 3 is chartless" gate is gone. The storyboard-heavy mania-only sets that motivated
+        // the silent-gate fix (cached 154156, 1986088) render real mania gameplay + hitsounds.
         [Test]
         public void ManiaOnlyStoryboardSetGetsAManiaChart()
         {
@@ -176,8 +175,8 @@ namespace JukeBox.Game.Tests.Visual
 
             AddUntilStep("visuals loaded", () => visuals.IsLoaded);
 
-            AddUntilStep("mania chart present", () => visuals.ChartRenderer is ManiaChartLayer);
-            AddAssert("both objects compiled (note + hold)", () => visuals.ChartObjectCount == 2);
+            AddUntilStep("mania chart present", () => visuals.ChartRenderer?.Ruleset is osu.Game.Rulesets.Mania.ManiaRuleset);
+            AddAssert("both objects converted (note + hold)", () => visuals.ChartObjectCount == 2);
             AddAssert("hitsound player present", () => visuals.HasHitSoundPlayer);
             AddAssert("no unavailability reason", () => visuals.ChartUnavailableReason == null);
 
