@@ -9,12 +9,23 @@ namespace JukeBox.Game.Tests.Configuration
     [TestFixture]
     public class JukeBoxConfigManagerTest
     {
+        // ShowFps is deprecated (superseded by FpsDisplay — see that setting's remarks) but the
+        // key must keep parsing, and defaulting false, so an old ini value still migrates safely.
         [Test]
-        public void ShowFpsDefaultsToFalse()
+        public void LegacyShowFpsKeyDefaultsToFalse()
         {
             var config = new JukeBoxConfigManager(new TemporaryNativeStorage(Path.Combine("jukebox-config-test", Path.GetRandomFileName())));
 
             Assert.That(config.Get<bool>(JukeBoxSetting.ShowFps), Is.False);
+        }
+
+        [Test]
+        public void FpsDisplayDefaultsToOff()
+        {
+            var config = new JukeBoxConfigManager(new TemporaryNativeStorage(Path.Combine("jukebox-config-test", Path.GetRandomFileName())));
+
+            Assert.That(config.Get<FpsDisplayMode>(JukeBoxSetting.FpsDisplay), Is.EqualTo(FpsDisplayMode.Off));
+            Assert.That(config.Get<bool>(JukeBoxSetting.FpsDisplayMigrated), Is.False);
         }
 
         [Test]
