@@ -213,6 +213,75 @@ namespace JukeBox.Game.Tests.Visual
             }
         }
 
+        // Coverage for the JukeBoxSetting.PlayfieldZoom rework: the zoom factor multiplies into
+        // sceneContainer's own auto-fit scale (see MainScreen.updateSceneScale), so it must apply
+        // live (no rebuild — updateSceneScale already re-reads the config bindable every frame) and
+        // default to a no-op, matching the pre-zoom scale exactly.
+        [Test]
+        public void PlayfieldZoomScalesTheSceneHostLiveAndDefaultsToNoOp()
+        {
+            float baseline = 0;
+            AddUntilStep("scene has settled to a stable scale", () => screen.SceneScale.X > 0);
+            AddStep("record the default-zoom scale", () => baseline = screen.SceneScale.X);
+
+            AddStep("zoom out to 1%", () => config.SetValue(JukeBoxSetting.PlayfieldZoom, 0.01));
+            AddUntilStep("scale follows down to 1%", () => Math.Abs(screen.SceneScale.X - baseline * 0.01f) < 0.001f);
+
+            AddStep("zoom in to 200%", () => config.SetValue(JukeBoxSetting.PlayfieldZoom, 2.0));
+            AddUntilStep("scale follows up to 200%", () => Math.Abs(screen.SceneScale.X - baseline * 2f) < 0.01f);
+
+            AddStep("restore default 100%", () => config.SetValue(JukeBoxSetting.PlayfieldZoom, 1.0));
+            AddUntilStep("scale restores to the default no-op baseline", () => Math.Abs(screen.SceneScale.X - baseline) < 0.01f);
+        }
+
+        // Regression coverage for the ChartZoom -> PlayfieldZoom rework's widened scope: the WHOLE
+        // visuals stack (background, storyboard/video, chart — everything inside visualsStack, see
+        // BeatmapVisuals) must zoom together as one unit, not just the chart. VisualsStack's own
+        // ScreenSpaceDrawQuad reflects sceneContainer's scale directly (it's unmasked geometry, so
+        // this holds even past 100% where playerBox's masking starts clipping what's actually
+        // painted) — doubling the zoom must double it.
+        [Test]
+        public void PlayfieldZoomScalesTheWholeVisualsStackTogether()
+        {
+            float baselineWidth = 0;
+            AddUntilStep("visuals stack has a nonzero width", () => screen.VisualsStack.ScreenSpaceDrawQuad.Width > 0);
+            AddStep("record the baseline visuals width", () => baselineWidth = screen.VisualsStack.ScreenSpaceDrawQuad.Width);
+
+            AddStep("zoom to 200%", () => config.SetValue(JukeBoxSetting.PlayfieldZoom, 2.0));
+            AddUntilStep("visuals stack doubles in width", () => screen.VisualsStack.ScreenSpaceDrawQuad.Width >= baselineWidth * 1.9f);
+
+            AddStep("restore default 100%", () => config.SetValue(JukeBoxSetting.PlayfieldZoom, 1.0));
+            AddUntilStep("visuals stack restores to the baseline width", () => Math.Abs(screen.VisualsStack.ScreenSpaceDrawQuad.Width - baselineWidth) < 1f);
+        }
+
+        // "box masking still clips at box edges": zooming must never relax or move playerBox's own
+        // mask/bounds — only what's painted INSIDE it changes. Complements
+        // PlayerBoxMasksVisualsAndNeverExtendsUnderAPanel (which covers the un-zoomed case) at the
+        // 200% extreme, where the zoomed-up scene now genuinely overflows the box and relies on that
+        // masking to actually get clipped.
+        [Test]
+        public void PlayerBoxStaysMaskedAndUnmovedWhenPlayfieldIsZoomedIn()
+        {
+            osuTK.Vector2 boxTopLeft = default, boxBottomRight = default;
+            AddUntilStep("box has settled", () => screen.PlayerBox.DrawWidth > 0);
+            AddStep("record box bounds", () =>
+            {
+                var quad = screen.PlayerBox.ScreenSpaceDrawQuad;
+                boxTopLeft = quad.TopLeft;
+                boxBottomRight = quad.BottomRight;
+            });
+
+            AddStep("zoom in to 200%", () => config.SetValue(JukeBoxSetting.PlayfieldZoom, 2.0));
+            AddAssert("box still masks", () => screen.PlayerBox.Masking);
+            AddAssert("box bounds unchanged by the zoom", () =>
+            {
+                var quad = screen.PlayerBox.ScreenSpaceDrawQuad;
+                return osuTK.Vector2.Distance(quad.TopLeft, boxTopLeft) < 0.5f && osuTK.Vector2.Distance(quad.BottomRight, boxBottomRight) < 0.5f;
+            });
+
+            AddStep("restore default 100%", () => config.SetValue(JukeBoxSetting.PlayfieldZoom, 1.0));
+        }
+
         // Regression coverage for a focus-mode transition asymmetry: entering focus mode used to
         // snap the player box straight to full-bleed on the very same frame the columns started
         // sliding away, while leaving focus animated the box's restore properly. Both directions
