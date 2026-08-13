@@ -24,6 +24,19 @@ public enum JukeBoxSetting
     /// <see cref="FpsDisplayMigrated"/>. See JukeBoxGameBase.load.
     /// </summary>
     ShowFps,
+    /// <summary>
+    /// Deprecated: superseded by <see cref="FpsDisplayMode"/>. Kept ONLY so old
+    /// Off/Compact/Details ini text (see <see cref="Game.Configuration.LegacyFpsDisplayMode"/>)
+    /// still decodes under its ORIGINAL meaning — <see cref="FpsDisplayMode"/> reuses the
+    /// "Compact"/"Details" NAMES for different meanings, and osu.Framework's ini loader matches
+    /// persisted enum values by name, so decoding old text straight into the new type would
+    /// silently misinterpret it. Its value is copied into <see cref="FpsDisplayMode"/> once,
+    /// guarded by <see cref="FpsDisplayModeMigrated"/>. See JukeBoxGameBase.load and
+    /// JukeBoxGameBase.MigrateLegacyFpsDisplay.
+    /// </summary>
+    FpsDisplay,
+    /// <summary>One-shot guard for the <see cref="ShowFps"/> → <see cref="FpsDisplay"/> (legacy) migration.</summary>
+    FpsDisplayMigrated,
     PreferredMirror,
     RenderChart,
     PlayHitSounds,
@@ -36,26 +49,48 @@ public enum JukeBoxSetting
     UiScale,
     /// <summary>Global audio offset in ms, added to the per-beatmap offset (BeatmapOffsetStore).</summary>
     GlobalAudioOffset,
-    /// <summary>Replaces <see cref="ShowFps"/>: Off / Compact / Details, driving the framework's
-    /// <see cref="osu.Framework.Graphics.Performance.FrameStatisticsMode"/> (None / Minimal / Full).</summary>
-    FpsDisplay,
-    /// <summary>One-shot guard for the <see cref="ShowFps"/> → <see cref="FpsDisplay"/> migration.</summary>
-    FpsDisplayMigrated,
+    /// <summary>Replaces the legacy <see cref="FpsDisplay"/> shape: Off / Compact / Details / Graph,
+    /// see <see cref="Game.Configuration.FpsDisplayMode"/> for what each means.</summary>
+    FpsDisplayMode,
+    /// <summary>One-shot guard for the <see cref="FpsDisplay"/> (legacy) → <see cref="FpsDisplayMode"/> migration.</summary>
+    FpsDisplayModeMigrated,
 }
 
 /// <summary>
-/// FPS overlay presentation, mapped to the framework's
-/// <see cref="osu.Framework.Graphics.Performance.FrameStatisticsMode"/> (see
-/// JukeBoxGameBase.FrameStatisticsModeFor): <see cref="Off"/> → None, <see cref="Compact"/> →
-/// Minimal (single-line counter), <see cref="Details"/> → Full (the frame-time graph). Replaces
-/// the old boolean <see cref="JukeBoxSetting.ShowFps"/> — see that setting's remarks for the
-/// migration.
+/// Pre-Compact-overlay/Graph-rename shape of the FPS setting: <see cref="Off"/>, <see cref="Compact"/>
+/// (the framework's single-line Minimal counter) and <see cref="Details"/> (the framework's full
+/// frame-time Graph). Kept ONLY to decode legacy <see cref="JukeBoxSetting.FpsDisplay"/> ini text
+/// during migration (JukeBoxGameBase.MigrateLegacyFpsDisplay) — <see cref="FpsDisplayMode"/> reuses
+/// "Compact"/"Details" as names for different meanings, and osu.Framework's ini loader matches
+/// persisted enum values by name, so this separate type is what lets the old text still decode
+/// under its original meaning instead of being silently reinterpreted.
+/// </summary>
+internal enum LegacyFpsDisplayMode
+{
+    Off,
+    Compact,
+    Details,
+}
+
+/// <summary>
+/// FPS overlay presentation. <see cref="Off"/> → nothing. <see cref="Compact"/> → a small custom
+/// corner overlay (JukeBoxGameBase's own drawable sampling the update/draw clocks; the framework's
+/// own <see cref="osu.Framework.Graphics.Performance.FrameStatisticsMode"/> stays None for this
+/// mode). <see cref="Details"/> → the framework's single-line Minimal counter. <see cref="Graph"/>
+/// → the framework's full frame-time Graph. See JukeBoxGameBase.FrameStatisticsModeFor.
+///
+/// Replaces the legacy <see cref="JukeBoxSetting.FpsDisplay"/>/<see cref="LegacyFpsDisplayMode"/>
+/// shape, whose Compact/Details member NAMES this enum reuses for different meanings — old
+/// "Compact" (old Minimal) now means <see cref="Details"/> here, and old "Details" (old Full) now
+/// means <see cref="Graph"/>. See JukeBoxGameBase.MigrateLegacyFpsDisplay for the migration that
+/// remaps old values instead of letting them silently re-parse under the new meanings.
 /// </summary>
 public enum FpsDisplayMode
 {
     Off,
     Compact,
     Details,
+    Graph,
 }
 
 /// <summary>
@@ -112,8 +147,10 @@ public class JukeBoxConfigManager : IniConfigManager<JukeBoxSetting>
         SetDefault(JukeBoxSetting.UiLayout, UiLayout.ThreeColumn);
         SetDefault(JukeBoxSetting.CacheSizeGb, 10.0);
         SetDefault(JukeBoxSetting.ShowFps, false);
-        SetDefault(JukeBoxSetting.FpsDisplay, FpsDisplayMode.Off);
+        SetDefault(JukeBoxSetting.FpsDisplay, LegacyFpsDisplayMode.Off);
         SetDefault(JukeBoxSetting.FpsDisplayMigrated, false);
+        SetDefault(JukeBoxSetting.FpsDisplayMode, FpsDisplayMode.Off);
+        SetDefault(JukeBoxSetting.FpsDisplayModeMigrated, false);
         SetDefault(JukeBoxSetting.PreferredMirror, MirrorSource.Auto);
         SetDefault(JukeBoxSetting.RenderChart, false);
         SetDefault(JukeBoxSetting.PlayHitSounds, false);

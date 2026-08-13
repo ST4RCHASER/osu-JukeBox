@@ -48,9 +48,9 @@ namespace JukeBox.Game.Tests.Visual
         [SetUpSteps]
         public void SetUpSteps()
         {
-            AddStep("reset FpsDisplay/PreferredMirror and create overlay", () =>
+            AddStep("reset FpsDisplayMode/PreferredMirror and create overlay", () =>
             {
-                config.SetValue(JukeBoxSetting.FpsDisplay, FpsDisplayMode.Off);
+                config.SetValue(JukeBoxSetting.FpsDisplayMode, FpsDisplayMode.Off);
                 config.SetValue(JukeBoxSetting.PreferredMirror, MirrorSource.Auto);
                 Child = overlay = new SettingsOverlay();
             });
@@ -76,29 +76,32 @@ namespace JukeBox.Game.Tests.Visual
         public void ChangingFpsDisplayDropdownUpdatesConfigBindable()
         {
             AddStep("show overlay", () => overlay.Show());
-            AddAssert("config starts Off", () => config.Get<FpsDisplayMode>(JukeBoxSetting.FpsDisplay) == FpsDisplayMode.Off);
+            AddAssert("config starts Off", () => config.Get<FpsDisplayMode>(JukeBoxSetting.FpsDisplayMode) == FpsDisplayMode.Off);
             AddAssert("dropdown starts Off", () => overlay.FpsDisplayDropdown.Current.Value == FpsDisplayMode.Off);
 
             AddStep("select Compact in dropdown", () => overlay.FpsDisplayDropdown.Current.Value = FpsDisplayMode.Compact);
-            AddAssert("config bindable flipped to Compact", () => config.Get<FpsDisplayMode>(JukeBoxSetting.FpsDisplay) == FpsDisplayMode.Compact);
+            AddAssert("config bindable flipped to Compact", () => config.Get<FpsDisplayMode>(JukeBoxSetting.FpsDisplayMode) == FpsDisplayMode.Compact);
 
             AddStep("select Details in dropdown", () => overlay.FpsDisplayDropdown.Current.Value = FpsDisplayMode.Details);
-            AddAssert("config bindable flipped to Details", () => config.Get<FpsDisplayMode>(JukeBoxSetting.FpsDisplay) == FpsDisplayMode.Details);
+            AddAssert("config bindable flipped to Details", () => config.Get<FpsDisplayMode>(JukeBoxSetting.FpsDisplayMode) == FpsDisplayMode.Details);
+
+            AddStep("select Graph in dropdown", () => overlay.FpsDisplayDropdown.Current.Value = FpsDisplayMode.Graph);
+            AddAssert("config bindable flipped to Graph", () => config.Get<FpsDisplayMode>(JukeBoxSetting.FpsDisplayMode) == FpsDisplayMode.Graph);
 
             AddStep("select Off in dropdown", () => overlay.FpsDisplayDropdown.Current.Value = FpsDisplayMode.Off);
-            AddAssert("config bindable flipped back to Off", () => config.Get<FpsDisplayMode>(JukeBoxSetting.FpsDisplay) == FpsDisplayMode.Off);
+            AddAssert("config bindable flipped back to Off", () => config.Get<FpsDisplayMode>(JukeBoxSetting.FpsDisplayMode) == FpsDisplayMode.Off);
         }
 
         [Test]
         public void ConfigStartingWithNonOffFpsDisplaySelectsItOnCreation()
         {
-            AddStep("set FpsDisplay Details then recreate overlay", () =>
+            AddStep("set FpsDisplayMode Graph then recreate overlay", () =>
             {
-                config.SetValue(JukeBoxSetting.FpsDisplay, FpsDisplayMode.Details);
+                config.SetValue(JukeBoxSetting.FpsDisplayMode, FpsDisplayMode.Graph);
                 Child = overlay = new SettingsOverlay();
             });
 
-            AddAssert("dropdown starts Details", () => overlay.FpsDisplayDropdown.Current.Value == FpsDisplayMode.Details);
+            AddAssert("dropdown starts Graph", () => overlay.FpsDisplayDropdown.Current.Value == FpsDisplayMode.Graph);
         }
 
         [Test]
@@ -174,10 +177,10 @@ namespace JukeBox.Game.Tests.Visual
         {
             SettingsOverlay dockedOverlay = null!;
             AddStep("create docked overlay", () => Child = dockedOverlay = new SettingsOverlay(docked: true));
-            AddAssert("config starts Off", () => config.Get<FpsDisplayMode>(JukeBoxSetting.FpsDisplay) == FpsDisplayMode.Off);
+            AddAssert("config starts Off", () => config.Get<FpsDisplayMode>(JukeBoxSetting.FpsDisplayMode) == FpsDisplayMode.Off);
 
             AddStep("select Details in dropdown", () => dockedOverlay.FpsDisplayDropdown.Current.Value = FpsDisplayMode.Details);
-            AddAssert("config bindable flipped to Details", () => config.Get<FpsDisplayMode>(JukeBoxSetting.FpsDisplay) == FpsDisplayMode.Details);
+            AddAssert("config bindable flipped to Details", () => config.Get<FpsDisplayMode>(JukeBoxSetting.FpsDisplayMode) == FpsDisplayMode.Details);
         }
 
         // Hardware acceleration is now a checkbox (checked = Any, unchecked = None) rather than a
