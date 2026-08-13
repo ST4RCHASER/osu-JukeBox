@@ -1,6 +1,7 @@
 #nullable enable
 
 using osu.Framework.Extensions.Color4Extensions;
+using osu.Framework.Graphics;
 using osu.Framework.Graphics.Effects;
 using osuTK.Graphics;
 
@@ -99,6 +100,33 @@ internal static class Theme
     public const double HoverFadeDuration = 120;
     public const double PressScaleDuration = 80;
     public const float PressScale = 0.95f;
+
+    // ---- Animation durations / easing ------------------------------------------------------
+    // Shared vocabulary for every open/close/transition animation in the app, so pace and feel
+    // read as one system rather than each component picking its own numbers.
+
+    /// <summary>Micro-interactions that need to register as instant but not abrupt — tab-switch
+    /// text swaps, status-text crossfades.</summary>
+    public const double DurationFast = 150;
+
+    /// <summary>The default length for most open/close/crossfade animations (panel tab
+    /// switches, card entrances, queue rows, modal pop-in/out).</summary>
+    public const double DurationNormal = 250;
+
+    /// <summary>Larger orchestrated transitions — the focus-mode layout transform, toast
+    /// dismissal.</summary>
+    public const double DurationSlow = 400;
+
+    /// <summary>Standard "entering" easing — content decelerating into place.</summary>
+    public const Easing EaseEnter = Easing.OutQuint;
+
+    /// <summary>Standard "exiting" easing — content accelerating away.</summary>
+    public const Easing EaseExit = Easing.InQuint;
+
+    /// <summary>Starting/ending scale for modal and toast pop-in/pop-out (scales up to 1 on the
+    /// way in, back down on the way out) — distinct from <see cref="PressScale"/>, which is a
+    /// button micro-interaction, even though the two happen to share a value.</summary>
+    public const float PopScale = 0.95f;
 
     /// <summary>Subtle drop shadow used behind the left panel and the bottom playback bar.</summary>
     public static EdgeEffectParameters PanelShadow => new EdgeEffectParameters
