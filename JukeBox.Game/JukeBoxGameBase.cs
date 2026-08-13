@@ -42,10 +42,18 @@ namespace JukeBox.Game
 
         // Kept as a field (rather than a load()-local) because osu.Framework's config-manager
         // bindables use a weak-reference chain back to the master value — an unrooted local would
-        // be eligible for collection, silently dropping this binding. See JukeBoxSetting.FpsDisplay.
+        // be eligible for collection, silently dropping this binding. See JukeBoxSetting.FpsDisplayMode.
         private Bindable<FpsDisplayMode> fpsDisplay = null!;
         private Bindable<double> uiScale = null!;
         private Bindable<double> volumeInactive = null!;
+
+        // Lazer's own compact FPS/frame-time readout (osu.Game.Graphics.UserInterface.FPSCounter):
+        // reused as-is rather than hand-rolled — its DI needs (OsuColour, OsuConfigManager,
+        // GameHost) are all already satisfied by dependencies cached earlier in load() below.
+        // Window-level (added to base.Content, NOT the DPI-scaled `Content` property — see its
+        // construction below) and shown/hidden purely by FpsDisplayMode.Compact, independent of
+        // FrameStatistics/FrameStatisticsModeFor (which deliberately excludes Compact).
+        private osu.Game.Graphics.UserInterface.FPSCounter fpsCounter = null!;
 
         // Multiplied into ALL audio (lazer's OsuGame does the same): faded towards
         // OsuSetting.VolumeInactive while the window is unfocused, back to 1 on focus.
@@ -53,25 +61,54 @@ namespace JukeBox.Game
         private IBindable<bool> isActive = null!;
 
         /// <summary>
-        /// Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the FpsDisplay -&gt;
+        /// Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the FpsDisplayMode -&gt;
         /// FrameStatisticsMode mapping used by the binding below, isolated from
         /// <see cref="osu.Framework.Game.FrameStatistics"/> itself: actually flipping that bindable
         /// activates the framework's real PerformanceOverlay, which isn't safe to run under a
         /// headless test host (crashes with a NullReferenceException — no real renderer/GPU).
+        /// <see cref="FpsDisplayMode.Compact"/> stays <see cref="FrameStatisticsMode.None"/> here —
+        /// it's driven entirely by <see cref="fpsCounter"/> instead, not the framework overlay.
         /// </summary>
         internal static FrameStatisticsMode FrameStatisticsModeFor(FpsDisplayMode fpsDisplay) => fpsDisplay switch
         {
-            FpsDisplayMode.Compact => FrameStatisticsMode.Minimal,
-            FpsDisplayMode.Details => FrameStatisticsMode.Full,
+            FpsDisplayMode.Details => FrameStatisticsMode.Minimal,
+            FpsDisplayMode.Graph => FrameStatisticsMode.Full,
             _ => FrameStatisticsMode.None,
         };
 
         /// <summary>
         /// Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the one-shot
-        /// <see cref="JukeBoxSetting.ShowFps"/> → <see cref="JukeBoxSetting.FpsDisplay"/> migration
-        /// mapping used below, isolated from the config manager itself.
+        /// <see cref="JukeBoxSetting.ShowFps"/> → <see cref="JukeBoxSetting.FpsDisplay"/> (legacy)
+        /// migration mapping used below, isolated from the config manager itself. Unchanged by the
+        /// Compact-overlay/Graph rename — still lands in the legacy shape, one hop before
+        /// <see cref="MigrateLegacyFpsDisplay"/> takes it the rest of the way.
         /// </summary>
-        internal static FpsDisplayMode MigrateShowFps(bool showFps) => showFps ? FpsDisplayMode.Details : FpsDisplayMode.Off;
+        internal static LegacyFpsDisplayMode MigrateShowFps(bool showFps) => showFps ? LegacyFpsDisplayMode.Details : LegacyFpsDisplayMode.Off;
+
+        /// <summary>
+        /// Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the one-shot
+        /// <see cref="JukeBoxSetting.FpsDisplay"/> (legacy) → <see cref="JukeBoxSetting.FpsDisplayMode"/>
+        /// migration mapping used below, isolated from the config manager itself. The legacy
+        /// Compact (single-line Minimal counter) now means <see cref="FpsDisplayMode.Details"/>;
+        /// the legacy Details (frame-time Graph) now means <see cref="FpsDisplayMode.Graph"/>. Any
+        /// other/unrecognised legacy value (including <see cref="LegacyFpsDisplayMode.Off"/>, and
+        /// covering the framework's own catch-and-default-to-Off behaviour for ini text that no
+        /// longer parses at all) lands on <see cref="FpsDisplayMode.Off"/>.
+        /// </summary>
+        internal static FpsDisplayMode MigrateLegacyFpsDisplay(LegacyFpsDisplayMode legacy) => legacy switch
+        {
+            LegacyFpsDisplayMode.Compact => FpsDisplayMode.Details,
+            LegacyFpsDisplayMode.Details => FpsDisplayMode.Graph,
+            _ => FpsDisplayMode.Off,
+        };
+
+        /// <summary>Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the Compact-mode
+        /// overlay, to assert its visibility without depending on internal layout.</summary>
+        internal osu.Game.Graphics.UserInterface.FPSCounter FpsCounter => fpsCounter;
+
+        /// <summary>Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the live
+        /// FpsDisplayMode bindable, to drive it directly without needing a settings UI in the tree.</summary>
+        internal Bindable<FpsDisplayMode> FpsDisplay => fpsDisplay;
 
         protected JukeBoxGameBase()
         {
@@ -175,6 +212,22 @@ namespace JukeBox.Game
             dependencies.CacheAs<osu.Game.IO.IStorageResourceProvider>(
                 new LazerResourceProvider(Host, Audio, Resources, lazerRealm));
 
+            // Added to base.Content (the framework's own unscaled root), NOT the `Content`
+            // property this class overrides (the DrawSizePreservingFillContainer from the
+            // constructor, subject to JukeBoxSetting.UiScale) — window-level and above everything
+            // else in the draw order, deliberately kept out of the player box, exactly like the
+            // constructor's own base.Content.Add for that scaling container. Bottom-right, nudged
+            // up past NowPlayingBar's height so it clears the bottom bar; that bar lives in the
+            // OTHER (scaled) tree, so this margin is an approximation rather than an exact match.
+            // Visibility is entirely owned by fpsDisplay's binding below (runOnceImmediately, so it
+            // sets the correct initial Show()/Hide() state itself) — no explicit Hide() needed here.
+            base.Content.Add(fpsCounter = new osu.Game.Graphics.UserInterface.FPSCounter
+            {
+                Anchor = Anchor.BottomRight,
+                Origin = Anchor.BottomRight,
+                Margin = new MarginPadding { Right = 10, Bottom = 100 },
+            });
+
             // The realm-backed skin store, cached exactly as OsuGameBase caches it. Nothing in our
             // own skin chain consults it (LazerSkinProvider never falls back to parent lookups) —
             // it exists because scattered lazer gameplay pieces hard-resolve it for default-skin
@@ -240,12 +293,24 @@ namespace JukeBox.Game
                 config.SetValue(JukeBoxSetting.VolumeMigrated, true);
             }
 
-            // ShowFps -> FpsDisplay: same one-shot copy-then-guard shape as the volume migration
-            // above. The old bool key is left untouched afterwards (still readable, just unused).
+            // ShowFps -> FpsDisplay (legacy): same one-shot copy-then-guard shape as the volume
+            // migration above. The old bool key is left untouched afterwards (still readable, just
+            // unused).
             if (!config.Get<bool>(JukeBoxSetting.FpsDisplayMigrated))
             {
                 config.SetValue(JukeBoxSetting.FpsDisplay, MigrateShowFps(config.Get<bool>(JukeBoxSetting.ShowFps)));
                 config.SetValue(JukeBoxSetting.FpsDisplayMigrated, true);
+            }
+
+            // FpsDisplay (legacy) -> FpsDisplayMode: chained onto the migration above so an
+            // upgrade from the very first ShowFps release still lands correctly, one hop at a
+            // time. Same one-shot copy-then-guard shape; the legacy key is left untouched
+            // afterwards (still readable, just unused). See MigrateLegacyFpsDisplay for why this
+            // can't just be a straight Enum.Parse of the old text against the new type.
+            if (!config.Get<bool>(JukeBoxSetting.FpsDisplayModeMigrated))
+            {
+                config.SetValue(JukeBoxSetting.FpsDisplayMode, MigrateLegacyFpsDisplay(config.Get<LegacyFpsDisplayMode>(JukeBoxSetting.FpsDisplay)));
+                config.SetValue(JukeBoxSetting.FpsDisplayModeMigrated, true);
             }
 
             Add(skinSelection = new SkinSelection());
@@ -278,8 +343,20 @@ namespace JukeBox.Game
             // wiring exists yet, since this runs in load(), well before LoadComplete — is safe: the
             // overlay's own binding uses runOnceImmediately, so it just picks up whatever value is
             // already sitting in FrameStatistics by the time base.LoadComplete() runs.
-            fpsDisplay = config.GetBindable<FpsDisplayMode>(JukeBoxSetting.FpsDisplay);
-            fpsDisplay.BindValueChanged(e => FrameStatistics.Value = FrameStatisticsModeFor(e.NewValue), true);
+            //
+            // Compact is deliberately excluded from that framework overlay (FrameStatisticsModeFor
+            // maps it to None) — it's driven by fpsCounter below instead, so both arms of this one
+            // bindable stay in lockstep without a second BindValueChanged subscription.
+            fpsDisplay = config.GetBindable<FpsDisplayMode>(JukeBoxSetting.FpsDisplayMode);
+            fpsDisplay.BindValueChanged(e =>
+            {
+                FrameStatistics.Value = FrameStatisticsModeFor(e.NewValue);
+
+                if (e.NewValue == FpsDisplayMode.Compact)
+                    fpsCounter.Show();
+                else
+                    fpsCounter.Hide();
+            }, true);
         }
 
         protected override void LoadComplete()
