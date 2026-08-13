@@ -62,18 +62,22 @@ public partial class DifficultySwitcher : CompositeDrawable
         flow.Clear();
 
         var set = change.NewValue;
-        if (set == null || set.Difficulties.Count <= 1)
+        if (set == null || set.Difficulties.Count == 0)
         {
             updateHighlight();
-            return; // nothing to switch between — keep the bar clean
+            return; // nothing to show — keep the bar clean
         }
+
+        // A single-difficulty set still shows its one chip (as a name label, effectively
+        // always-selected) — just nothing to switch between, so it's non-interactive.
+        bool interactive = set.Difficulties.Count > 1;
 
         for (int i = 0; i < set.Difficulties.Count && i < max_chips; i++)
         {
             var diff = set.Difficulties[i];
             flow.Add(new DifficultyChip(diff)
             {
-                Action = () => _ = playback.SwitchDifficultyAsync(diff.Path),
+                Action = interactive ? () => _ = playback.SwitchDifficultyAsync(diff.Path) : null,
             });
         }
 
