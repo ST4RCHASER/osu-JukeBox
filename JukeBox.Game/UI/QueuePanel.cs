@@ -14,14 +14,28 @@ using osuTK;
 namespace JukeBox.Game.UI;
 
 /// <summary>
-/// Right-anchored drawer listing <see cref="MusicQueue.Items"/>: a "Queue (N)" header and one
-/// removable row per queued set, rebuilt whenever the list changes. Starts off-screen (past its
-/// own right edge) and slides in/out on <see cref="ToggleVisibility"/>.
+/// Queue list: a "Queue (N)" header and one removable row per <see cref="MusicQueue.Items"/> entry,
+/// rebuilt whenever the list changes. Two presentations, chosen by the constructor:
+///
+/// <list type="bullet">
+/// <item>Floating (default, <c>docked: false</c>) — a right-anchored drawer, off-screen (past its
+/// own right edge) until <see cref="ToggleVisibility"/>/<see cref="SetShown"/> slides it in.</item>
+/// <item>Docked (<c>docked: true</c>) — the three-column layout's right panel embeds this as its
+/// "Queue" tab body: fully-relative geometry filling whatever parent it's given, parked at X = 0
+/// from the start (no slide-in — the owning tab strip toggles Alpha instead). Configured entirely
+/// here rather than by an external post-construction override, since the parent composite's own
+/// child-loading order isn't guaranteed relative to a caller's LoadComplete (e.g. inside a
+/// GridContainer cell, which loads its content lazily) — self-configuring sidesteps that race
+/// entirely.</item>
+/// </list>
 /// </summary>
 public partial class QueuePanel : CompositeDrawable
 {
     private const float panel_width = 320;
     private const float slide_duration = 200;
+
+    /// <summary>See the class summary.</summary>
+    private readonly bool docked;
 
     [Resolved]
     private MusicQueue queue { get; set; } = null!;
@@ -35,6 +49,11 @@ public partial class QueuePanel : CompositeDrawable
     private FillFlowContainer rowsFlow = null!;
 
     private bool shown;
+
+    public QueuePanel(bool docked = false)
+    {
+        this.docked = docked;
+    }
 
     /// <summary>
     /// Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to how many rows are
@@ -60,10 +79,21 @@ public partial class QueuePanel : CompositeDrawable
     [BackgroundDependencyLoader]
     private void load()
     {
-        RelativeSizeAxes = Axes.Y;
-        Width = panel_width;
-        Anchor = Anchor.TopRight;
-        Origin = Anchor.TopRight;
+        if (docked)
+        {
+            Anchor = Anchor.TopLeft;
+            Origin = Anchor.TopLeft;
+            RelativeSizeAxes = Axes.Both;
+            Width = 1f;
+            Height = 1f;
+        }
+        else
+        {
+            RelativeSizeAxes = Axes.Y;
+            Width = panel_width;
+            Anchor = Anchor.TopRight;
+            Origin = Anchor.TopRight;
+        }
 
         Masking = true;
         CornerRadius = Theme.CornerRadius;
@@ -112,8 +142,10 @@ public partial class QueuePanel : CompositeDrawable
 
         // Off-screen to the right until first toggled — done here rather than in load() because
         // MoveToX needs this Drawable's own Width, which auto-size/relative sizing only settles
-        // by LoadComplete.
-        X = panel_width;
+        // by LoadComplete. Docked instances never slide — they're parked at X = 0 from the start
+        // (see the class summary).
+        if (!docked)
+            X = panel_width;
 
         // Scheduled rather than rebuilding inline: CollectionChanged fires synchronously on
         // whatever thread mutated queue.Items, and rebuildRows() mutates rowsFlow's
