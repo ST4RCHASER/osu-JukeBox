@@ -10,10 +10,12 @@ using JukeBox.Game.Screens;
 using NUnit.Framework;
 using osu.Framework.Allocation;
 using osu.Framework.Graphics;
+using osu.Framework.Graphics.Containers;
 using osu.Framework.Screens;
 using osu.Framework.Testing;
 using osu.Framework.Timing;
 using osu.Game.Rulesets.Catch;
+using osu.Game.Rulesets.Catch.UI;
 
 namespace JukeBox.Game.Tests.Visual
 {
@@ -403,22 +405,35 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("remove visuals", () => Remove(visuals, true));
         }
 
-        // Regression coverage for the catch (CTB) crop bug: unlike standard/taiko/mania, whose
-        // lazer PlayfieldAdjustmentContainers size themselves in RELATIVE fractions of whatever
-        // box they're given (scale-invariant), catch's CatchPlayfieldAdjustmentContainer uses
-        // ABSOLUTE pixel constants (a 1024×768 "base game" canvas, +200 reserved below for the
-        // catcher plate) calibrated against lazer's own Player-screen convention
+        // Regression coverage for the catch (CTB) crop bug and its follow-up edge-case bugs:
+        // unlike standard/taiko/mania, whose lazer PlayfieldAdjustmentContainers size themselves
+        // in RELATIVE fractions of whatever box they're given (scale-invariant), catch's
+        // CatchPlayfieldAdjustmentContainer uses ABSOLUTE pixel constants (a 1024×768 "base game"
+        // canvas) calibrated against lazer's own Player-screen convention
         // (DrawSizePreservingFillContainer.TargetSize) — chartContainer must actually BE a
         // 1024×768 canvas (see its construction comment in BeatmapVisuals) or catch renders ~2x
-        // oversized and the catcher/fruits end up entirely outside the box. Playfield's own
-        // ScreenSpaceDrawQuad is asserted (not just the DrawableRuleset's, which is
-        // RelativeSizeAxes-filled and would trivially "fit") because catch's internal
-        // ScalingContainer deliberately grows Playfield's own bounds to cover the catcher —
-        // that's the geometry lazer actually renders on screen.
+        // oversized and the catcher/fruits end up entirely outside the box.
+        //
+        // An earlier version of this test asserted full containment within `visuals`' own bounds,
+        // which required forcibly shrinking catch's playfield (dividing by 968 = lazer's
+        // base_game_height + its own internal safety margin) to fit flush with zero space to
+        // spare — that flush fit turned catch's own internal (normally harmless/oversized) safety
+        // clip into a hard, VISIBLE seam exactly at the scene edge, clipping fruits mid-sprite as
+        // they entered from the top, and left a large dead gap below the catcher. See
+        // catch_reserved_height's remarks in BeatmapVisuals for the corrected approach: catch is
+        // allowed to overflow `visuals`' own bounds by design (unclipped — nothing between
+        // chartContainer and MainScreen's playerBox masks), so the invariants checked here are
+        // narrower and more precise than "fits inside the box".
         [Test]
-        public void CatchPlayfieldIncludingCatcherFitsInsideTheVisualsBox()
+        public void CatchCatcherSitsNearBottomWithNoIntermediateMasking()
         {
             BeatmapVisuals visuals = null!;
+
+            // A locally-advancing clock (unlike the shared, frozen playbackClock field) — a real
+            // FALLING fruit is needed to check the top-clip regression, and a frozen clock never
+            // spawns one.
+            var manual = new ManualClock();
+            var clock = new FramedClock(manual);
 
             AddStep("enable chart", () => config.SetValue(JukeBoxSetting.RenderChart, true));
 
@@ -458,19 +473,74 @@ namespace JukeBox.Game.Tests.Visual
                     PreferredOsuFile = osuFile,
                 };
 
-                Add(visuals = new BeatmapVisuals(set, playbackClock) { RelativeSizeAxes = Axes.Both });
+                Add(visuals = new BeatmapVisuals(set, clock) { RelativeSizeAxes = Axes.Both });
             });
 
             AddUntilStep("chart loaded", () => visuals.IsLoaded && visuals.HasChartLayer && visuals.ChartRenderer?.DrawableRuleset != null);
             AddAssert("catch ruleset chosen", () => visuals.ChartRenderer!.Ruleset?.GetType() == typeof(CatchRuleset));
 
-            AddAssert("catch playfield (including the catcher) fits entirely within the visuals box", () =>
+            // Approach rate 5 preempts ~1200ms before the first object's 1000ms hit time (spawns
+            // around -200ms) — 500ms lands mid-fall, well clear of both spawn and hit.
+            AddStep("advance to mid-fall", () =>
+            {
+                manual.CurrentTime = 500;
+                clock.ProcessFrame();
+            });
+            AddUntilStep("a fruit is falling", () => visuals.ChartRenderer!.DrawableRuleset!.Playfield.AllHitObjects.Any());
+
+            // Full containment within `visuals`' own bounds is deliberately NOT asserted here —
+            // catch's playfield legitimately overflows both edges of that nominal box by design
+            // (see catch_reserved_height's remarks in BeatmapVisuals), and is meant to render
+            // unclipped into whatever letterbox margin MainScreen's playerBox provides around it.
+            // The two invariants that DO hold at this level:
+            AddAssert("catcher sits near the bottom of the scene (~90-97% down, real-lazer proportions)", () =>
             {
                 var box = visuals.ScreenSpaceDrawQuad;
-                var playfield = visuals.ChartRenderer!.DrawableRuleset!.Playfield.ScreenSpaceDrawQuad;
+                var catcher = visuals.ChartRenderer!.DrawableRuleset!.ChildrenOfType<Catcher>().Single();
+                var catcherQuad = catcher.ScreenSpaceDrawQuad;
 
-                return playfield.TopLeft.X >= box.TopLeft.X - 0.5f && playfield.TopRight.X <= box.TopRight.X + 0.5f
-                       && playfield.TopLeft.Y >= box.TopLeft.Y - 0.5f && playfield.BottomLeft.Y <= box.BottomLeft.Y + 0.5f;
+                // Catcher's own Origin is TopCentre (lazer's Catcher.cs), so its top edge is the
+                // meaningful single Y reference — matches how it's actually anchored/positioned.
+                float boxHeight = box.BottomLeft.Y - box.TopLeft.Y;
+                float catcherTopFraction = (catcherQuad.TopLeft.Y - box.TopLeft.Y) / boxHeight;
+
+                return catcherTopFraction is >= 0.87f and <= 0.98f;
+            });
+            // Lazer's own CatchPlayfieldAdjustmentContainer has an internal "Visible area" node
+            // with Masking = true — that's inherent to catch's real ruleset (a generous safety
+            // clip against extreme aspect ratios) and genuinely sits in the ancestor chain, so
+            // asserting its mere presence away isn't meaningful (it's also, by design, WIDER than
+            // Playfield's own structural bounds on at least the top edge — that's slack in
+            // Playfield's own layout, not visible content, so it's not what's checked here). What
+            // actually matters (and is what broke before this fix — see the flush-968-fit note
+            // above): the actual falling FRUIT sprite the user sees must not be cut by any masking
+            // ancestor. If some ancestor's own bounds don't fully contain the fruit that's
+            // currently on screen, that's a real visible-clip regression.
+            AddAssert("no masking ancestor between the visuals box and a real falling fruit actually clips it", () =>
+            {
+                var ruleset = visuals.ChartRenderer!.DrawableRuleset!;
+                var fruit = ruleset.Playfield.AllHitObjects.First();
+                var fruitQuad = fruit.ScreenSpaceDrawQuad;
+
+                Drawable? d = fruit;
+
+                while (d != null && d != visuals)
+                {
+                    if (d is CompositeDrawable { Masking: true } comp)
+                    {
+                        var maskQuad = comp.ScreenSpaceDrawQuad;
+
+                        bool containsFruit = fruitQuad.TopLeft.Y >= maskQuad.TopLeft.Y - 0.5f
+                                             && fruitQuad.BottomLeft.Y <= maskQuad.BottomLeft.Y + 0.5f;
+
+                        if (!containsFruit)
+                            return false;
+                    }
+
+                    d = d.Parent;
+                }
+
+                return true;
             });
 
             AddStep("restore settings", () => config.SetValue(JukeBoxSetting.RenderChart, false));

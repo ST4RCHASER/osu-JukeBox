@@ -60,14 +60,30 @@ public partial class BeatmapVisuals : CompositeDrawable
     private osu.Game.Beatmaps.WorkingBeatmap? chartWorking;
 
     // The scanned ruleset mode (0 std / 1 taiko / 2 catch / 3 mania, -1 unknown/unscanned) — kept
-    // around (rather than a load()-local) so Update() can special-case catch's own reserved
-    // catcher space when computing chartContainer's scale. See chart_design_height's remarks.
+    // around (rather than a load()-local) so Update() can special-case catch's own scale. See
+    // catch_reserved_height's remarks.
     private int chartMode = -1;
 
-    // Matches lazer's CatchPlayfieldAdjustmentContainer: base_game_height (768) + its own
-    // extra_bottom_space (200) reserved below the nominal playfield for the catcher plate. See
-    // Update()'s chartContainer.Scale remarks.
-    private const float catch_reserved_height = 968f;
+    // Tuned against MEASURED real-lazer catch geometry (a diagnostic test hosted a real
+    // DrawableCatchRuleset in an exact 1024×768 box and read back Catcher/Playfield
+    // ScreenSpaceDrawQuad fractions), not lazer's own extra_bottom_space (200) constant — that
+    // constant sizes catch's *internal* safety-clip container ("Visible area" in
+    // CatchPlayfieldAdjustmentContainer), which is far more generous than what's actually
+    // rendered and was never the thing clipping anything of ours. Using it as our own divisor
+    // (768+200=968) instead forced that internal safety container to fit EXACTLY flush with
+    // chartContainer's own edges (zero margin) — turning its normally-invisible clip boundary
+    // into a hard, visible seam exactly at the scene edge, clipping fruits mid-sprite as they
+    // entered from the top. 680 instead targets the CATCHER's own measured top edge landing at
+    // ~90% of the box height (real lazer: catcher top ≈85.8%, bottom ≈111.2%, fruit spawn top
+    // ≈-5.8%, all measured relative to an unscaled 1024×768 box) — big enough to read as "the
+    // catcher sits near the bottom" without unnecessarily inflating catch's on-screen size
+    // relative to the other three rulesets. The resulting top/bottom overflow is deliberately
+    // NOT compensated for further: nothing between chartContainer and MainScreen's playerBox
+    // masks (see BeatmapVisuals class summary / MainScreen.sceneContainer), so it renders
+    // unclipped into the surrounding letterbox margin — matching real lazer's own "off-screen
+    // spawn"/catcher-past-the-nominal-canvas look — and is clipped only if it ever reaches
+    // playerBox's own edge, same as everything else in the boxed player.
+    private const float catch_reserved_height = 680f;
 
     // Config-bound (when a config manager is present — test scenes without one keep the
     // defaults). Fields, not locals: config bindables use weak references back to the master.
@@ -440,14 +456,11 @@ public partial class BeatmapVisuals : CompositeDrawable
         // invariant) while finally giving catch's absolute-pixel math the reference canvas size it
         // expects.
         //
-        // Catch alone still needs a taller design height than 768: CatchPlayfieldAdjustmentContainer
-        // deliberately renders its "Visible area" (the catcher's own reserved space) at
-        // catch_reserved_height LOCAL units tall — base_game_height (768) plus a 200-unit safety
-        // margin below the nominal playfield so the catcher plate is never clipped (see its own
-        // extra_bottom_space comment upstream) — regardless of chartContainer's own Scale. Dividing
-        // by that taller figure instead of 768 shrinks the WHOLE catch playfield slightly (a
-        // smaller on-screen chart than std/taiko/mania get) in exchange for the catcher actually
-        // fitting inside the box instead of rendering entirely outside it.
+        // Catch alone divides by a slightly smaller design height (catch_reserved_height, see its
+        // own remarks) so its playfield renders a little bigger than std/taiko/mania's, pushing the
+        // catcher down toward the bottom of the scene the way it sits in real gameplay — the
+        // resulting top/bottom overflow is deliberately left unclipped here (see
+        // catch_reserved_height's remarks for why that's correct, not a bug).
         float chartDesignHeight = chartMode == 2 ? catch_reserved_height : 768f;
         chartContainer.Scale = new Vector2(DrawHeight / chartDesignHeight);
     }
