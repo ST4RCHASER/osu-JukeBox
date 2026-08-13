@@ -366,6 +366,38 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("remove visuals", () => Remove(visuals, true));
         }
 
+        // The app Volume setting (PlaybackController.Volume, driven by JukeBoxSetting.Volume) must
+        // reach lazer-rendered audio (storyboard Sample events / keysounds, chart hitsounds), not
+        // just the music track — see BeatmapVisuals.audioAdjustments remarks. AggregateVolume is
+        // what actually reaches every DrawableAudioWrapper-based sample under it (skin lookups
+        // included), so asserting on that — not just the local Volume bindable — is the real check
+        // that the binding cascades through the drawable hierarchy the way lazer's own gameplay
+        // volume does.
+        [Test]
+        public void AudioAdjustmentsFollowAppVolume()
+        {
+            BeatmapVisuals visuals = null!;
+
+            AddStep("create visuals", () => Add(visuals = new BeatmapVisuals(fixtureSetA, playbackClock)
+            {
+                RelativeSizeAxes = Axes.Both,
+            }));
+
+            AddUntilStep("visuals loaded", () => visuals.IsLoaded);
+            AddAssert("aggregate volume starts at full app volume", () => visuals.AudioAdjustments.AggregateVolume.Value == controller.Volume.Value);
+
+            AddStep("lower app volume", () => controller.Volume.Value = 0.25);
+            AddAssert("aggregate volume follows app volume down", () => visuals.AudioAdjustments.AggregateVolume.Value == 0.25);
+
+            AddStep("mute app volume", () => controller.Volume.Value = 0);
+            AddAssert("aggregate volume follows app volume to silence", () => visuals.AudioAdjustments.AggregateVolume.Value == 0);
+
+            AddStep("restore app volume", () => controller.Volume.Value = 1);
+            AddAssert("aggregate volume follows app volume back up", () => visuals.AudioAdjustments.AggregateVolume.Value == 1);
+
+            AddStep("remove visuals", () => Remove(visuals, true));
+        }
+
         // 1x1 red pixel PNG — content is irrelevant, only that it decodes to a valid texture.
         private static byte[] solidPng() => Convert.FromBase64String(
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==");
