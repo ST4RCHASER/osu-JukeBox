@@ -117,7 +117,6 @@ public partial class SettingsOverlay : FocusedOverlayContainer
 
     // ---- our settings ----
     private SettingsEnumDropdown<JukeBoxSkin> skinDropdown = null!;
-    private SettingsCheckbox showFpsCheckbox = null!;
     private SettingsCheckbox renderChartCheckbox = null!;
     private SettingsCheckbox playHitSoundsCheckbox = null!;
     private SettingsCheckbox showStoryboardVideoCheckbox = null!;
@@ -134,10 +133,18 @@ public partial class SettingsOverlay : FocusedOverlayContainer
     private SettingsEnumDropdown<RendererType> rendererDropdown = null!;
     private SettingsEnumDropdown<FrameSync> frameLimiterDropdown = null!;
     private SettingsEnumDropdown<ExecutionMode> threadingDropdown = null!;
-    private SettingsEnumDropdown<HardwareVideoDecoder> hardwareVideoDropdown = null!;
+    private SettingsEnumDropdown<FpsDisplayMode> fpsDisplayDropdown = null!;
+    private SettingsCheckbox hardwareAccelerationCheckbox = null!;
     private SettingsEnumDropdown<WindowMode>? screenModeDropdown;
     private DisplaySettingsDropdown? displayDropdown;
     private readonly Bindable<Display> currentDisplay = new Bindable<Display>();
+
+    // Adapter bindable for hardwareAccelerationCheckbox: the framework setting is a [Flags] enum
+    // (HardwareVideoDecoder) with many platform-specific values, but the checkbox only ever writes
+    // None/Any (see LoadComplete) while reading back "checked" for ANY non-None value — same
+    // two-way-sync shape as analysisDisplayLength below, just bool<->enum instead of ranged int.
+    private readonly BindableBool hardwareAccelerationEnabled = new BindableBool();
+    private Bindable<HardwareVideoDecoder> hardwareVideoDecoderConfig = null!;
 
     // ---- lazer (OsuConfigManager) settings; only built when lazerConfig is present ----
     private SettingsCheckbox hitLightingCheckbox = null!;
@@ -182,7 +189,8 @@ public partial class SettingsOverlay : FocusedOverlayContainer
     /// Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to controls, to drive/assert
     /// them without depending on this panel's internal layout.
     /// </summary>
-    internal SettingsCheckbox ShowFpsCheckbox => showFpsCheckbox;
+    internal SettingsDropdown<FpsDisplayMode> FpsDisplayDropdown => fpsDisplayDropdown;
+    internal SettingsCheckbox HardwareAccelerationCheckbox => hardwareAccelerationCheckbox;
 
     internal SettingsDropdown<MirrorSource> MirrorDropdown => mirrorDropdown;
     internal SettingsCheckbox RenderChartCheckbox => renderChartCheckbox;
@@ -433,11 +441,13 @@ public partial class SettingsOverlay : FocusedOverlayContainer
         });
         graphicsRows.Add(frameLimiterDropdown = new SettingsEnumDropdown<FrameSync> { LabelText = "Frame limiter" });
         graphicsRows.Add(threadingDropdown = new SettingsEnumDropdown<ExecutionMode> { LabelText = "Threading mode" });
-        graphicsRows.Add(showFpsCheckbox = new SettingsCheckbox { LabelText = "Show FPS" });
-        graphicsRows.Add(hardwareVideoDropdown = new SettingsEnumDropdown<HardwareVideoDecoder>
+        graphicsRows.Add(fpsDisplayDropdown = new SettingsEnumDropdown<FpsDisplayMode> { LabelText = "FPS counter" });
+        graphicsRows.Add(new Subsection("Video Playback")
         {
-            LabelText = "Video hardware acceleration",
-            Items = new[] { HardwareVideoDecoder.None, HardwareVideoDecoder.Any },
+            Children = new Drawable[]
+            {
+                hardwareAccelerationCheckbox = new SettingsCheckbox { LabelText = "Use hardware acceleration" },
+            },
         });
         sections.Add(new Section("Graphics", FontAwesome.Solid.Laptop) { Children = graphicsRows });
 
@@ -465,7 +475,7 @@ public partial class SettingsOverlay : FocusedOverlayContainer
 
         // ---- ours ----
         skinDropdown.Current = config.GetBindable<JukeBoxSkin>(JukeBoxSetting.Skin);
-        showFpsCheckbox.Current = config.GetBindable<bool>(JukeBoxSetting.ShowFps);
+        fpsDisplayDropdown.Current = config.GetBindable<FpsDisplayMode>(JukeBoxSetting.FpsDisplay);
         renderChartCheckbox.Current = config.GetBindable<bool>(JukeBoxSetting.RenderChart);
         playHitSoundsCheckbox.Current = config.GetBindable<bool>(JukeBoxSetting.PlayHitSounds);
         showStoryboardVideoCheckbox.Current = config.GetBindable<bool>(JukeBoxSetting.ShowStoryboardVideo);
@@ -491,7 +501,15 @@ public partial class SettingsOverlay : FocusedOverlayContainer
         rendererDropdown.Current = frameworkConfig.GetBindable<RendererType>(FrameworkSetting.Renderer);
         frameLimiterDropdown.Current = frameworkConfig.GetBindable<FrameSync>(FrameworkSetting.FrameSync);
         threadingDropdown.Current = frameworkConfig.GetBindable<ExecutionMode>(FrameworkSetting.ExecutionMode);
-        hardwareVideoDropdown.Current = frameworkConfig.GetBindable<HardwareVideoDecoder>(FrameworkSetting.HardwareVideoDecoder);
+
+        // Checkbox <-> flags-enum adapter (see the field comment above): initialise from whatever
+        // the framework setting currently holds (so an externally-set specific decoder, e.g. just
+        // NVDEC, still shows checked), then sync both directions.
+        hardwareVideoDecoderConfig = frameworkConfig.GetBindable<HardwareVideoDecoder>(FrameworkSetting.HardwareVideoDecoder);
+        hardwareAccelerationEnabled.Value = hardwareVideoDecoderConfig.Value != HardwareVideoDecoder.None;
+        hardwareAccelerationEnabled.BindValueChanged(e => hardwareVideoDecoderConfig.Value = e.NewValue ? HardwareVideoDecoder.Any : HardwareVideoDecoder.None);
+        hardwareVideoDecoderConfig.BindValueChanged(e => hardwareAccelerationEnabled.Value = e.NewValue != HardwareVideoDecoder.None);
+        hardwareAccelerationCheckbox.Current = hardwareAccelerationEnabled;
 
         if (screenModeDropdown != null)
             screenModeDropdown.Current = frameworkConfig.GetBindable<WindowMode>(FrameworkSetting.WindowMode);
