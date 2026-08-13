@@ -8,6 +8,16 @@
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="ppy.osu.Framework" Version="2026.807.0" />
+    <!-- osu!lazer as a library: real gameplay renderers for all four rulesets.
+         2026.730.0 is the newest release; its ppy.osu.Framework floor (2026.728.1) is satisfied
+         by (and overridden to) our explicit 2026.807.0 reference above. -->
+    <PackageReference Include="ppy.osu.Game" Version="2026.730.0" />
+    <PackageReference Include="ppy.osu.Game.Rulesets.Osu" Version="2026.730.0" />
+    <PackageReference Include="ppy.osu.Game.Rulesets.Taiko" Version="2026.730.0" />
+    <PackageReference Include="ppy.osu.Game.Rulesets.Catch" Version="2026.730.0" />
+    <PackageReference Include="ppy.osu.Game.Rulesets.Mania" Version="2026.730.0" />
+    <!-- Default skin assets (textures/samples/fonts). CC-BY-NC licensed — see docs/ATTRIBUTION.md. -->
+    <PackageReference Include="ppy.osu.Game.Resources" Version="2026.710.0" />
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="JukeBox.Game.Tests" />

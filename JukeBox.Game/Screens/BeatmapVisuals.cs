@@ -3,8 +3,8 @@
 using System;
 using System.IO;
 using JukeBox.Game.Beatmaps;
-using JukeBox.Game.Charts;
 using JukeBox.Game.Configuration;
+using JukeBox.Game.LazerPlayer;
 using JukeBox.Game.Storyboard;
 using osu.Framework.Allocation;
 using osu.Framework.Bindables;
@@ -42,13 +42,11 @@ public partial class BeatmapVisuals : CompositeDrawable
 
     private Box dimScrim = null!;
     private Container chartContainer = null!;
-    private Drawable? chartLayer;
-    private HitSoundPlayer? hitSoundPlayer;
-    private ChartBeatmap? chartBeatmap;
+    private LazerChartLayer? chartLayer;
 
-    // Game mode of the parsed difficulty (0 std / 1 taiko / 2 catch / 3 mania) — selects which
-    // renderer updateChartLayer builds. Only meaningful while chartBeatmap != null.
-    private int chartMode;
+    // The decoded difficulty backing the lazer gameplay layer, or null when charting is
+    // unavailable for this difficulty (no diff / unknown mode / zero objects / parse failure).
+    private osu.Game.Beatmaps.WorkingBeatmap? chartWorking;
 
     // Config-bound (when a config manager is present — test scenes without one keep the
     // defaults). Fields, not locals: config bindables use weak references back to the master.
@@ -138,17 +136,19 @@ public partial class BeatmapVisuals : CompositeDrawable
     /// </summary>
     internal bool HasVideoLayer => videoContainer != null;
 
-    /// <summary>Test-only: whether a chart layer is currently present.</summary>
-    internal bool HasChartLayer => chartLayer != null;
+    /// <summary>Test-only: whether a VISIBLE chart layer is currently present. The lazer layer
+    /// also exists invisibly when only hitsounds are enabled (lazer's DrawableRuleset is the
+    /// hitsound source), so visibility is the equivalent of the old chart-layer presence.</summary>
+    internal bool HasChartLayer => chartLayer is { Alpha: > 0 };
 
-    /// <summary>Test-only: whether a hitsound player is currently present.</summary>
-    internal bool HasHitSoundPlayer => hitSoundPlayer != null;
+    /// <summary>Test-only: whether lazer-native hitsound playback is currently enabled.</summary>
+    internal bool HasHitSoundPlayer => chartLayer?.HitSoundsEnabled.Value == true;
 
-    /// <summary>Test-only: number of hit-object drawables the chart layer compiled (0 = none/absent).</summary>
-    internal int ChartObjectCount => (chartLayer as IChartRenderer)?.TotalObjectCount ?? 0;
+    /// <summary>Test-only: number of hit objects in the playable beatmap (0 = none/absent/not loaded yet).</summary>
+    internal int ChartObjectCount => chartLayer?.ObjectCount ?? 0;
 
-    /// <summary>Test-only: the current chart renderer drawable (mode-specific type), if any.</summary>
-    internal Drawable? ChartRenderer => chartLayer;
+    /// <summary>Test-only: the current lazer gameplay layer, if any.</summary>
+    internal LazerChartLayer? ChartRenderer => chartLayer;
 
     /// <summary>
     /// Why the chart (and hitsounds) are unavailable for this difficulty, or null when a chart
@@ -309,9 +309,10 @@ public partial class BeatmapVisuals : CompositeDrawable
             Size = new Vector2(512, 384),
         });
 
-        // Only Mode 0 (osu!std) difficulties are chart-renderable. Every skip reason is recorded
-        // and logged — a silently-absent chart cost a real debugging round (storyboard-heavy sets
-        // are often mania/taiko-only, which used to fall through here without a trace).
+        // All four rulesets (0 std / 1 taiko / 2 catch / 3 mania) render through lazer's real
+        // gameplay renderer. Every skip reason is recorded and logged — a silently-absent chart
+        // cost a real debugging round (storyboard-heavy sets are often mania/taiko-only, which
+        // used to fall through here without a trace).
         if (osuFile == null)
         {
             markChartUnavailable($"set {set.SetId} has no .osu difficulty to chart");
@@ -328,20 +329,18 @@ public partial class BeatmapVisuals : CompositeDrawable
                 }
                 else
                 {
-                    chartMode = mode;
-                    chartBeatmap = BeatmapParser.Parse(osuFile);
+                    var working = new osu.Game.Beatmaps.FlatWorkingBeatmap(osuFile);
 
-                    if (chartBeatmap.HitObjects.Count == 0)
-                    {
+                    if (working.Beatmap.HitObjects.Count == 0)
                         markChartUnavailable($"'{Path.GetFileName(osuFile)}' parsed to 0 hit objects");
-                        chartBeatmap = null;
-                    }
+                    else
+                        chartWorking = working;
                 }
             }
             catch (Exception e)
             {
                 Logger.Error(e, $"Failed to parse chart for '{osuFile}'; chart disabled for this difficulty");
-                chartBeatmap = null;
+                chartWorking = null;
             }
         }
 
@@ -351,15 +350,19 @@ public partial class BeatmapVisuals : CompositeDrawable
             config.BindWith(JukeBoxSetting.PlayHitSounds, playHitSounds);
             config.BindWith(JukeBoxSetting.BackgroundDim, backgroundDim);
         }
+
+        // Build the lazer layer during async load when a setting already wants it, so the
+        // (conversion + autoplay-generation) cost stays off the update thread for the common path.
+        updateLazerLayer();
     }
 
     protected override void LoadComplete()
     {
         base.LoadComplete();
 
-        // Live-react to settings changes without a rebuild.
-        renderChart.BindValueChanged(_ => updateChartLayer(), true);
-        playHitSounds.BindValueChanged(_ => updateHitSoundPlayer(), true);
+        // Live-react to settings changes without a rebuild (initial state already applied in load()).
+        renderChart.BindValueChanged(_ => updateLazerLayer());
+        playHitSounds.BindValueChanged(_ => updateLazerLayer());
         backgroundDim.BindValueChanged(e => dimScrim.Alpha = (float)e.NewValue, true);
     }
 
@@ -377,39 +380,27 @@ public partial class BeatmapVisuals : CompositeDrawable
         backgroundSprite.Alpha = videoContainer != null || storyboardLayer.HasObjects ? 0 : 1;
     }
 
-    private void updateChartLayer()
+    /// <summary>
+    /// One lazer gameplay layer serves both settings: RenderChart shows lazer's rendered gameplay,
+    /// PlayHitSounds enables lazer's native hitsound/keysound playback. Hitsounds without chart
+    /// keeps the layer alive but invisible — the DrawableRuleset is what plays the samples.
+    /// </summary>
+    private void updateLazerLayer()
     {
-        if (renderChart.Value && chartBeatmap != null)
-        {
-            if (chartLayer == null)
-            {
-                chartContainer.Add(chartLayer = chartMode switch
-                {
-                    1 => new TaikoChartLayer(chartBeatmap),
-                    2 => new CatchChartLayer(chartBeatmap),
-                    3 => new ManiaChartLayer(chartBeatmap),
-                    _ => new ChartLayer(chartBeatmap),
-                });
-            }
-        }
-        else if (chartLayer != null)
+        bool wantLayer = (renderChart.Value || playHitSounds.Value) && chartWorking != null && osuFile != null;
+
+        if (wantLayer && chartLayer == null)
+            chartContainer.Add(chartLayer = new LazerChartLayer(chartWorking!, osuFile!));
+        else if (!wantLayer && chartLayer != null)
         {
             chartContainer.Remove(chartLayer, true);
             chartLayer = null;
         }
-    }
 
-    private void updateHitSoundPlayer()
-    {
-        if (playHitSounds.Value && chartBeatmap != null)
+        if (chartLayer != null)
         {
-            if (hitSoundPlayer == null)
-                AddInternal(hitSoundPlayer = new HitSoundPlayer(chartBeatmap, set));
-        }
-        else if (hitSoundPlayer != null)
-        {
-            RemoveInternal(hitSoundPlayer, true);
-            hitSoundPlayer = null;
+            chartLayer.Alpha = renderChart.Value ? 1 : 0;
+            chartLayer.HitSoundsEnabled.Value = playHitSounds.Value;
         }
     }
 
