@@ -276,6 +276,29 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
             drawableRuleset?.SetReplayScore(autoplayScore);
 
         attachOsuReplayAnalysis();
+        unmaskLegacyTaikoDrumFlash();
+    }
+
+    /// <summary>
+    /// osu.Game.Rulesets.Taiko.Skinning.Legacy.LegacyHalfDrum (internal — reached here only via
+    /// its public Container/CompositeDrawable surface, identified by the fixed "Left Half"/
+    /// "Right Half" names its own source gives its two instances) sets <c>Masking = true</c>
+    /// unconditionally. That's fine for a skin whose "taiko-drum-outer"/"taiko-drum-inner" hit-
+    /// flash textures are sized to fit inside the drum's own ~180-unit-wide box, but many legacy
+    /// skins (including the one behind this report) intentionally ship LARGER textures so the
+    /// flash blooms outward past the drum on a hit — exactly what that masking clips off. Real
+    /// lazer draws the same texture unclipped (its own equivalent host has nothing masking this
+    /// area either), so we drop the masking here too — the drum flash still ultimately clips at
+    /// the player box's own edge, same as everything else in the boxed player; nothing between
+    /// this and there masks.
+    /// </summary>
+    private void unmaskLegacyTaikoDrumFlash()
+    {
+        if (Ruleset is not TaikoRuleset)
+            return;
+
+        foreach (var half in this.ChildrenOfType<Container>().Where(c => c.Name is "Left Half" or "Right Half"))
+            half.Masking = false;
     }
 
     // Live binding for the "Hide gameplay cursor" replay setting (field: config bindables are
