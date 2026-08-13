@@ -1,5 +1,6 @@
 #nullable enable
 
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using JukeBox.Game.Charts;
@@ -68,6 +69,21 @@ namespace JukeBox.Game.Tests.Charts
 
             var player = new HitSoundPlayer(beatmap, new JukeBox.Game.Beatmaps.CachedBeatmapSet());
             Assert.That(player.EventCount, Is.EqualTo(2));
+        }
+
+        [Test]
+        public void DegenerateZeroLengthHoldFiresASingleEvent()
+        {
+            // End before start → parser clamps EndTime to Time; press+release must collapse to
+            // one event instead of double-firing the same instant.
+            var beatmap = BeatmapParser.ParseLines(new[]
+            {
+                "[TimingPoints]", "0,500,4,1,0,100,1,0",
+                "[HitObjects]", "448,192,1000,128,0,400:0:0:0:0:",
+            });
+
+            var player = new HitSoundPlayer(beatmap, new JukeBox.Game.Beatmaps.CachedBeatmapSet());
+            Assert.That(player.EventCount, Is.EqualTo(1));
         }
 
         // ---- Mania lane mapping ----------------------------------------------------------------
@@ -139,6 +155,35 @@ namespace JukeBox.Game.Tests.Charts
             var keyframes = ModeChartComputations.PlateKeyframes(targets);
 
             Assert.That(keyframes.Count, Is.LessThanOrEqualTo(ModeChartComputations.max_plate_keyframes));
+        }
+
+        // Regression for the truncation bug: a realistic dense catch marathon (droplets add up to
+        // thousands of targets) must DOWNSAMPLE — the plate keeps tracking to the very last catch
+        // of the song, never freezing at the point the old hard cut-off landed (~40% in).
+        [Test]
+        public void PlateKeyframesDownsampleInsteadOfFreezing()
+        {
+            const int total = 5000;
+            const double song_length = 300_000; // 5-minute marathon
+
+            var targets = Enumerable.Range(0, total)
+                                    .Select(i => new CatchDropSpec(i * song_length / (total - 1), i % 512));
+
+            var keyframes = ModeChartComputations.PlateKeyframes(targets);
+
+            Assert.That(keyframes.Count, Is.LessThanOrEqualTo(ModeChartComputations.max_plate_keyframes));
+
+            // End-to-end coverage: the final keyframe is the song's final catch, not 40% in.
+            Assert.That(keyframes[^1].Time, Is.EqualTo(song_length).Within(1e-6));
+            Assert.That(keyframes[0].Time, Is.EqualTo(0).Within(1e-6));
+
+            // And it's a genuine downsample of the whole timeline — roughly even spacing, so the
+            // largest gap between consecutive keyframes stays near stride-sized, not song-sized.
+            double largestGap = 0;
+            for (int i = 1; i < keyframes.Count; i++)
+                largestGap = Math.Max(largestGap, keyframes[i].Time - keyframes[i - 1].Time);
+
+            Assert.That(largestGap, Is.LessThan(song_length / 100), "plate must never park for a large fraction of the song");
         }
 
         [Test]
