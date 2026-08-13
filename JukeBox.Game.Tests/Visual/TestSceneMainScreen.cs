@@ -155,6 +155,52 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("still masked in focus mode", () => screen.PlayerBox.Masking);
         }
 
+        // Regression coverage for the content-scale tracking bug: updateSceneScale used to switch
+        // formula (height-only in focus, uniform-min otherwise) the instant UiLayout flipped — before
+        // the box had moved at all — so the content jumped to near its final scale on the very first
+        // frame of ENTERING focus mode while the box (and its mask) were still small, an overflow
+        // only hidden by masking until the box caught up moments later (perceived as an instant
+        // expand). Sampling every real Update() frame (AddStep/AddRepeatStep boundaries in this
+        // harness advance the clock by far more than one frame, too coarse to catch a one-frame
+        // jump) via a throwaway sampler drawable, both directions: the content's rendered width must
+        // never exceed the box's own current width, at any point in the transition.
+        [Test]
+        public void ContentNeverOutrunsTheBoxDuringFocusTransition()
+        {
+            FrameSampler sampler = null!;
+
+            AddStep("add per-frame sampler", () => uiContainer.Add(sampler = new FrameSampler(
+                () => (screen.PlayerBox.DrawWidth, screen.VisualsStack.ScreenSpaceDrawQuad.Width))));
+
+            AddStep("enter focus mode", () => InputManager.Key(Key.Tab));
+            AddWaitStep("let it animate", 30);
+            AddAssert("content never outran the box while entering focus",
+                () => sampler.Samples.All(s => s.content <= s.box + 0.5f));
+
+            AddStep("clear samples", () => sampler.Samples.Clear());
+            AddStep("leave focus mode", () => InputManager.Key(Key.Tab));
+            AddWaitStep("let it animate", 30);
+            AddAssert("content never outran the box while leaving focus",
+                () => sampler.Samples.All(s => s.content <= s.box + 0.5f));
+        }
+
+        private partial class FrameSampler : Drawable
+        {
+            private readonly Func<(float box, float content)> sample;
+            public readonly List<(float box, float content)> Samples = new();
+
+            public FrameSampler(Func<(float, float)> sample)
+            {
+                this.sample = sample;
+            }
+
+            protected override void Update()
+            {
+                base.Update();
+                Samples.Add(sample());
+            }
+        }
+
         // Regression coverage for a focus-mode transition asymmetry: entering focus mode used to
         // snap the player box straight to full-bleed on the very same frame the columns started
         // sliding away, while leaving focus animated the box's restore properly. Both directions
