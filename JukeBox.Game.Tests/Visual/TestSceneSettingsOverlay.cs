@@ -105,6 +105,22 @@ namespace JukeBox.Game.Tests.Visual
         }
 
         [Test]
+        public void ChangingChartZoomSliderUpdatesConfigValueAndPersistsAcrossRecreation()
+        {
+            AddStep("show overlay", () => overlay.Show());
+            AddAssert("config starts 100%", () => config.Get<double>(JukeBoxSetting.ChartZoom) == 1.0);
+            AddAssert("slider starts 100%", () => overlay.ChartZoomSlider.Current.Value == 1.0);
+
+            AddStep("set chart zoom to 60%", () => overlay.ChartZoomSlider.Current.Value = 0.6);
+            AddAssert("config bindable updated to 60%", () => config.Get<double>(JukeBoxSetting.ChartZoom) == 0.6);
+
+            AddStep("recreate overlay", () => Child = overlay = new SettingsOverlay());
+            AddAssert("slider starts at the persisted 60%", () => overlay.ChartZoomSlider.Current.Value == 0.6);
+
+            AddStep("restore default 100%", () => overlay.ChartZoomSlider.Current.Value = 1.0);
+        }
+
+        [Test]
         public void ChangingMirrorDropdownUpdatesConfigValue()
         {
             AddStep("show overlay", () => overlay.Show());

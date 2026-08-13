@@ -16,6 +16,7 @@ using osu.Framework.Testing;
 using osu.Framework.Timing;
 using osu.Game.Rulesets.Catch;
 using osu.Game.Rulesets.Catch.UI;
+using osuTK;
 
 namespace JukeBox.Game.Tests.Visual
 {
@@ -544,6 +545,75 @@ namespace JukeBox.Game.Tests.Visual
             });
 
             AddStep("restore settings", () => config.SetValue(JukeBoxSetting.RenderChart, false));
+            AddStep("remove visuals", () => Remove(visuals, true));
+        }
+
+        // Coverage for the ChartZoom setting: it must apply live (BindValueChanged, no rebuild) to
+        // the chart host wrapping chartContainer, defaulting to a no-op (Vector2.One) so every
+        // geometry test elsewhere in this fixture (which never touches JukeBoxSetting.ChartZoom)
+        // is unaffected.
+        [Test]
+        public void ChartZoomAppliesToChartHostLiveWithoutRebuild()
+        {
+            BeatmapVisuals visuals = null!;
+
+            AddStep("enable chart, reset zoom to default", () =>
+            {
+                config.SetValue(JukeBoxSetting.RenderChart, true);
+                config.SetValue(JukeBoxSetting.ChartZoom, 1.0);
+            });
+
+            AddStep("create visuals with a standard difficulty", () =>
+            {
+                string osuFile = Path.Combine(tmp, "zoom [x].osu");
+                File.WriteAllText(osuFile, """
+                    osu file format v14
+
+                    [General]
+                    AudioFilename: audio.mp3
+                    Mode: 0
+
+                    [Difficulty]
+                    HPDrainRate:5
+                    CircleSize:4
+                    OverallDifficulty:5
+                    ApproachRate:5
+                    SliderMultiplier:1.4
+                    SliderTickRate:1
+
+                    [TimingPoints]
+                    0,500,4,1,0,100,1,0
+
+                    [HitObjects]
+                    256,192,1000,1,0
+                    """);
+
+                var set = new CachedBeatmapSet
+                {
+                    SetId = 11,
+                    Directory = tmp,
+                    BackgroundFile = fixtureSetA.BackgroundFile,
+                    OsuFiles = { osuFile },
+                    PreferredOsuFile = osuFile,
+                };
+
+                Add(visuals = new BeatmapVisuals(set, playbackClock) { RelativeSizeAxes = Axes.Both });
+            });
+
+            AddUntilStep("chart loaded", () => visuals.IsLoaded && visuals.HasChartLayer);
+            AddAssert("chart host is a no-op at the default 100%", () => visuals.ChartZoomScale == Vector2.One);
+
+            AddStep("zoom out to 50%", () => config.SetValue(JukeBoxSetting.ChartZoom, 0.5));
+            AddAssert("chart host scale follows to 50% live", () => visuals.ChartZoomScale == new Vector2(0.5f));
+
+            AddStep("zoom in to 150%", () => config.SetValue(JukeBoxSetting.ChartZoom, 1.5));
+            AddAssert("chart host scale follows to 150% live", () => visuals.ChartZoomScale == new Vector2(1.5f));
+
+            AddStep("restore settings", () =>
+            {
+                config.SetValue(JukeBoxSetting.ChartZoom, 1.0);
+                config.SetValue(JukeBoxSetting.RenderChart, false);
+            });
             AddStep("remove visuals", () => Remove(visuals, true));
         }
 

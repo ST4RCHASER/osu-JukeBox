@@ -54,6 +54,16 @@ public enum JukeBoxSetting
     FpsDisplayMode,
     /// <summary>One-shot guard for the <see cref="FpsDisplay"/> (legacy) → <see cref="FpsDisplayMode"/> migration.</summary>
     FpsDisplayModeMigrated,
+    /// <summary>
+    /// Uniform scale applied around the chart host (wrapping <see cref="JukeBox.Game.LazerPlayer.LazerChartLayer"/>'s
+    /// container, outside the ruleset-specific sizing/scale in BeatmapVisuals' chartContainer) —
+    /// 1.0 is the nominal size. Below 1.0 shrinks the whole chart view so content that would
+    /// otherwise render past the player box's edge (e.g. a note's spawn position, or catch's
+    /// deliberately-overflowing playfield — see catch_reserved_height's remarks) becomes visible
+    /// sooner; above 1.0 magnifies it. Storyboard/video/background are unaffected — only the chart
+    /// host is scaled. See BeatmapVisuals.load/LoadComplete.
+    /// </summary>
+    ChartZoom,
 }
 
 /// <summary>
@@ -161,5 +171,6 @@ public class JukeBoxConfigManager : IniConfigManager<JukeBoxSetting>
         SetDefault(JukeBoxSetting.ShowStoryboardVideo, true);
         SetDefault(JukeBoxSetting.UiScale, 1.0, 0.8, 1.6);
         SetDefault(JukeBoxSetting.GlobalAudioOffset, 0.0, -250.0, 250.0);
+        SetDefault(JukeBoxSetting.ChartZoom, 1.0, 0.5, 1.5);
     }
 }
