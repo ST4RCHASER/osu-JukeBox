@@ -96,6 +96,7 @@ public partial class MainScreen : Screen
     private JukeBoxConfigManager config { get; set; } = null!;
 
     private Bindable<UiLayout> uiLayout = null!;
+    private Bindable<double> playfieldZoom = null!;
 
     private const float tab_slide_offset = 20;
 
@@ -140,6 +141,13 @@ public partial class MainScreen : Screen
     /// other, unmasked part of the hierarchy.
     /// </summary>
     internal ScreenStack VisualsStack => visualsStack;
+
+    /// <summary>
+    /// Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to <see cref="sceneContainer"/>'s
+    /// current scale — the auto-fit "contain in playerBox" factor (<see cref="updateSceneScale"/>)
+    /// multiplied by the live <see cref="JukeBoxSetting.PlayfieldZoom"/> factor.
+    /// </summary>
+    internal Vector2 SceneScale => sceneContainer.Scale;
 
     /// <summary>
     /// Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the padding that insets
@@ -321,6 +329,11 @@ public partial class MainScreen : Screen
         applyLayout(uiLayout.Value, animate: false);
         uiLayout.BindValueChanged(e => applyLayout(e.NewValue, animate: true));
 
+        // No BindValueChanged needed: updateSceneScale already re-reads this every frame (see its
+        // own remarks on why it's driven off playerBox.OnUpdate rather than a one-shot), so a
+        // config change here is picked up on the very next frame for free.
+        playfieldZoom = config.GetBindable<double>(JukeBoxSetting.PlayfieldZoom);
+
         jukebox.Start();
         jukebox.LastError.BindValueChanged(e =>
         {
@@ -337,7 +350,14 @@ public partial class MainScreen : Screen
     /// mode-dependent branch here previously caused the content to jump to near its final size on
     /// the very first frame of entering focus mode), so the whole design canvas always stays inside
     /// the box's *current* size (letterboxed on whichever axis has slack) — never cropped, never
-    /// distorted, whether settled or mid-transition.
+    /// distorted, whether settled or mid-transition — MULTIPLIED by the live
+    /// <see cref="JukeBoxSetting.PlayfieldZoom"/> factor (1.0 = no-op, matching the pre-zoom
+    /// behaviour exactly). Since <see cref="sceneContainer"/> hosts <see cref="visualsStack"/> (and
+    /// therefore the entire per-beatmap visuals — background, storyboard/video, chart — all
+    /// together, see <see cref="BeatmapVisuals"/>), this single multiply zooms the whole stack as
+    /// one unit; <see cref="playerBox"/>'s own <c>Masking</c> (set once, unconditionally true, at
+    /// construction) is what clips it at the box's edges whenever the zoomed-up scene overflows —
+    /// nothing here needs to change that.
     ///
     /// <para>
     /// Driven off <see cref="playerBox"/>'s own <see cref="Drawable.OnUpdate"/> rather than this
@@ -357,7 +377,12 @@ public partial class MainScreen : Screen
 
         float scale = Math.Min(playerBox.DrawWidth / scene_width, playerBox.DrawHeight / scene_height);
 
-        sceneContainer.Scale = new Vector2(scale);
+        // playfieldZoom is only assigned once LoadComplete runs (after config resolves) — playerBox's
+        // OnUpdate is wired up earlier, in load() — so guard the narrow window before that assignment
+        // rather than assume it's always bound by the time this first fires.
+        float zoom = (float)(playfieldZoom?.Value ?? 1.0);
+
+        sceneContainer.Scale = new Vector2(scale * zoom);
     }
 
     protected override bool OnKeyDown(KeyDownEvent e)

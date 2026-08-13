@@ -43,7 +43,6 @@ public partial class BeatmapVisuals : CompositeDrawable
     private AudioContainer storyboardAudio = null!;
 
     private Box dimScrim = null!;
-    private Container chartZoomContainer = null!;
     private Container chartContainer = null!;
     private LazerChartLayer? chartLayer;
 
@@ -93,7 +92,6 @@ public partial class BeatmapVisuals : CompositeDrawable
     private readonly BindableDouble backgroundDim = new();
     private readonly BindableDouble backgroundBlur = new();
     private readonly Bindable<bool> showStoryboardVideo = new(true);
-    private readonly BindableDouble chartZoom = new(1.0);
     private readonly IBindable<JukeBoxSkin> effectiveSkin = new Bindable<JukeBoxSkin>();
 
     // Lazer's own background-blur scale: setting 0..1 maps to a gaussian sigma of 0..25.
@@ -148,11 +146,6 @@ public partial class BeatmapVisuals : CompositeDrawable
 
     /// <summary>Test-only: the current lazer gameplay layer, if any.</summary>
     internal LazerChartLayer? ChartRenderer => chartLayer;
-
-    /// <summary>Test-only: the chart host's current zoom scale (the <see cref="JukeBoxSetting.ChartZoom"/>
-    /// factor, applied around chartContainer — independent of catch's own internal
-    /// chartContainer.Scale, see catch_reserved_height's remarks).</summary>
-    internal Vector2 ChartZoomScale => chartZoomContainer.Scale;
 
     /// <summary>Test-only: the container carrying the app Volume setting to lazer-rendered audio.</summary>
     internal AudioContainer AudioAdjustments => audioAdjustments;
@@ -290,26 +283,12 @@ public partial class BeatmapVisuals : CompositeDrawable
             Alpha = 0,
         });
 
-        // The chart-zoom wrapper: applies the JukeBoxSetting.ChartZoom scale AROUND chartContainer,
-        // outside (and independent of) the ruleset-specific sizing/scale chartContainer manages
-        // itself every Update() (catch's fixed-canvas fixup included — see catch_reserved_height's
-        // remarks) so every ruleset inherits the zoom uniformly. Centre-anchored so shrinking stays
-        // centred on the playfield; unmasked (default), so — exactly like the boundary between
-        // chartContainer and MainScreen's playerBox — zooming out doesn't clip anything, it just
-        // brings normally offscreen chart content (e.g. a note's spawn position) into the box.
-        audioAdjustments.Add(chartZoomContainer = new Container
-        {
-            RelativeSizeAxes = Axes.Both,
-            Anchor = Anchor.Centre,
-            Origin = Anchor.Centre,
-        });
-
         // The chart (and hitsound player) get added/removed inside this fixed container as the
         // settings toggle, so their z-position above the scrim is stable. Sized properly (matching
         // catch's absolute-pixel needs vs the other three rulesets' real-aspect needs) every
         // Update() — see its own remarks there; the placeholder size here only matters for the
         // very first layout pass before Update() has run once.
-        chartZoomContainer.Add(chartContainer = new Container
+        audioAdjustments.Add(chartContainer = new Container
         {
             Anchor = Anchor.Centre,
             Origin = Anchor.Centre,
@@ -359,7 +338,6 @@ public partial class BeatmapVisuals : CompositeDrawable
             config.BindWith(JukeBoxSetting.BackgroundDim, backgroundDim);
             config.BindWith(JukeBoxSetting.BackgroundBlur, backgroundBlur);
             config.BindWith(JukeBoxSetting.ShowStoryboardVideo, showStoryboardVideo);
-            config.BindWith(JukeBoxSetting.ChartZoom, chartZoom);
         }
 
         if (skinSelection != null)
@@ -394,7 +372,6 @@ public partial class BeatmapVisuals : CompositeDrawable
             storyboardAudio.Volume.Value = e.NewValue ? 1 : 0;
             updateBackgroundVisibility();
         }, true);
-        chartZoom.BindValueChanged(e => chartZoomContainer.Scale = new Vector2((float)e.NewValue), true);
 
         beatmapOffset.BindValueChanged(_ => updateClockOffset());
         globalOffset.BindValueChanged(_ => updateClockOffset());
