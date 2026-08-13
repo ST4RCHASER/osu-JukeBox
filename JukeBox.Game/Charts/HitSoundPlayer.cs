@@ -74,6 +74,12 @@ public partial class HitSoundPlayer : Component
                 case HitObjectKind.Spinner:
                     addEvent(beatmap, obj.EndTime, obj.HitSound);
                     break;
+
+                case HitObjectKind.Hold:
+                    // Mania hold: press and release.
+                    addEvent(beatmap, obj.Time, obj.HitSound);
+                    addEvent(beatmap, obj.EndTime, obj.HitSound);
+                    break;
             }
         }
 
