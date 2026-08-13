@@ -1,6 +1,7 @@
 #nullable enable
 
 using System.IO;
+using System.Linq;
 using JukeBox.Game.Configuration;
 using JukeBox.Game.Online;
 using JukeBox.Game.UI;
@@ -13,11 +14,20 @@ using osuTK.Input;
 
 namespace JukeBox.Game.Tests.Visual
 {
+    // JukeBoxManualInputTestScene (not plain ManualInputManagerTestScene): the runner is a real
+    // JukeBoxGameBase, so the overlay's lazer-side sections (OsuConfigManager, the ruleset config
+    // cache, skin selection) resolve and get exercised here rather than silently omitted.
     [TestFixture]
-    public partial class TestSceneSettingsOverlay : ManualInputManagerTestScene
+    public partial class TestSceneSettingsOverlay : JukeBoxManualInputTestScene
     {
         private JukeBoxConfigManager config = null!;
         private SettingsOverlay overlay = null!;
+
+        [Resolved]
+        private osu.Game.Rulesets.IRulesetConfigCache rulesetConfigs { get; set; } = null!;
+
+        [Resolved]
+        private osu.Framework.Configuration.FrameworkConfigManager frameworkConfig { get; set; } = null!;
 
         // CreateChildDependencies runs once for the whole scene — own isolated JukeBoxConfigManager
         // (TemporaryNativeStorage, same approach as TestSceneMainScreen) so tests never touch the
@@ -65,6 +75,7 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("config starts false", () => config.Get<bool>(JukeBoxSetting.ShowFps) == false);
             AddAssert("checkbox starts unchecked", () => overlay.ShowFpsCheckbox.Current.Value == false);
 
+            AddStep("scroll checkbox into view", () => overlay.ScrollControlIntoView(overlay.ShowFpsCheckbox));
             AddStep("click the checkbox", () =>
             {
                 InputManager.MoveMouseTo(overlay.ShowFpsCheckbox);
@@ -138,6 +149,7 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("create docked overlay", () => Child = dockedOverlay = new SettingsOverlay(docked: true));
             AddAssert("config starts false", () => config.Get<bool>(JukeBoxSetting.ShowFps) == false);
 
+            AddStep("scroll checkbox into view", () => dockedOverlay.ScrollControlIntoView(dockedOverlay.ShowFpsCheckbox));
             AddStep("click the checkbox", () =>
             {
                 InputManager.MoveMouseTo(dockedOverlay.ShowFpsCheckbox);
@@ -145,6 +157,58 @@ namespace JukeBox.Game.Tests.Visual
             });
 
             AddAssert("config bindable flipped to true", () => config.Get<bool>(JukeBoxSetting.ShowFps));
+        }
+
+        [Test]
+        public void SkinChoicePersistsToConfig()
+        {
+            AddStep("show overlay", () => overlay.Show());
+            AddAssert("config starts Argon", () => config.Get<JukeBoxSkin>(JukeBoxSetting.Skin) == JukeBoxSkin.Argon);
+
+            AddStep("select Triangles", () => overlay.SkinDropdown.Current.Value = JukeBoxSkin.Triangles);
+            AddAssert("config updated to Triangles", () => config.Get<JukeBoxSkin>(JukeBoxSetting.Skin) == JukeBoxSkin.Triangles);
+
+            AddStep("recreate overlay", () => Child = overlay = new SettingsOverlay());
+            AddAssert("dropdown starts Triangles", () => overlay.SkinDropdown.Current.Value == JukeBoxSkin.Triangles);
+        }
+
+        [Test]
+        public void ManiaScrollSpeedReachesRulesetConfig()
+        {
+            AddStep("show overlay", () => overlay.Show());
+
+            // Ruleset bindings attach once the realm-backed config cache has loaded (scheduled
+            // retry in the overlay) — bound is observable as the slider taking the config's range.
+            AddUntilStep("mania slider bound", () => overlay.ManiaScrollSpeedSlider?.Current.Value >= 1);
+
+            AddStep("set scroll speed 20", () => overlay.ManiaScrollSpeedSlider!.Current.Value = 20);
+            AddAssert("ruleset config holds 20", () =>
+                (rulesetConfigs.GetConfigFor(new osu.Game.Rulesets.Mania.ManiaRuleset()) as osu.Game.Rulesets.Mania.Configuration.ManiaRulesetConfigManager)!
+                .Get<double>(osu.Game.Rulesets.Mania.Configuration.ManiaRulesetSetting.ScrollSpeed) == 20);
+
+            AddStep("restore default 8", () => overlay.ManiaScrollSpeedSlider!.Current.Value = 8);
+        }
+
+        [Test]
+        public void MasterSliderBindsFrameworkVolume()
+        {
+            AddStep("show overlay", () => overlay.Show());
+
+            AddStep("set master 37%", () => overlay.MasterVolumeSlider.Current.Value = 0.37);
+            AddAssert("framework VolumeUniversal follows", () =>
+                System.Math.Abs(frameworkConfig.Get<double>(osu.Framework.Configuration.FrameworkSetting.VolumeUniversal) - 0.37) < 0.001);
+
+            AddStep("restore master 100%", () => overlay.MasterVolumeSlider.Current.Value = 1);
+        }
+
+        [Test]
+        public void AudioDeviceDropdownAlwaysOffersSystemDefault()
+        {
+            AddStep("show overlay", () => overlay.Show());
+
+            // A headless host reports no devices; the "System default" (empty string) entry must
+            // exist regardless, per AudioManager's documented convention.
+            AddAssert("system default entry present", () => overlay.AudioDeviceDropdown.Items.Contains(string.Empty));
         }
     }
 }
