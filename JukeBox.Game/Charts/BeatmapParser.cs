@@ -32,6 +32,10 @@ public enum HitObjectKind
     Circle,
     Slider,
     Spinner,
+
+    /// <summary>osu!mania hold note (type bit 128): held from <see cref="ChartHitObject.Time"/>
+    /// to <see cref="ChartHitObject.EndTime"/> in one lane.</summary>
+    Hold,
 }
 
 public class ChartHitObject
@@ -341,6 +345,22 @@ public static class BeatmapParser
         if ((type & 1) != 0)
         {
             obj.Kind = HitObjectKind.Circle;
+            return obj;
+        }
+
+        if ((type & 128) != 0)
+        {
+            // Mania hold: objectParams is "endTime:hitSample" packed into one field.
+            if (parts.Length < 6)
+                return null;
+
+            string endField = parts[5].Split(':')[0];
+
+            if (!double.TryParse(endField, NumberStyles.Float, CultureInfo.InvariantCulture, out double holdEnd))
+                return null;
+
+            obj.Kind = HitObjectKind.Hold;
+            obj.EndTime = Math.Max(time, holdEnd);
             return obj;
         }
 

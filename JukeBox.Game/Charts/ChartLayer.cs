@@ -27,7 +27,7 @@ namespace JukeBox.Game.Charts;
 /// their lifetime window entirely. Seeking works in both directions
 /// (<c>RemoveCompletedTransforms</c> is false and dead objects stay children).
 /// </summary>
-public partial class ChartLayer : CompositeDrawable
+public partial class ChartLayer : CompositeDrawable, IChartRenderer
 {
     public override bool RemoveCompletedTransforms => false;
 
@@ -36,6 +36,9 @@ public partial class ChartLayer : CompositeDrawable
 
     /// <summary>Total hit-object drawables constructed. Exposed for tests.</summary>
     internal int TotalObjectCount => objects?.AllElements.Count ?? 0;
+
+    int IChartRenderer.AliveObjectCount => AliveObjectCount;
+    int IChartRenderer.TotalObjectCount => TotalObjectCount;
 
     /// <summary>Total follow-point dot drawables constructed. Exposed for tests.</summary>
     internal int FollowPointCount => followPoints?.AllElements.Count ?? 0;
@@ -78,6 +81,11 @@ public partial class ChartLayer : CompositeDrawable
         {
             var obj = beatmap.HitObjects[i];
             var colour = Theme.ComboColours[combos[i].ColourIndex % Theme.ComboColours.Length];
+
+            // Mania holds have no osu!std representation — only relevant if a hostile file mixes
+            // type bits; a real std map never contains them.
+            if (obj.Kind == HitObjectKind.Hold)
+                continue;
 
             Drawable drawable = obj.Kind switch
             {
