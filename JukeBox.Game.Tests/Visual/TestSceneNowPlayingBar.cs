@@ -181,6 +181,55 @@ namespace JukeBox.Game.Tests.Visual
                 () => Math.Abs(playback.CurrentTimeMs / playback.LengthMs - 0.5) < 0.2);
         }
 
+        // Regression coverage for the difficulty switcher hiding entirely on single-difficulty
+        // sets: it should only disappear when there are zero difficulties (an edge case that
+        // shouldn't occur in practice, but the switcher must degrade gracefully) — a lone
+        // difficulty still shows its name as a non-interactive, always-selected chip.
+        //
+        // Each of these builds its own CachedBeatmapSet (distinct SetId, sharing fixtureSet's
+        // audio file) rather than mutating the shared fixtureSet — PlaybackController.Current is a
+        // Bindable, so reassigning the very same object another test already played would be a
+        // same-reference no-op and never fire DifficultySwitcher's rebuild.
+        [Test]
+        public void DifficultySwitcherShowsNonInteractiveChipForSingleDifficultySet()
+        {
+            var soloSet = new CachedBeatmapSet { SetId = 101, Directory = tmp, AudioFile = fixtureSet.AudioFile, PreferredOsuFile = "solo.osu" };
+            soloSet.Difficulties.Add(new DifficultyInfo { Path = "solo.osu", Version = "Solo", Mode = 0 });
+
+            AddStep("play set with one difficulty", () => playback.PlayAsync(soloSet));
+            AddUntilStep("track active", () => playback.Current.Value?.SetId == soloSet.SetId);
+
+            AddAssert("one chip shown", () => bar.DifficultySwitcher.Chips.Count == 1);
+            AddAssert("chip shows the version name", () => bar.DifficultySwitcher.Chips[0].Difficulty.Version == "Solo");
+            AddAssert("chip is selected", () => bar.DifficultySwitcher.Chips[0].Selected);
+            AddAssert("chip is non-interactive", () => !bar.DifficultySwitcher.Chips[0].Enabled.Value);
+        }
+
+        [Test]
+        public void DifficultySwitcherHidesForZeroDifficultySet()
+        {
+            var emptySet = new CachedBeatmapSet { SetId = 102, Directory = tmp, AudioFile = fixtureSet.AudioFile };
+
+            AddStep("play set with no difficulties", () => playback.PlayAsync(emptySet));
+            AddUntilStep("track active", () => playback.Current.Value?.SetId == emptySet.SetId);
+
+            AddAssert("no chips shown", () => bar.DifficultySwitcher.Chips.Count == 0);
+        }
+
+        [Test]
+        public void DifficultySwitcherShowsInteractiveChipsForMultiDifficultySet()
+        {
+            var multiSet = new CachedBeatmapSet { SetId = 103, Directory = tmp, AudioFile = fixtureSet.AudioFile, PreferredOsuFile = "easy.osu" };
+            multiSet.Difficulties.Add(new DifficultyInfo { Path = "easy.osu", Version = "Easy", Mode = 0 });
+            multiSet.Difficulties.Add(new DifficultyInfo { Path = "hard.osu", Version = "Hard", Mode = 0 });
+
+            AddStep("play set with two difficulties", () => playback.PlayAsync(multiSet));
+            AddUntilStep("track active", () => playback.Current.Value?.SetId == multiSet.SetId);
+
+            AddAssert("two chips shown", () => bar.DifficultySwitcher.Chips.Count == 2);
+            AddAssert("both chips interactive", () => bar.DifficultySwitcher.Chips.All(c => c.Enabled.Value));
+        }
+
         [Test]
         public void BarShowsNowPlayingTitleAndArtist()
         {
