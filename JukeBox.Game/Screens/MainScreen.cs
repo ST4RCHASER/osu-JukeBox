@@ -19,7 +19,9 @@ namespace JukeBox.Game.Screens;
 
 /// <summary>
 /// Top-level screen: a single fixed three-column layout — a permanently-docked left search column,
-/// the <see cref="NowPlayingScreen"/> visuals filling the centre, a permanently-docked right column
+/// the <see cref="NowPlayingScreen"/> visuals as a BOXED player panel in the centre (same rounded/
+/// shadowed card language as the columns, gutters on all sides — not a full-bleed underlay), a
+/// permanently-docked right column
 /// (tabbed Queue/Settings) and the full-width <see cref="NowPlayingBar"/> along the bottom — driven
 /// by <see cref="JukeBoxSetting.UiLayout"/>. Replaces the old Fullscreen/Split layout-toggle pair;
 /// see <see cref="UiLayout"/> for the config migration story.
@@ -65,6 +67,7 @@ public partial class MainScreen : Screen
     private Bindable<UiLayout> uiLayout = null!;
 
     private Container visualsHost = null!;
+    private Container playerBox = null!;
     private ScreenStack visualsStack = null!;
 
     private BeatmapListingOverlay listing = null!;
@@ -107,10 +110,30 @@ public partial class MainScreen : Screen
 
         InternalChildren = new Drawable[]
         {
+            // The player is a BOXED panel (same card language as the columns: rounded, shadowed,
+            // masked), not a full-bleed underlay the panels float over. visualsHost's padding
+            // carves out the centre cell (applyLayout); the box inside it holds the actual player.
             visualsHost = new Container
             {
                 RelativeSizeAxes = Axes.Both,
-                Child = visualsStack = new ScreenStack { RelativeSizeAxes = Axes.Both },
+                Child = playerBox = new Container
+                {
+                    RelativeSizeAxes = Axes.Both,
+                    Masking = true,
+                    CornerRadius = Theme.CornerRadius,
+                    EdgeEffect = Theme.PanelShadow,
+                    Children = new Drawable[]
+                    {
+                        // Black bed: the player's letterbox ground, and the empty-state fill
+                        // while nothing is playing yet.
+                        new Box
+                        {
+                            RelativeSizeAxes = Axes.Both,
+                            Colour = Colour4.Black,
+                        },
+                        visualsStack = new ScreenStack { RelativeSizeAxes = Axes.Both },
+                    },
+                },
             },
             LeftColumn = new Container
             {
@@ -265,11 +288,20 @@ public partial class MainScreen : Screen
         LeftColumn.Alpha = focus ? 0 : 1;
         RightColumn.Alpha = focus ? 0 : 1;
 
-        visualsHost.Padding = new MarginPadding
-        {
-            Left = focus ? 0 : left_column_width,
-            Right = focus ? 0 : right_column_width,
-        };
+        // ThreeColumn: the player sits in its own box between the columns and above the bottom
+        // bar, with a visible gutter on every side. Focus: the box dissolves to full-bleed
+        // (padding + rounding removed; the bottom bar still overlays).
+        visualsHost.Padding = focus
+            ? new MarginPadding()
+            : new MarginPadding
+            {
+                Left = left_column_width + Theme.SectionSpacing,
+                Right = right_column_width + Theme.SectionSpacing,
+                Top = Theme.SectionSpacing,
+                Bottom = bottom_bar_height + Theme.SectionSpacing,
+            };
+
+        playerBox.CornerRadius = focus ? 0 : Theme.CornerRadius;
 
         // Defensive: drop keyboard focus before it ends up parked on a search box (or any other
         // input-consuming child) inside a column that just went Alpha 0 / non-present.
