@@ -189,6 +189,10 @@ namespace JukeBox.Game
             Add(skinSelection = new SkinSelection());
             dependencies.Cache(skinSelection);
 
+            var offsetStore = new BeatmapOffsetStore();
+            Add(offsetStore);
+            dependencies.Cache(offsetStore);
+
             // UI scaling, lazer's ScalingContainer trick applied to our DPI-scaling root: Scale
             // enlarges the whole UI while the inverse relative Size keeps it filling the window.
             Content.Anchor = Anchor.Centre;
