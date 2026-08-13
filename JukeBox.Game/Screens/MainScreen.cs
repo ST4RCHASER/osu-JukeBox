@@ -408,8 +408,10 @@ public partial class MainScreen : Screen
     {
         bool focus = layout == UiLayout.Focus;
 
-        double duration = animate ? Theme.DurationSlow : 0;
-        Easing easing = focus ? Theme.EaseExit : Theme.EaseEnter;
+        // User preference: sidebar open/close should feel immediate — fast linear slide,
+        // not the slower eased glide used elsewhere in the app.
+        double duration = animate ? Theme.DurationFast : 0;
+        const Easing easing = Easing.None;
 
         LeftColumn.MoveToX(focus ? -(left_column_width + Theme.SectionSpacing) : 0, duration, easing);
         LeftColumn.FadeTo(focus ? 0 : 1, duration, easing);
