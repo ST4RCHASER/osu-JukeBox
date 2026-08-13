@@ -32,13 +32,13 @@ namespace JukeBox.Game.UI;
 public partial class MapIdOverlay : FocusedOverlayContainer
 {
     private const float panel_width = 360;
-    private const float fade_duration = 200;
 
     public event Action<BeatmapSetInfo>? SetResolved;
 
     [Resolved]
     private IBeatmapMirror mirror { get; set; } = null!;
 
+    private Container panelCard = null!;
     private AccentTextBox idBox = null!;
     private IconButton addButton = null!;
     private SpriteText statusText = null!;
@@ -68,7 +68,7 @@ public partial class MapIdOverlay : FocusedOverlayContainer
                 RelativeSizeAxes = Axes.Both,
                 Colour = Theme.ModalScrim,
             },
-            new Container
+            panelCard = new Container
             {
                 Anchor = Anchor.Centre,
                 Origin = Anchor.Centre,
@@ -144,7 +144,8 @@ public partial class MapIdOverlay : FocusedOverlayContainer
 
     protected override void PopIn()
     {
-        this.FadeIn(fade_duration, Easing.OutQuint);
+        this.FadeIn(Theme.DurationNormal, Theme.EaseEnter);
+        panelCard.ScaleTo(Theme.PopScale).Then().ScaleTo(1f, Theme.DurationNormal, Theme.EaseEnter);
 
         statusText.Text = string.Empty;
         idBox.Text = string.Empty;
@@ -155,7 +156,11 @@ public partial class MapIdOverlay : FocusedOverlayContainer
         Schedule(() => GetContainingFocusManager()?.ChangeFocus(idBox));
     }
 
-    protected override void PopOut() => this.FadeOut(fade_duration, Easing.OutQuint);
+    protected override void PopOut()
+    {
+        this.FadeOut(Theme.DurationFast, Theme.EaseExit);
+        panelCard.ScaleTo(Theme.PopScale, Theme.DurationFast, Theme.EaseExit);
+    }
 
     protected override bool OnKeyDown(KeyDownEvent e)
     {
