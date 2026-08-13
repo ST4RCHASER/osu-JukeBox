@@ -37,7 +37,9 @@ public partial class BeatmapVisuals : CompositeDrawable
 
     private TextureStore? backgroundTextures;
     private Sprite? backgroundSprite;
+    private BufferedContainer? backgroundBlurContainer;
     private LazerStoryboardLayer storyboardLayer = null!;
+    private AudioContainer storyboardAudio = null!;
 
     private Box dimScrim = null!;
     private Container chartContainer = null!;
@@ -61,9 +63,18 @@ public partial class BeatmapVisuals : CompositeDrawable
     private readonly Bindable<bool> renderChart = new();
     private readonly Bindable<bool> playHitSounds = new();
     private readonly BindableDouble backgroundDim = new();
+    private readonly BindableDouble backgroundBlur = new();
+    private readonly Bindable<bool> showStoryboardVideo = new(true);
+    private readonly IBindable<JukeBoxSkin> effectiveSkin = new Bindable<JukeBoxSkin>();
+
+    // Lazer's own background-blur scale: setting 0..1 maps to a gaussian sigma of 0..25.
+    private const float max_blur_sigma = 25;
 
     [Resolved(canBeNull: true)]
     private JukeBoxConfigManager? config { get; set; }
+
+    [Resolved(canBeNull: true)]
+    private SkinSelection? skinSelection { get; set; }
 
     /// <summary>
     /// Test-only access to disposal state (JukeBox.Game.Tests has InternalsVisibleTo) —
@@ -173,14 +184,24 @@ public partial class BeatmapVisuals : CompositeDrawable
 
             if (texture != null)
             {
-                AddInternal(backgroundSprite = new Sprite
+                // The blur wrapper only affects our flat background image — storyboard/video
+                // content draws above it in its own layer and is never blurred (matching lazer,
+                // whose background blur also leaves storyboards/videos sharp). One extra
+                // framebuffer while a background is shown; the content is static, so the buffer
+                // only re-renders when the blur radius itself changes.
+                AddInternal(backgroundBlurContainer = new BufferedContainer(cachedFrameBuffer: true)
                 {
                     RelativeSizeAxes = Axes.Both,
-                    Anchor = Anchor.Centre,
-                    Origin = Anchor.Centre,
-                    FillMode = FillMode.Fill,
-                    Texture = texture,
-                    Colour = new Colour4(0.7f, 0.7f, 0.7f, 1f),
+                    RedrawOnScale = false,
+                    Child = backgroundSprite = new Sprite
+                    {
+                        RelativeSizeAxes = Axes.Both,
+                        Anchor = Anchor.Centre,
+                        Origin = Anchor.Centre,
+                        FillMode = FillMode.Fill,
+                        Texture = texture,
+                        Colour = new Colour4(0.7f, 0.7f, 0.7f, 1f),
+                    },
                 });
             }
         }
@@ -199,7 +220,13 @@ public partial class BeatmapVisuals : CompositeDrawable
         // the storyboard Video event (with its start-time offset) — video is just another element
         // inside DrawableStoryboard, so the separate hand-synced video layer (and its warm-up
         // machinery) is gone. Sizing is lazer's own: the storyboard scales itself off our height.
-        audioAdjustments.Add(storyboardLayer = new LazerStoryboardLayer(set, osuFile));
+        // The storyboard gets its own audio sub-container so the "Storyboard / video" toggle can
+        // silence its Sample events (keysounds) while hidden — Alpha alone leaves audio running.
+        audioAdjustments.Add(storyboardAudio = new AudioContainer
+        {
+            RelativeSizeAxes = Axes.Both,
+            Child = storyboardLayer = new LazerStoryboardLayer(set, osuFile),
+        });
 
         // Real osu! behaviour: the flat background auto-hides only when the storyboard REPLACES
         // it (draws it as one of its own sprites) or when a working video plays behind the
@@ -266,7 +293,12 @@ public partial class BeatmapVisuals : CompositeDrawable
             config.BindWith(JukeBoxSetting.RenderChart, renderChart);
             config.BindWith(JukeBoxSetting.PlayHitSounds, playHitSounds);
             config.BindWith(JukeBoxSetting.BackgroundDim, backgroundDim);
+            config.BindWith(JukeBoxSetting.BackgroundBlur, backgroundBlur);
+            config.BindWith(JukeBoxSetting.ShowStoryboardVideo, showStoryboardVideo);
         }
+
+        if (skinSelection != null)
+            effectiveSkin.BindTo(skinSelection.Effective);
 
         // Build the lazer layer during async load when a setting already wants it, so the
         // (conversion + autoplay-generation) cost stays off the update thread for the common path.
@@ -281,6 +313,30 @@ public partial class BeatmapVisuals : CompositeDrawable
         renderChart.BindValueChanged(_ => updateLazerLayer());
         playHitSounds.BindValueChanged(_ => updateLazerLayer());
         backgroundDim.BindValueChanged(e => dimScrim.Alpha = (float)e.NewValue, true);
+        backgroundBlur.BindValueChanged(e =>
+        {
+            if (backgroundBlurContainer != null)
+                backgroundBlurContainer.BlurSigma = new Vector2((float)e.NewValue * max_blur_sigma);
+        }, true);
+        showStoryboardVideo.BindValueChanged(e =>
+        {
+            storyboardLayer.Alpha = e.NewValue ? 1 : 0;
+            storyboardAudio.Volume.Value = e.NewValue ? 1 : 0;
+            updateBackgroundVisibility();
+        }, true);
+
+        // A skin choice change (dropdown flip, or Random's per-song re-roll) rebuilds the chart
+        // layer — the skin chain is constructed once per LazerChartLayer, so a rebuild is the
+        // application mechanism (documented; the ruleset checkboxes by contrast apply live).
+        effectiveSkin.BindValueChanged(_ =>
+        {
+            if (chartLayer == null)
+                return;
+
+            chartContainer.Remove(chartLayer, true);
+            chartLayer = null;
+            updateLazerLayer();
+        });
     }
 
     /// <summary>
@@ -295,7 +351,8 @@ public partial class BeatmapVisuals : CompositeDrawable
         if (backgroundSprite == null)
             return;
 
-        backgroundSprite.Alpha = storyboardLayer.ShouldHideBackground ? 0 : 1;
+        // A hidden storyboard/video layer can't be covering the background, whatever it claims.
+        backgroundSprite.Alpha = showStoryboardVideo.Value && storyboardLayer.ShouldHideBackground ? 0 : 1;
     }
 
     /// <summary>

@@ -27,8 +27,8 @@ namespace JukeBox.Game.UI;
 /// accent underline) / artist (from <see cref="Playback.Jukebox.NowPlaying"/>), a status line
 /// (<see cref="Playback.Jukebox.Status"/>, styled in soft red when
 /// <see cref="Playback.Jukebox.LastError"/> is set), a seekable <see cref="ProgressSliderBar"/>
-/// spanning the bar's top edge, play/pause + skip buttons and a volume slider bound directly to
-/// <see cref="PlaybackController.Volume"/>.
+/// spanning the bar's top edge, play/pause + skip buttons and a volume slider bound to the
+/// framework's master volume (the settings panel's "Master" slider — one shared knob).
 /// </summary>
 public partial class NowPlayingBar : CompositeDrawable
 {
@@ -41,6 +41,9 @@ public partial class NowPlayingBar : CompositeDrawable
 
     [Resolved]
     private Jukebox jukebox { get; set; } = null!;
+
+    [Resolved]
+    private osu.Framework.Configuration.FrameworkConfigManager frameworkConfig { get; set; } = null!;
 
     // [Resolved(canBeNull: true)] rather than a hard [Resolved]: only JukeBoxGame's own
     // [BackgroundDependencyLoader] (not JukeBoxGameBase's, shared with every test scene) caches
@@ -262,7 +265,10 @@ public partial class NowPlayingBar : CompositeDrawable
                                 Origin = Anchor.CentreLeft,
                                 Size = new Vector2(90, 6),
                                 CornerRadius = 3,
-                                Current = playback.Volume,
+                                // The framework master volume — same source of truth as the
+                                // settings panel's "Master" slider (see JukeBoxGameBase's
+                                // JukeBoxSetting.Volume migration note).
+                                Current = frameworkConfig.GetBindable<double>(osu.Framework.Configuration.FrameworkSetting.VolumeUniversal),
                                 BackgroundColour = Theme.ElevatedSurface,
                                 SelectionColour = Theme.Accent,
                                 FocusColour = Theme.Accent,
