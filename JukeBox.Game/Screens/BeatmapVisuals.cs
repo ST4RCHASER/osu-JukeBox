@@ -5,6 +5,7 @@ using System.IO;
 using JukeBox.Game.Beatmaps;
 using JukeBox.Game.Configuration;
 using JukeBox.Game.LazerPlayer;
+using JukeBox.Game.Playback;
 using osu.Framework.Allocation;
 using osu.Framework.Bindables;
 using osu.Framework.Graphics;
@@ -41,6 +42,15 @@ public partial class BeatmapVisuals : CompositeDrawable
     private Box dimScrim = null!;
     private Container chartContainer = null!;
     private LazerChartLayer? chartLayer;
+
+    // Carries the app Volume setting down to every lazer-rendered audio component (storyboard
+    // Sample events / keysounds in storyboardLayer, chart hitsounds in chartLayer) — those are
+    // DrawableAudioWrapper-based (lazer's PausableSkinnableSound chain) and walk up the Drawable
+    // parent chain for the nearest IAggregateAudioAdjustment, which this container provides.
+    private AudioContainer audioAdjustments = null!;
+
+    [Resolved]
+    private PlaybackController playbackController { get; set; } = null!;
 
     // The decoded difficulty backing the lazer gameplay layer, or null when charting is
     // unavailable for this difficulty (no diff / unknown mode / zero objects / parse failure).
@@ -89,6 +99,9 @@ public partial class BeatmapVisuals : CompositeDrawable
 
     /// <summary>Test-only: the current lazer gameplay layer, if any.</summary>
     internal LazerChartLayer? ChartRenderer => chartLayer;
+
+    /// <summary>Test-only: the container carrying the app Volume setting to lazer-rendered audio.</summary>
+    internal AudioContainer AudioAdjustments => audioAdjustments;
 
     /// <summary>
     /// Why the chart (and hitsounds) are unavailable for this difficulty, or null when a chart
@@ -172,12 +185,21 @@ public partial class BeatmapVisuals : CompositeDrawable
             }
         }
 
+        // Everything that can carry lazer-native audio (storyboard Sample events / keysounds,
+        // chart hitsounds) lives inside this container so the app Volume setting reaches them —
+        // see the audioAdjustments field remarks. BindTo is live: later Volume changes propagate.
+        AddInternal(audioAdjustments = new AudioContainer
+        {
+            RelativeSizeAxes = Axes.Both,
+        });
+        audioAdjustments.Volume.BindTo(playbackController.Volume);
+
         // Lazer's storyboard renderer carries the whole stack the old hand-rolled path split up:
         // sprites/animations, TRIGGER commands, storyboard Sample audio events (keysounds), and
         // the storyboard Video event (with its start-time offset) — video is just another element
         // inside DrawableStoryboard, so the separate hand-synced video layer (and its warm-up
         // machinery) is gone. Sizing is lazer's own: the storyboard scales itself off our height.
-        AddInternal(storyboardLayer = new LazerStoryboardLayer(set, osuFile));
+        audioAdjustments.Add(storyboardLayer = new LazerStoryboardLayer(set, osuFile));
 
         // Real osu! behaviour: the flat background auto-hides only when the storyboard REPLACES
         // it (draws it as one of its own sprites) or when a working video plays behind the
@@ -188,7 +210,7 @@ public partial class BeatmapVisuals : CompositeDrawable
 
         // Background-dim scrim: sits between the storyboard/video/background stack and the chart
         // so the chart stays readable. Applies whenever the setting is > 0, even with chart off.
-        AddInternal(dimScrim = new Box
+        audioAdjustments.Add(dimScrim = new Box
         {
             RelativeSizeAxes = Axes.Both,
             Colour = Color4.Black,
@@ -197,7 +219,7 @@ public partial class BeatmapVisuals : CompositeDrawable
 
         // The chart (and hitsound player) get added/removed inside this fixed container as the
         // settings toggle, so their z-position above the scrim is stable.
-        AddInternal(chartContainer = new Container
+        audioAdjustments.Add(chartContainer = new Container
         {
             Anchor = Anchor.Centre,
             Origin = Anchor.Centre,
