@@ -56,6 +56,16 @@ public partial class BeatmapVisuals : CompositeDrawable
     // unavailable for this difficulty (no diff / unknown mode / zero objects / parse failure).
     private osu.Game.Beatmaps.WorkingBeatmap? chartWorking;
 
+    // The scanned ruleset mode (0 std / 1 taiko / 2 catch / 3 mania, -1 unknown/unscanned) — kept
+    // around (rather than a load()-local) so Update() can special-case catch's own reserved
+    // catcher space when computing chartContainer's scale. See chart_design_height's remarks.
+    private int chartMode = -1;
+
+    // Matches lazer's CatchPlayfieldAdjustmentContainer: base_game_height (768) + its own
+    // extra_bottom_space (200) reserved below the nominal playfield for the catcher plate. See
+    // Update()'s chartContainer.Scale remarks.
+    private const float catch_reserved_height = 968f;
+
     // Config-bound (when a config manager is present — test scenes without one keep the
     // defaults). Fields, not locals: config bindables use weak references back to the master.
     private readonly Bindable<bool> renderChart = new();
@@ -219,11 +229,21 @@ public partial class BeatmapVisuals : CompositeDrawable
 
         // The chart (and hitsound player) get added/removed inside this fixed container as the
         // settings toggle, so their z-position above the scrim is stable.
+        //
+        // 1024×768 (not the osu!-standard 512×384 playfield size) deliberately matches lazer's own
+        // Player-screen convention (DrawSizePreservingFillContainer.TargetSize — see
+        // OsuPlayfieldAdjustmentContainer's ScalingContainer.Update comment for the same constant).
+        // Every ruleset's PlayfieldAdjustmentContainer is calibrated against that canvas: standard/
+        // taiko/mania size themselves in RELATIVE fractions of it (scale-invariant — 512×384 would
+        // have looked identical for those), but catch's (CatchPlayfieldAdjustmentContainer) uses
+        // ABSOLUTE pixel constants (1024×768 base, +200 reserved below for the catcher) that only
+        // come out correctly when actually given a 1024×768 box — a 512×384 one made catch render
+        // at ~2x its correct size, pushing the catcher plate and fruits entirely outside the box.
         audioAdjustments.Add(chartContainer = new Container
         {
             Anchor = Anchor.Centre,
             Origin = Anchor.Centre,
-            Size = new Vector2(512, 384),
+            Size = new Vector2(1024, 768),
         });
 
         // All four rulesets (0 std / 1 taiko / 2 catch / 3 mania) render through lazer's real
@@ -239,6 +259,7 @@ public partial class BeatmapVisuals : CompositeDrawable
             try
             {
                 int mode = OsuFileScanner.Scan(osuFile).Mode;
+                chartMode = mode;
 
                 if (mode is < 0 or > 3)
                 {
@@ -330,10 +351,24 @@ public partial class BeatmapVisuals : CompositeDrawable
         // rule live so a faulted (black) video brings the background back.
         updateBackgroundVisibility();
 
-        // The 512×384 playfield lives in the storyboard's 480-tall space, centred — osu!'s
-        // standard placement (512×384 within 640×480) scaled to fit with margins. (The lazer
-        // storyboard layer performs the equivalent scaling internally via its own DrawScale.)
-        chartContainer.Scale = new Vector2(DrawHeight / 480f);
+        // chartContainer's 1024×768 gameplay canvas and the storyboard's 480-tall canvas are both
+        // 4:3 at heart (1024/768 == 640/480), so dividing by 768 instead of the storyboard's own
+        // 480 carries the same "osu!-pixel maps 1:1 onto storyboard units" placement standard/
+        // taiko/mania already relied on (their rendered playfield footprint is unchanged by the
+        // 512×384 → 1024×768 container resize above — RelativeSizeAxes fractions are scale-
+        // invariant) while finally giving catch's absolute-pixel math the reference canvas size it
+        // expects.
+        //
+        // Catch alone still needs a taller design height than 768: CatchPlayfieldAdjustmentContainer
+        // deliberately renders its "Visible area" (the catcher's own reserved space) at
+        // catch_reserved_height LOCAL units tall — base_game_height (768) plus a 200-unit safety
+        // margin below the nominal playfield so the catcher plate is never clipped (see its own
+        // extra_bottom_space comment upstream) — regardless of chartContainer's own Scale. Dividing
+        // by that taller figure instead of 768 shrinks the WHOLE catch playfield slightly (a
+        // smaller on-screen chart than std/taiko/mania get) in exchange for the catcher actually
+        // fitting inside the box instead of rendering entirely outside it.
+        float chartDesignHeight = chartMode == 2 ? catch_reserved_height : 768f;
+        chartContainer.Scale = new Vector2(DrawHeight / chartDesignHeight);
     }
 
     protected override void Dispose(bool isDisposing)

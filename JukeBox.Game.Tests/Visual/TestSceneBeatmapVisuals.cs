@@ -4,6 +4,7 @@ using System;
 using System.IO;
 using System.Linq;
 using JukeBox.Game.Beatmaps;
+using JukeBox.Game.Configuration;
 using JukeBox.Game.Playback;
 using JukeBox.Game.Screens;
 using NUnit.Framework;
@@ -12,6 +13,7 @@ using osu.Framework.Graphics;
 using osu.Framework.Screens;
 using osu.Framework.Testing;
 using osu.Framework.Timing;
+using osu.Game.Rulesets.Catch;
 
 namespace JukeBox.Game.Tests.Visual
 {
@@ -25,6 +27,9 @@ namespace JukeBox.Game.Tests.Visual
 
         [Cached]
         private readonly PlaybackController controller = new PlaybackController();
+
+        [Resolved]
+        private JukeBoxConfigManager config { get; set; } = null!;
 
         private string tmp = null!;
         private CachedBeatmapSet fixtureSetA = null!;
@@ -395,6 +400,80 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("restore app volume", () => controller.Volume.Value = 1);
             AddAssert("aggregate volume follows app volume back up", () => visuals.AudioAdjustments.AggregateVolume.Value == 1);
 
+            AddStep("remove visuals", () => Remove(visuals, true));
+        }
+
+        // Regression coverage for the catch (CTB) crop bug: unlike standard/taiko/mania, whose
+        // lazer PlayfieldAdjustmentContainers size themselves in RELATIVE fractions of whatever
+        // box they're given (scale-invariant), catch's CatchPlayfieldAdjustmentContainer uses
+        // ABSOLUTE pixel constants (a 1024×768 "base game" canvas, +200 reserved below for the
+        // catcher plate) calibrated against lazer's own Player-screen convention
+        // (DrawSizePreservingFillContainer.TargetSize) — chartContainer must actually BE a
+        // 1024×768 canvas (see its construction comment in BeatmapVisuals) or catch renders ~2x
+        // oversized and the catcher/fruits end up entirely outside the box. Playfield's own
+        // ScreenSpaceDrawQuad is asserted (not just the DrawableRuleset's, which is
+        // RelativeSizeAxes-filled and would trivially "fit") because catch's internal
+        // ScalingContainer deliberately grows Playfield's own bounds to cover the catcher —
+        // that's the geometry lazer actually renders on screen.
+        [Test]
+        public void CatchPlayfieldIncludingCatcherFitsInsideTheVisualsBox()
+        {
+            BeatmapVisuals visuals = null!;
+
+            AddStep("enable chart", () => config.SetValue(JukeBoxSetting.RenderChart, true));
+
+            AddStep("create visuals with a catch difficulty", () =>
+            {
+                string osuFile = Path.Combine(tmp, "catch [x].osu");
+                File.WriteAllText(osuFile, """
+                    osu file format v14
+
+                    [General]
+                    AudioFilename: audio.mp3
+                    Mode: 2
+
+                    [Difficulty]
+                    HPDrainRate:5
+                    CircleSize:4
+                    OverallDifficulty:5
+                    ApproachRate:5
+                    SliderMultiplier:1.4
+                    SliderTickRate:1
+
+                    [TimingPoints]
+                    0,500,4,1,0,100,1,0
+
+                    [HitObjects]
+                    64,192,1000,1,0
+                    192,192,1500,1,0
+                    256,192,2000,1,0
+                    """);
+
+                var set = new CachedBeatmapSet
+                {
+                    SetId = 9,
+                    Directory = tmp,
+                    BackgroundFile = fixtureSetA.BackgroundFile,
+                    OsuFiles = { osuFile },
+                    PreferredOsuFile = osuFile,
+                };
+
+                Add(visuals = new BeatmapVisuals(set, playbackClock) { RelativeSizeAxes = Axes.Both });
+            });
+
+            AddUntilStep("chart loaded", () => visuals.IsLoaded && visuals.HasChartLayer && visuals.ChartRenderer?.DrawableRuleset != null);
+            AddAssert("catch ruleset chosen", () => visuals.ChartRenderer!.Ruleset?.GetType() == typeof(CatchRuleset));
+
+            AddAssert("catch playfield (including the catcher) fits entirely within the visuals box", () =>
+            {
+                var box = visuals.ScreenSpaceDrawQuad;
+                var playfield = visuals.ChartRenderer!.DrawableRuleset!.Playfield.ScreenSpaceDrawQuad;
+
+                return playfield.TopLeft.X >= box.TopLeft.X - 0.5f && playfield.TopRight.X <= box.TopRight.X + 0.5f
+                       && playfield.TopLeft.Y >= box.TopLeft.Y - 0.5f && playfield.BottomLeft.Y <= box.BottomLeft.Y + 0.5f;
+            });
+
+            AddStep("restore settings", () => config.SetValue(JukeBoxSetting.RenderChart, false));
             AddStep("remove visuals", () => Remove(visuals, true));
         }
 
