@@ -42,8 +42,8 @@ namespace JukeBox.Game
 
         // Kept as a field (rather than a load()-local) because osu.Framework's config-manager
         // bindables use a weak-reference chain back to the master value — an unrooted local would
-        // be eligible for collection, silently dropping this binding. See JukeBoxSetting.ShowFps.
-        private Bindable<bool> showFps = null!;
+        // be eligible for collection, silently dropping this binding. See JukeBoxSetting.FpsDisplay.
+        private Bindable<FpsDisplayMode> fpsDisplay = null!;
         private Bindable<double> uiScale = null!;
         private Bindable<double> volumeInactive = null!;
 
@@ -53,14 +53,25 @@ namespace JukeBox.Game
         private IBindable<bool> isActive = null!;
 
         /// <summary>
-        /// Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the ShowFps -&gt;
+        /// Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the FpsDisplay -&gt;
         /// FrameStatisticsMode mapping used by the binding below, isolated from
         /// <see cref="osu.Framework.Game.FrameStatistics"/> itself: actually flipping that bindable
         /// activates the framework's real PerformanceOverlay, which isn't safe to run under a
         /// headless test host (crashes with a NullReferenceException — no real renderer/GPU).
         /// </summary>
-        internal static FrameStatisticsMode FrameStatisticsModeFor(bool showFps)
-            => showFps ? FrameStatisticsMode.Full : FrameStatisticsMode.None;
+        internal static FrameStatisticsMode FrameStatisticsModeFor(FpsDisplayMode fpsDisplay) => fpsDisplay switch
+        {
+            FpsDisplayMode.Compact => FrameStatisticsMode.Minimal,
+            FpsDisplayMode.Details => FrameStatisticsMode.Full,
+            _ => FrameStatisticsMode.None,
+        };
+
+        /// <summary>
+        /// Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the one-shot
+        /// <see cref="JukeBoxSetting.ShowFps"/> → <see cref="JukeBoxSetting.FpsDisplay"/> migration
+        /// mapping used below, isolated from the config manager itself.
+        /// </summary>
+        internal static FpsDisplayMode MigrateShowFps(bool showFps) => showFps ? FpsDisplayMode.Details : FpsDisplayMode.Off;
 
         protected JukeBoxGameBase()
         {
@@ -229,6 +240,14 @@ namespace JukeBox.Game
                 config.SetValue(JukeBoxSetting.VolumeMigrated, true);
             }
 
+            // ShowFps -> FpsDisplay: same one-shot copy-then-guard shape as the volume migration
+            // above. The old bool key is left untouched afterwards (still readable, just unused).
+            if (!config.Get<bool>(JukeBoxSetting.FpsDisplayMigrated))
+            {
+                config.SetValue(JukeBoxSetting.FpsDisplay, MigrateShowFps(config.Get<bool>(JukeBoxSetting.ShowFps)));
+                config.SetValue(JukeBoxSetting.FpsDisplayMigrated, true);
+            }
+
             Add(skinSelection = new SkinSelection());
             dependencies.Cache(skinSelection);
 
@@ -259,8 +278,8 @@ namespace JukeBox.Game
             // wiring exists yet, since this runs in load(), well before LoadComplete — is safe: the
             // overlay's own binding uses runOnceImmediately, so it just picks up whatever value is
             // already sitting in FrameStatistics by the time base.LoadComplete() runs.
-            showFps = config.GetBindable<bool>(JukeBoxSetting.ShowFps);
-            showFps.BindValueChanged(e => FrameStatistics.Value = FrameStatisticsModeFor(e.NewValue), true);
+            fpsDisplay = config.GetBindable<FpsDisplayMode>(JukeBoxSetting.FpsDisplay);
+            fpsDisplay.BindValueChanged(e => FrameStatistics.Value = FrameStatisticsModeFor(e.NewValue), true);
         }
 
         protected override void LoadComplete()

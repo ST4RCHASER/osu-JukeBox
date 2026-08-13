@@ -17,6 +17,12 @@ public enum JukeBoxSetting
     NoVideoDownloads,
     UiLayout,
     CacheSizeGb,
+    /// <summary>
+    /// Deprecated: superseded by <see cref="FpsDisplay"/>, which distinguishes a compact overlay
+    /// from the full frame-time graph rather than a single on/off toggle. Kept only so old ini
+    /// values still parse; its value is copied into <see cref="FpsDisplay"/> once, guarded by
+    /// <see cref="FpsDisplayMigrated"/>. See JukeBoxGameBase.load.
+    /// </summary>
     ShowFps,
     PreferredMirror,
     RenderChart,
@@ -30,6 +36,26 @@ public enum JukeBoxSetting
     UiScale,
     /// <summary>Global audio offset in ms, added to the per-beatmap offset (BeatmapOffsetStore).</summary>
     GlobalAudioOffset,
+    /// <summary>Replaces <see cref="ShowFps"/>: Off / Compact / Details, driving the framework's
+    /// <see cref="osu.Framework.Graphics.Performance.FrameStatisticsMode"/> (None / Minimal / Full).</summary>
+    FpsDisplay,
+    /// <summary>One-shot guard for the <see cref="ShowFps"/> → <see cref="FpsDisplay"/> migration.</summary>
+    FpsDisplayMigrated,
+}
+
+/// <summary>
+/// FPS overlay presentation, mapped to the framework's
+/// <see cref="osu.Framework.Graphics.Performance.FrameStatisticsMode"/> (see
+/// JukeBoxGameBase.FrameStatisticsModeFor): <see cref="Off"/> → None, <see cref="Compact"/> →
+/// Minimal (single-line counter), <see cref="Details"/> → Full (the frame-time graph). Replaces
+/// the old boolean <see cref="JukeBoxSetting.ShowFps"/> — see that setting's remarks for the
+/// migration.
+/// </summary>
+public enum FpsDisplayMode
+{
+    Off,
+    Compact,
+    Details,
 }
 
 /// <summary>
@@ -86,6 +112,8 @@ public class JukeBoxConfigManager : IniConfigManager<JukeBoxSetting>
         SetDefault(JukeBoxSetting.UiLayout, UiLayout.ThreeColumn);
         SetDefault(JukeBoxSetting.CacheSizeGb, 10.0);
         SetDefault(JukeBoxSetting.ShowFps, false);
+        SetDefault(JukeBoxSetting.FpsDisplay, FpsDisplayMode.Off);
+        SetDefault(JukeBoxSetting.FpsDisplayMigrated, false);
         SetDefault(JukeBoxSetting.PreferredMirror, MirrorSource.Auto);
         SetDefault(JukeBoxSetting.RenderChart, false);
         SetDefault(JukeBoxSetting.PlayHitSounds, false);
