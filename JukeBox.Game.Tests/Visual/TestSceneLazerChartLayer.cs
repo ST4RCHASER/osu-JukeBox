@@ -51,6 +51,36 @@ namespace JukeBox.Game.Tests.Visual
         [Test]
         public void ManiaLayerRendersGameplay() => runForMode(3, typeof(ManiaRuleset));
 
+        // Regression guard for the big-seek crawl: FrameStabilityContainer's frame-stable catch-up
+        // only advances a bounded slice of gameplay time per (wall-clock-budgeted) real frame, so
+        // a 30s scrub would otherwise fast-forward visibly. LazerChartLayer snaps (lazer's own
+        // non-frame-stable seek pattern) on jumps beyond its threshold — catch-up must complete
+        // within a few layer updates. The snap=false case documents the crawl this guards against
+        // (and fails loudly if the internal FrameStablePlayback reflection ever stops mattering).
+        [TestCase(true)]
+        [TestCase(false)]
+        public void BigSeekSnapBehaviour(bool snap)
+        {
+            createLayer(0);
+
+            AddStep("configure snap", () => layer.SnapOnBigSeeks = snap);
+            AddUntilStep("layer loaded", () => layer.IsLoaded && layer.DrawableRuleset != null);
+            AddUntilStep("settled at start", () => frameStableTimeNear(0));
+
+            AddStep("seek +30s", () => manual.CurrentTime = 30000);
+            AddUntilStep("caught up to 30s", () => layer.LastSeekCatchupFrames >= 0 && frameStableTimeNear(30000));
+
+            AddStep("report catch-up cost", () => osu.Framework.Logging.Logger.Log(
+                $"[seek-snap] snap={snap}: 30s seek caught up in {layer.LastSeekCatchupFrames} layer update(s)"));
+
+            if (snap)
+                AddAssert("snapped within 3 updates", () => layer.LastSeekCatchupFrames is >= 1 and <= 3);
+            else
+                AddAssert("crawled (measurably slower than snap)", () => layer.LastSeekCatchupFrames > 5);
+
+            AddStep("remove layer", () => Remove(host, true));
+        }
+
         [Test]
         public void SeekingKeepsFrameStableClockFollowing()
         {

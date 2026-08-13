@@ -63,6 +63,33 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
 
     private readonly BindableBool samplePlaybackDisabled = new BindableBool(true);
 
+    // Big-seek snap: FrameStabilityContainer's frame-stable catch-up advances a bounded slice of
+    // gameplay time per real frame, so a large scrub (diff switch mid-song, user seeking the
+    // track) would fast-forward visibly for seconds (measured: a 30s jump took 63 frames ≈ 1s at
+    // 60fps). Lazer's own fix for exactly this (Player.SetGameplayStartTime) disables
+    // FrameStablePlayback for one frame so the container hard-seeks, then re-enables it — but
+    // that property is internal to osu.Game, so we reach it via reflection; when unavailable
+    // (upstream rename), we degrade gracefully back to the frame-stable crawl.
+    private const double seek_snap_threshold_ms = 1000;
+
+    private static readonly System.Reflection.PropertyInfo? frame_stable_playback_property =
+        typeof(DrawableRuleset).GetProperty("FrameStablePlayback",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+
+    private double? lastClockTime;
+    private osu.Framework.Threading.ScheduledDelegate? frameStableResetDelegate;
+
+    /// <summary>Test hook: disable the big-seek snap to measure the frame-stable crawl baseline.</summary>
+    internal bool SnapOnBigSeeks = true;
+
+    /// <summary>
+    /// Instrumentation (also logged): how many layer updates the last big seek took until the
+    /// frame-stable clock was back within 200ms of the driving clock. -1 until a big seek happened.
+    /// </summary>
+    internal int LastSeekCatchupFrames { get; private set; } = -1;
+
+    private int seekCatchupFrames = -1;
+
     /// <summary>The ruleset instance rendering this difficulty (test hook; assigned during load).</summary>
     internal Ruleset? Ruleset { get; private set; }
 
@@ -166,8 +193,56 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
     {
         base.Update();
 
+        double current = Clock.CurrentTime;
+
+        if (drawableRuleset != null && lastClockTime != null && Math.Abs(current - lastClockTime.Value) > seek_snap_threshold_ms)
+        {
+            if (SnapOnBigSeeks)
+                snapThroughSeek(current - lastClockTime.Value);
+
+            seekCatchupFrames = 0;
+        }
+
+        lastClockTime = current;
+
+        // Seek catch-up instrumentation: count layer updates until the frame-stable clock is back
+        // within sync of the driving clock after a big jump.
+        if (seekCatchupFrames >= 0 && drawableRuleset != null)
+        {
+            seekCatchupFrames++;
+
+            if (Math.Abs(drawableRuleset.FrameStableClock.CurrentTime - current) <= 200)
+            {
+                LastSeekCatchupFrames = seekCatchupFrames;
+                osu.Framework.Logging.Logger.Log($"[LazerChartLayer] seek caught up in {seekCatchupFrames} frame(s)");
+                seekCatchupFrames = -1;
+            }
+        }
+
         samplePlaybackDisabled.Value =
             !HitSoundsEnabled.Value || drawableRuleset?.FrameStableClock.IsCatchingUp.Value == true;
+    }
+
+    /// <summary>
+    /// Mirrors lazer's Player.SetGameplayStartTime: disable frame-stable playback so the
+    /// FrameStabilityContainer hard-seeks this frame (non-frame-stable — intermediate judgements
+    /// may not apply/revert perfectly, same trade-off lazer accepts for seeks), then restore it
+    /// one frame later.
+    /// </summary>
+    private void snapThroughSeek(double jump)
+    {
+        if (frame_stable_playback_property == null)
+            return;
+
+        // A snap may already be in flight from a previous frame's jump — complete it first,
+        // exactly as Player does with its pending reset delegate.
+        if (frameStableResetDelegate?.Cancelled == false && !frameStableResetDelegate.Completed)
+            frameStableResetDelegate.RunTask();
+
+        frame_stable_playback_property.SetValue(drawableRuleset, false);
+        frameStableResetDelegate = ScheduleAfterChildren(() => frame_stable_playback_property.SetValue(drawableRuleset, true));
+
+        osu.Framework.Logging.Logger.Log($"[LazerChartLayer] seek snap: {jump:+0;-0}ms clock jump, bypassing frame-stable catch-up for one frame");
     }
 
     protected override void Dispose(bool isDisposing)
