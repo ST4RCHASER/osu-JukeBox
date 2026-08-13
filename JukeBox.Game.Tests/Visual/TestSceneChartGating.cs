@@ -125,6 +125,28 @@ namespace JukeBox.Game.Tests.Visual
             });
         }
 
+        // Live skin flip: changing the skin setting rebuilds the chart layer with the newly
+        // selected skin (the settings dropdown's real application path — no restart, no re-play).
+        [Test]
+        public void SkinChangeRebuildsChartWithNewSkin()
+        {
+            BeatmapVisuals visuals = null!;
+
+            AddStep("start from Argon", () => config.SetValue(JukeBoxSetting.Skin, JukeBoxSkin.Argon));
+            AddStep("create visuals", () => Add(visuals = new BeatmapVisuals(plainSet, idleClock)
+            {
+                RelativeSizeAxes = Axes.Both,
+            }));
+
+            AddUntilStep("chart built with Argon", () => visuals.ChartRenderer is { IsLoaded: true, SelectedSkin: JukeBoxSkin.Argon });
+
+            AddStep("switch to Classic", () => config.SetValue(JukeBoxSetting.Skin, JukeBoxSkin.Classic));
+            AddUntilStep("chart rebuilt with Classic", () => visuals.ChartRenderer is { IsLoaded: true, SelectedSkin: JukeBoxSkin.Classic });
+
+            AddStep("restore Argon", () => config.SetValue(JukeBoxSetting.Skin, JukeBoxSkin.Argon));
+            AddStep("remove visuals", () => Remove(visuals, true));
+        }
+
         [Test]
         public void StoryboardSetGetsChartAndHitsoundsDirectly()
         {

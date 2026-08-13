@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using JukeBox.Game.Configuration;
 using osu.Framework.Allocation;
 using osu.Framework.Audio;
 using osu.Framework.Audio.Track;
@@ -131,6 +132,12 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
         RelativeSizeAxes = Axes.Both;
     }
 
+    [Resolved(canBeNull: true)]
+    private SkinSelection? skinSelection { get; set; }
+
+    [Resolved(canBeNull: true)]
+    private osu.Game.Configuration.OsuConfigManager? lazerConfig { get; set; }
+
     [BackgroundDependencyLoader]
     private void load(GameHost host, AudioManager audio, IStorageResourceProvider resourceProvider)
     {
@@ -155,10 +162,11 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
         autoplayScore = new Score { Replay = replay.Replay };
 
         // Skin chain in lazer's lookup order: beatmap-folder skin (beatmap-provided elements,
-        // combo colours from the .osu [Colours] section and custom hitsound samples), then the
-        // lazer default skin (Argon), then the classic legacy skin as the final legacy-name
-        // fallback — the same stack RulesetSkinProvidingContainer builds, minus the realm-backed
-        // SkinManager it resolves (we have no realm-imported skins to offer anyway).
+        // combo colours from the .osu [Colours] section and custom hitsound samples, gated live by
+        // the Beatmap skins/colours/hitsounds settings), then the user-selected bundled skin, then
+        // the classic legacy skin as the final legacy-name fallback — the same stack
+        // RulesetSkinProvidingContainer + BeatmapSkinProvidingContainer build, minus the
+        // realm-backed SkinManager they resolve (we have no realm-imported skins to offer anyway).
         ISkin? beatmapSkin = null;
 
         try
@@ -172,19 +180,63 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
             osu.Framework.Logging.Logger.Error(e, $"Failed to load beatmap folder skin for '{osuFile}' — continuing with default skin only");
         }
 
-        var argon = new ArgonSkin(resourceProvider);
-        var classic = new DefaultLegacySkin(resourceProvider);
+        // The user's bundled-skin choice (settings panel; Random is already resolved to a concrete
+        // entry by SkinSelection). Selection changes rebuild this whole layer (BeatmapVisuals),
+        // so the choice is read once here. Argon when no service is cached (bare test scenes).
+        var selectedChoice = skinSelection?.Effective.Value ?? JukeBoxSkin.Argon;
+        SelectedSkin = selectedChoice;
+        osu.Framework.Logging.Logger.Log($"[LazerChartLayer] building {ruleset.ShortName} chart with skin: {selectedChoice}");
+
+        var selected = SkinSelection.CreateSkin(selectedChoice, resourceProvider);
         var rulesetResources = new ResourceStoreBackedSkin(ruleset.CreateResourceStore(), host, audio);
-        ownedSkins.Add(argon);
-        ownedSkins.Add(classic);
+        ownedSkins.Add(selected);
         ownedSkins.Add(rulesetResources);
 
-        InternalChild = new LazerSkinProvider(ruleset, playableBeatmap, beatmapSkin, new ISkin[] { argon, classic }, rulesetResources)
+        // Classic stays the final legacy-name fallback even under non-legacy user skins, exactly
+        // as before — unless classic IS the selection (no point stacking it twice).
+        var userSkins = new List<ISkin> { selected };
+
+        if (selectedChoice != JukeBoxSkin.Classic)
+        {
+            var classic = new DefaultLegacySkin(resourceProvider);
+            ownedSkins.Add(classic);
+            userSkins.Add(classic);
+        }
+
+        var skinProvider = new LazerSkinProvider(ruleset, playableBeatmap, userSkins, rulesetResources)
         {
             RelativeSizeAxes = Axes.Both,
-            Child = drawableRuleset,
         };
+
+        // The beatmap skin gets its own providing layer nested INSIDE the user-skin provider
+        // (highest lookup priority, parent fallback reaching the user skins) so the three
+        // "Beatmap ..." settings gate it live — mirroring lazer's BeatmapSkinProvidingContainer,
+        // which we can't use directly: its loader hard-resolves the realm-backed SkinManager.
+        if (beatmapSkin != null)
+        {
+            var gated = new BeatmapSkinGate(ruleset.CreateSkinTransformer(beatmapSkin, playableBeatmap) ?? beatmapSkin)
+            {
+                RelativeSizeAxes = Axes.Both,
+                Child = drawableRuleset,
+            };
+
+            if (lazerConfig != null)
+            {
+                gated.BeatmapSkins.Current = lazerConfig.GetBindable<bool>(osu.Game.Configuration.OsuSetting.BeatmapSkins);
+                gated.BeatmapColours.Current = lazerConfig.GetBindable<bool>(osu.Game.Configuration.OsuSetting.BeatmapColours);
+                gated.BeatmapHitsounds.Current = lazerConfig.GetBindable<bool>(osu.Game.Configuration.OsuSetting.BeatmapHitsounds);
+            }
+
+            skinProvider.Child = gated;
+        }
+        else
+            skinProvider.Child = drawableRuleset;
+
+        InternalChild = skinProvider;
     }
+
+    /// <summary>The concrete bundled skin this layer was built with (test hook).</summary>
+    internal JukeBoxSkin SelectedSkin { get; private set; }
 
     protected override void LoadComplete()
     {
@@ -298,12 +350,9 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
         // Matches RulesetSkinProvidingContainer: sources are complete here; never consult parents.
         protected override bool AllowFallingBackToParent => false;
 
-        public LazerSkinProvider(Ruleset ruleset, IBeatmap beatmap, ISkin? beatmapSkin, IEnumerable<ISkin> userSkins, ISkin rulesetResources)
+        public LazerSkinProvider(Ruleset ruleset, IBeatmap beatmap, IEnumerable<ISkin> userSkins, ISkin rulesetResources)
         {
             var sources = new List<ISkin>();
-
-            if (beatmapSkin != null)
-                sources.Add(transform(ruleset, beatmap, beatmapSkin));
 
             sources.AddRange(userSkins.Select(s => transform(ruleset, beatmap, s)));
             sources.Add(rulesetResources);
@@ -313,5 +362,42 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
 
         private static ISkin transform(Ruleset ruleset, IBeatmap beatmap, ISkin skin)
             => ruleset.CreateSkinTransformer(skin, beatmap) ?? skin;
+    }
+
+    /// <summary>
+    /// The beatmap-folder skin's providing layer, replicating the lookup gating of lazer's
+    /// <c>BeatmapSkinProvidingContainer</c> (same overrides, same storyboard-sample exemption) —
+    /// that class itself is unusable here because its loader hard-resolves the realm-backed
+    /// <c>SkinManager</c>. Falls back to the parent <see cref="LazerSkinProvider"/> (user skins)
+    /// for anything the beatmap doesn't provide or the settings disallow. The three bindables gate
+    /// live: flipping a "Beatmap ..." setting triggers a source-change re-lookup, no rebuild.
+    /// </summary>
+    private partial class BeatmapSkinGate : SkinProvidingContainer
+    {
+        public readonly BindableWithCurrent<bool> BeatmapSkins = new BindableWithCurrent<bool>(true);
+        public readonly BindableWithCurrent<bool> BeatmapColours = new BindableWithCurrent<bool>(true);
+        public readonly BindableWithCurrent<bool> BeatmapHitsounds = new BindableWithCurrent<bool>(true);
+
+        protected override bool AllowConfigurationLookup => BeatmapSkins.Value;
+        protected override bool AllowColourLookup => BeatmapColours.Value;
+        protected override bool AllowDrawableLookup(osu.Game.Skinning.ISkinComponentLookup lookup) => BeatmapSkins.Value;
+        protected override bool AllowTextureLookup(string componentName) => BeatmapSkins.Value;
+
+        protected override bool AllowSampleLookup(osu.Game.Audio.ISampleInfo sampleInfo)
+            => sampleInfo is osu.Game.Storyboards.StoryboardSampleInfo || BeatmapHitsounds.Value;
+
+        public BeatmapSkinGate(ISkin skin)
+            : base(skin)
+        {
+        }
+
+        protected override void LoadComplete()
+        {
+            base.LoadComplete();
+
+            BeatmapSkins.BindValueChanged(_ => TriggerSourceChanged());
+            BeatmapColours.BindValueChanged(_ => TriggerSourceChanged());
+            BeatmapHitsounds.BindValueChanged(_ => TriggerSourceChanged());
+        }
     }
 }

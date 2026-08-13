@@ -44,6 +44,13 @@ namespace JukeBox.Game
         // bindables use a weak-reference chain back to the master value — an unrooted local would
         // be eligible for collection, silently dropping this binding. See JukeBoxSetting.ShowFps.
         private Bindable<bool> showFps = null!;
+        private Bindable<double> uiScale = null!;
+        private Bindable<double> volumeInactive = null!;
+
+        // Multiplied into ALL audio (lazer's OsuGame does the same): faded towards
+        // OsuSetting.VolumeInactive while the window is unfocused, back to 1 on focus.
+        private readonly BindableDouble inactiveVolumeDuck = new BindableDouble(1);
+        private IBindable<bool> isActive = null!;
 
         /// <summary>
         /// Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the ShowFps -&gt;
@@ -75,9 +82,10 @@ namespace JukeBox.Game
         private RealmAccess lazerRealm = null!;
         private OsuConfigManager lazerConfig = null!;
         private LazerRulesetConfigCache lazerRulesetConfigs = null!;
+        private SkinSelection skinSelection = null!;
 
         [BackgroundDependencyLoader]
-        private void load()
+        private void load(osu.Framework.Configuration.FrameworkConfigManager frameworkConfig)
         {
             Resources.AddStore(new DllResourceStore(typeof(JukeBoxResources).Assembly));
 
@@ -165,7 +173,33 @@ namespace JukeBox.Game
             Add(jukebox = new Jukebox(queue, radio, cache, playback));
             dependencies.Cache(jukebox);
 
-            config.BindWith(JukeBoxSetting.Volume, playback.Volume);
+            // Volume source of truth is the framework's master volume (VolumeUniversal) — one
+            // knob shared by the settings panel and the now-playing bar, multiplying every audio
+            // component (track, storyboard samples, chart hitsounds) through AudioManager itself.
+            // The old app-level JukeBoxSetting.Volume is deprecated: its persisted value is copied
+            // into VolumeUniversal exactly once (so an existing user's volume survives the
+            // upgrade), after which the ini key is left untouched. playback.Volume (a per-track
+            // adjustment) stays at its default 1 and is no longer user-facing.
+            if (!config.Get<bool>(JukeBoxSetting.VolumeMigrated))
+            {
+                frameworkConfig.SetValue(osu.Framework.Configuration.FrameworkSetting.VolumeUniversal, config.Get<double>(JukeBoxSetting.Volume));
+                config.SetValue(JukeBoxSetting.VolumeMigrated, true);
+            }
+
+            Add(skinSelection = new SkinSelection());
+            dependencies.Cache(skinSelection);
+
+            // UI scaling, lazer's ScalingContainer trick applied to our DPI-scaling root: Scale
+            // enlarges the whole UI while the inverse relative Size keeps it filling the window.
+            Content.Anchor = Anchor.Centre;
+            Content.Origin = Anchor.Centre;
+            uiScale = config.GetBindable<double>(JukeBoxSetting.UiScale);
+            uiScale.BindValueChanged(e =>
+            {
+                float s = (float)e.NewValue;
+                Content.Scale = new Vector2(s);
+                Content.Size = new Vector2(1f / s);
+            }, true);
 
             // CacheSizeGb -> bytes: startup value only (eviction runs once per advance round, so
             // a live-updating bindable isn't worth the extra wiring here).
@@ -180,6 +214,29 @@ namespace JukeBox.Game
             // already sitting in FrameStatistics by the time base.LoadComplete() runs.
             showFps = config.GetBindable<bool>(JukeBoxSetting.ShowFps);
             showFps.BindValueChanged(e => FrameStatistics.Value = FrameStatisticsModeFor(e.NewValue), true);
+        }
+
+        protected override void LoadComplete()
+        {
+            base.LoadComplete();
+
+            // "Master (window inactive)": same mechanism (and fade durations) as lazer's OsuGame —
+            // an extra volume adjustment on the whole AudioManager, faded on focus change. The
+            // duck target follows OsuSetting.VolumeInactive live via the transform re-running on
+            // the next focus flip.
+            volumeInactive = lazerConfig.GetBindable<double>(OsuSetting.VolumeInactive);
+            Audio.AddAdjustment(osu.Framework.Audio.AdjustableProperty.Volume, inactiveVolumeDuck);
+
+            // Schedule: focus changes arrive on the SDL window thread (SDL2Window.set_Focused),
+            // and bindable transforms hard-require the update thread.
+            isActive = Host.IsActive.GetBoundCopy();
+            isActive.BindValueChanged(e => Schedule(() =>
+            {
+                if (e.NewValue)
+                    this.TransformBindableTo(inactiveVolumeDuck, 1, 400, Easing.OutQuint);
+                else
+                    this.TransformBindableTo(inactiveVolumeDuck, volumeInactive.Value, 4000, Easing.OutQuint);
+            }), true);
         }
 
         /// <summary>
