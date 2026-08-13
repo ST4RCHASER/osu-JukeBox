@@ -22,13 +22,12 @@ using osuTK.Input;
 namespace JukeBox.Game.UI;
 
 /// <summary>
-/// osu!-web-style beatmap listing, replacing the old dropdown search in both layouts. Covers the
-/// visuals area (its parent decides the exact region — see MainScreen, which hosts it inside
-/// <c>visualsHost</c> so Split's left panel stays uncovered). A large keyword box drives a
-/// 300ms-debounced search against <see cref="IBeatmapMirror"/>, refined by chip filter rows (mode,
-/// category, genre, language, extras, sort, star range) and rendered as a scrollable two-column
-/// grid of <see cref="BeatmapCard"/>s with infinite scroll (the next page is requested whenever
-/// the scroll nears the bottom and the last page came back full).
+/// osu!-web-style beatmap listing. A large keyword box drives a 300ms-debounced search against
+/// <see cref="IBeatmapMirror"/>, refined by collapsible chip filter rows (mode, category, genre,
+/// language, extras, sort, star range — see <see cref="createFiltersToggle"/>) and rendered as a
+/// scrollable grid of <see cref="BeatmapCard"/>s (two columns when wide enough, one when narrow —
+/// see <see cref="two_column_threshold"/>) with infinite scroll (the next page is requested
+/// whenever the scroll nears the bottom and the last page came back full).
 ///
 /// Mode/category/extras/sort/stars are server-side parameters — changing them restarts the search
 /// at page 0. Genre and language are CLIENT-SIDE filters over the already-loaded results (the
@@ -45,9 +44,34 @@ namespace JukeBox.Game.UI;
 /// open, so several sets can be queued in one browsing session. Download-disabled sets are dimmed
 /// and non-clickable (<see cref="ClickableContainer.Action"/> stays null). A slower, older search
 /// response can never overwrite a newer one (<see cref="searchSequence"/> guard).
+///
+/// <para>
+/// Also usable <b>docked</b> (see the constructor) — the three-column layout's permanent left
+/// column embeds this same content instead of a dismissable overlay. Docked mode is shown once at
+/// load and never hidden again: <see cref="ShowWithInitialChar"/> only focuses and seeds the
+/// keyword box (no popping in/out), Escape blurs the keyword box instead of closing anything, and
+/// confirming a selection with Enter no longer closes the (non-existent, in this mode) overlay.
+/// </para>
 /// </summary>
 public partial class BeatmapListingOverlay : FocusedOverlayContainer
 {
+    /// <summary>Columns render single-file below this content width — the docked left column
+    /// (~380px minus panel padding) never reaches the two-column threshold, matching the "grid ->
+    /// 1-col in narrow width" contract; the wider standalone/full-visuals overlay still gets two.</summary>
+    private const float two_column_threshold = 560;
+
+    /// <summary>Whether this instance is permanently embedded (three-column layout's left column)
+    /// rather than a dismissable floating overlay. See the class summary.</summary>
+    private readonly bool docked;
+
+    private Container filtersBody = null!;
+    private bool filtersExpanded = true;
+    private SpriteText filtersToggleText = null!;
+
+    public BeatmapListingOverlay(bool docked = false)
+    {
+        this.docked = docked;
+    }
     private const double debounce_ms = 300;
     private const int page_size = 30;
 
@@ -75,6 +99,19 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
     private FillFlowContainer<BeatmapCard> cardsFlow = null!;
     private BasicScrollContainer scroll = null!;
     private SpriteText statusText = null!;
+
+    /// <summary>
+    /// Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the keyword text box, to
+    /// assert its seeded text/focus state (e.g. after <see cref="ShowWithInitialChar"/>) without
+    /// depending on this panel's internal layout. Exposed as the public base type — <see
+    /// cref="ListingSearchBox"/> itself is a private nested type not reachable even with
+    /// InternalsVisibleTo.
+    /// </summary>
+    internal AccentTextBox SearchBox => searchBox;
+
+    /// <summary>Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to whether the
+    /// "Filters" section is currently expanded.</summary>
+    internal bool FiltersExpanded => filtersExpanded;
 
     private ScheduledDelegate? debounceDelegate;
 
@@ -172,6 +209,13 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
 
         minStars.BindValueChanged(_ => scheduleSearch());
         maxStars.BindValueChanged(_ => scheduleSearch());
+
+        updateFiltersExpanded();
+
+        // Docked instances are the three-column layout's permanent left column: shown once here
+        // and never hidden again (see the class summary and the docked guards throughout).
+        if (docked)
+            Show();
     }
 
     private Drawable createHeader()
@@ -182,50 +226,71 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
             AutoSizeAxes = Axes.Y,
             Direction = FillDirection.Vertical,
             Spacing = new Vector2(0, Theme.RowSpacing),
-            Children = new[]
+            Children = new Drawable[]
             {
                 searchBox = new ListingSearchBox
                 {
                     RelativeSizeAxes = Axes.X,
                     Height = 44,
                     PlaceholderText = "type in keywords…",
-                    Exit = Hide,
+                    Exit = docked ? unfocusSearch : Hide,
                 },
-                createChipRow("Mode", null, singleSelect(new (string, string?)[]
+                createFiltersToggle(),
+                // Wrapping the chip rows in their own FillFlowContainer (rather than flattening
+                // them into the outer one) lets collapsing reclaim their vertical space for free:
+                // a FillFlowContainer skips non-IsPresent children (Alpha 0, no AlwaysPresent) when
+                // flowing, so hiding this single child collapses the whole section instead of
+                // leaving a blank gap the size of every individual row.
+                filtersBody = new Container
                 {
-                    ("Any", null), ("osu!", "o"), ("taiko", "t"), ("catch", "c"), ("mania", "m"),
-                }, mode, v => { mode = v; scheduleSearch(); })),
-                createChipRow("Categories", null, singleSelect(new (string, string)[]
-                {
-                    ("Any", "all"), ("Ranked", "ranked"), ("Qualified", "qualified"), ("Loved", "loved"),
-                    ("Pending", "pending"), ("WIP", "wip"), ("Graveyard", "graveyard"),
-                }, category, v => { category = v; scheduleSearch(); })),
-                createChipRow("Genre", "filters loaded results", singleSelect(new (string, int?)[]
-                {
-                    ("Any", null), ("Video Game", 2), ("Anime", 3), ("Rock", 4), ("Pop", 5), ("Other", 6),
-                    ("Novelty", 7), ("Hip Hop", 9), ("Electronic", 10), ("Metal", 11), ("Classical", 12),
-                    ("Folk", 13), ("Jazz", 14),
-                }, genreId, v => { genreId = v; applyClientFilterChange(); })),
-                createChipRow("Language", "filters loaded results", singleSelect(new (string, int?)[]
-                {
-                    ("Any", null), ("English", 2), ("Japanese", 3), ("Chinese", 4), ("Korean", 6),
-                    ("Instrumental", 5), ("German", 8), ("French", 7), ("Italian", 11), ("Spanish", 10),
-                    ("Swedish", 9), ("Russian", 12), ("Polish", 13), ("Other", 14),
-                }, languageId, v => { languageId = v; applyClientFilterChange(); })),
-                createChipRow("Extra", null, new[]
-                {
-                    toggleChip("Has Video", v => { hasVideo = v; scheduleSearch(); }),
-                    toggleChip("Has Storyboard", v => { hasStoryboard = v; scheduleSearch(); }),
-                }),
-                createChipRow("Sort", null, singleSelect(new (string, string)[]
-                {
-                    ("Ranked", "ranked"), ("Plays", "plays"), ("Favourites", "favourites"),
-                    ("Difficulty", "difficulty"), ("Updated", "updated"), ("Title", "title"),
-                }, sortKey, v => { sortKey = v; scheduleSearch(); }).Concat(singleSelect(new (string, bool)[]
-                {
-                    ("desc", true), ("asc", false),
-                }, sortDescending, v => { sortDescending = v; scheduleSearch(); })).ToArray()),
-                createStarsRow(),
+                    RelativeSizeAxes = Axes.X,
+                    AutoSizeAxes = Axes.Y,
+                    Child = new FillFlowContainer
+                    {
+                        RelativeSizeAxes = Axes.X,
+                        AutoSizeAxes = Axes.Y,
+                        Direction = FillDirection.Vertical,
+                        Spacing = new Vector2(0, Theme.RowSpacing),
+                        Children = new[]
+                        {
+                            createChipRow("Mode", null, singleSelect(new (string, string?)[]
+                            {
+                                ("Any", null), ("osu!", "o"), ("taiko", "t"), ("catch", "c"), ("mania", "m"),
+                            }, mode, v => { mode = v; scheduleSearch(); })),
+                            createChipRow("Categories", null, singleSelect(new (string, string)[]
+                            {
+                                ("Any", "all"), ("Ranked", "ranked"), ("Qualified", "qualified"), ("Loved", "loved"),
+                                ("Pending", "pending"), ("WIP", "wip"), ("Graveyard", "graveyard"),
+                            }, category, v => { category = v; scheduleSearch(); })),
+                            createChipRow("Genre", "filters loaded results", singleSelect(new (string, int?)[]
+                            {
+                                ("Any", null), ("Video Game", 2), ("Anime", 3), ("Rock", 4), ("Pop", 5), ("Other", 6),
+                                ("Novelty", 7), ("Hip Hop", 9), ("Electronic", 10), ("Metal", 11), ("Classical", 12),
+                                ("Folk", 13), ("Jazz", 14),
+                            }, genreId, v => { genreId = v; applyClientFilterChange(); })),
+                            createChipRow("Language", "filters loaded results", singleSelect(new (string, int?)[]
+                            {
+                                ("Any", null), ("English", 2), ("Japanese", 3), ("Chinese", 4), ("Korean", 6),
+                                ("Instrumental", 5), ("German", 8), ("French", 7), ("Italian", 11), ("Spanish", 10),
+                                ("Swedish", 9), ("Russian", 12), ("Polish", 13), ("Other", 14),
+                            }, languageId, v => { languageId = v; applyClientFilterChange(); })),
+                            createChipRow("Extra", null, new[]
+                            {
+                                toggleChip("Has Video", v => { hasVideo = v; scheduleSearch(); }),
+                                toggleChip("Has Storyboard", v => { hasStoryboard = v; scheduleSearch(); }),
+                            }),
+                            createChipRow("Sort", null, singleSelect(new (string, string)[]
+                            {
+                                ("Ranked", "ranked"), ("Plays", "plays"), ("Favourites", "favourites"),
+                                ("Difficulty", "difficulty"), ("Updated", "updated"), ("Title", "title"),
+                            }, sortKey, v => { sortKey = v; scheduleSearch(); }).Concat(singleSelect(new (string, bool)[]
+                            {
+                                ("desc", true), ("asc", false),
+                            }, sortDescending, v => { sortDescending = v; scheduleSearch(); })).ToArray()),
+                            createStarsRow(),
+                        },
+                    },
+                },
                 statusText = new SpriteText
                 {
                     Font = FontUsage.Default.With(size: Theme.RowSecondaryTextSize),
@@ -234,6 +299,51 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
             },
         };
     }
+
+    /// <summary>
+    /// The "Filters" expander header — a clickable row toggling <see cref="filtersBody"/> between
+    /// shown and collapsed, to save vertical room for the results list in the narrow docked column
+    /// (the wide standalone overlay has room to spare, but stays collapsible there too for
+    /// consistency — one behaviour, not a docked-only special case).
+    /// </summary>
+    private Drawable createFiltersToggle()
+    {
+        var toggle = new FiltersToggleButton
+        {
+            RelativeSizeAxes = Axes.X,
+            AutoSizeAxes = Axes.Y,
+            Child = new FillFlowContainer
+            {
+                AutoSizeAxes = Axes.Both,
+                Direction = FillDirection.Horizontal,
+                Spacing = new Vector2(6, 0),
+                Children = new Drawable[]
+                {
+                    filtersToggleText = new SpriteText
+                    {
+                        Font = FontUsage.Default.With(size: Theme.RowSecondaryTextSize),
+                        Colour = Theme.TextSecondary,
+                    },
+                },
+            },
+        };
+
+        toggle.Action = () =>
+        {
+            filtersExpanded = !filtersExpanded;
+            updateFiltersExpanded();
+        };
+
+        return toggle;
+    }
+
+    private void updateFiltersExpanded()
+    {
+        filtersBody.Alpha = filtersExpanded ? 1 : 0;
+        filtersToggleText.Text = filtersExpanded ? "▾ Filters" : "▸ Filters";
+    }
+
+    private void unfocusSearch() => GetContainingFocusManager()?.ChangeFocus(null);
 
     /// <summary>
     /// Builds a mutually-exclusive chip group: clicking a chip activates it, deactivates its
@@ -367,28 +477,16 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
     }
 
     /// <summary>
-    /// Opens the listing, seeds the keyword box with <paramref name="c"/> (kicking off the first
-    /// debounced search) and gives it keyboard focus — the "type anywhere to search" entry point.
+    /// Seeds the keyword box with <paramref name="c"/> (kicking off the first debounced search)
+    /// and gives it keyboard focus — the "type anywhere to search" entry point. When docked, the
+    /// column is already permanently visible, so this only focuses+seeds; when floating, it also
+    /// pops the overlay in (<c>Show()</c> is a no-op if already visible either way).
     /// </summary>
     public void ShowWithInitialChar(char c)
     {
         Show();
         searchBox.Text = c.ToString();
         scheduleFocus();
-    }
-
-    /// <summary>
-    /// Opens the listing without seeding the keyword box (the Split layout's compact search
-    /// button). Kicks off an initial search if nothing has been loaded yet, so the grid isn't
-    /// empty while the keyword box still is.
-    /// </summary>
-    public void ShowAndFocus()
-    {
-        Show();
-        scheduleFocus();
-
-        if (loadedSets.Count == 0 && !isLoading)
-            scheduleSearch();
     }
 
     // FocusedOverlayContainer.UpdateState schedules its own focus-contention pass (which
@@ -419,7 +517,12 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
         switch (e.Key)
         {
             case Key.Escape:
-                Hide();
+                // Docked: never hides the column — just clears keyboard focus off the search box
+                // (the "clears/unfocuses search" contract). Floating: closes as before.
+                if (docked)
+                    unfocusSearch();
+                else
+                    Hide();
                 return true;
 
             case Key.Up:
@@ -461,6 +564,7 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
     /// <summary>
     /// Enter was pressed (via the text box's commit) — queues the highlighted card, falling back
     /// to the first, then closes the listing (the quick keyboard flow; mouse clicks keep it open).
+    /// Docked instances have no overlay to close, so they just queue and stay put.
     /// </summary>
     private void confirmSelection()
     {
@@ -472,7 +576,9 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
             return;
 
         SetPicked?.Invoke(target.Set);
-        Hide();
+
+        if (!docked)
+            Hide();
     }
 
     private void pick(BeatmapCard card)
@@ -496,8 +602,11 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
         base.Update();
 
         // Cards can't be relatively sized (their FillDirection.Full flow forbids relative axes in
-        // the flow direction), so their two-per-row width is kept in sync manually here.
-        float cardWidth = cardsFlow.DrawWidth / 2;
+        // the flow direction), so their per-row width is kept in sync manually here. Narrow widths
+        // (the docked left column) fall back to a single column rather than squeezing two —
+        // "grid -> 1-col in narrow width".
+        int columns = cardsFlow.DrawWidth >= two_column_threshold ? 2 : 1;
+        float cardWidth = cardsFlow.DrawWidth / columns;
 
         if (Math.Abs(cardWidth - lastCardWidth) > 0.5f)
         {
@@ -651,6 +760,12 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
 
             return base.OnKeyDown(e);
         }
+    }
+
+    /// <summary>A dedicated (rather than anonymous) type for the "Filters" expander header purely
+    /// so tests can locate it via <c>ChildrenOfType&lt;FiltersToggleButton&gt;</c>.</summary>
+    private partial class FiltersToggleButton : ClickableContainer
+    {
     }
 
     /// <summary>Genre/language changed — a user action: reset the auto-chain budget and
