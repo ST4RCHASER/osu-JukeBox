@@ -217,26 +217,33 @@ namespace JukeBox.Game.Tests.Visual
         // snap the player box straight to full-bleed on the very same frame the columns started
         // sliding away, while leaving focus animated the box's restore properly. Both directions
         // must now tween the box's padding over the same orchestrated timeline as the panels.
+        // NOTE: the transition is deliberately fast (Theme.DurationFast, linear — user
+        // preference), so a whole animation can complete between two coarse test STEPS.
+        // These regressions therefore detect gradual motion via a per-engine-frame sampler
+        // (engine frames tick far faster than steps) instead of "one step in" assertions.
         [Test]
         public void PlayerBoxExpandsAndRestoresSymmetricallyWithFocusMode()
         {
             float restoredLeft = 0;
+            FrameSampler sampler = null!;
             AddStep("record the resting gutter", () => restoredLeft = screen.VisualsHostPadding.Left);
             AddAssert("box has a gutter to start", () => restoredLeft > 0);
+            AddStep("add per-frame padding sampler", () => uiContainer.Add(sampler = new FrameSampler(
+                () => (screen.VisualsHostPadding.Left, 0))));
 
             AddStep("enter focus mode", () => InputManager.Key(Key.Tab));
-            AddAssert("one frame in, box padding has not yet snapped to full-bleed", () =>
-                screen.VisualsHostPadding.Left > 0 || screen.VisualsHostPadding.Right > 0
-                || screen.VisualsHostPadding.Top > 0 || screen.VisualsHostPadding.Bottom > 0);
             AddUntilStep("box padding eventually reaches full-bleed", () =>
                 screen.VisualsHostPadding.Left == 0 && screen.VisualsHostPadding.Right == 0
                 && screen.VisualsHostPadding.Top == 0 && screen.VisualsHostPadding.Bottom == 0);
+            AddAssert("padding passed through an intermediate value on the way out", () =>
+                sampler.Samples.Any(s => s.box > 0 && s.box < restoredLeft));
 
+            AddStep("clear samples", () => sampler.Samples.Clear());
             AddStep("leave focus mode", () => InputManager.Key(Key.Tab));
-            AddAssert("one frame in, box padding has not yet snapped back to the resting gutter", () =>
-                screen.VisualsHostPadding.Left < restoredLeft);
             AddUntilStep("box padding eventually restores its gutter", () =>
                 screen.VisualsHostPadding.Left == restoredLeft);
+            AddAssert("padding passed through an intermediate value on the way back", () =>
+                sampler.Samples.Any(s => s.box > 0 && s.box < restoredLeft));
         }
 
         // Same regression, phrased against the actually-rendered DrawWidth (the pixels a user
@@ -245,15 +252,16 @@ namespace JukeBox.Game.Tests.Visual
         public void PlayerBoxDrawWidthGrowsGraduallyOnEnterNotJustPaddingValue()
         {
             float startWidth = 0;
+            FrameSampler sampler = null!;
             AddStep("record starting box width", () => startWidth = screen.PlayerBox.DrawWidth);
+            AddStep("add per-frame width sampler", () => uiContainer.Add(sampler = new FrameSampler(
+                () => (screen.PlayerBox.DrawWidth, 0))));
 
             AddStep("enter focus mode", () => InputManager.Key(Key.Tab));
-            AddAssert("one frame in, box has not yet snapped to full container width", () =>
-                screen.PlayerBox.DrawWidth < screen.DrawWidth - 1);
-            AddAssert("one frame in, box has grown only partway (not still at its starting width either)", () =>
-                screen.PlayerBox.DrawWidth > startWidth);
             AddUntilStep("box eventually reaches full-bleed width", () =>
                 screen.PlayerBox.DrawWidth >= screen.DrawWidth - 1);
+            AddAssert("box width passed through an intermediate value (grew gradually, no snap)", () =>
+                sampler.Samples.Any(s => s.box > startWidth + 1 && s.box < screen.DrawWidth - 1));
         }
 
         [Test]
