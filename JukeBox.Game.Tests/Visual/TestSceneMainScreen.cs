@@ -17,7 +17,6 @@ using osu.Framework.Allocation;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Sprites;
-using osu.Framework.Graphics.UserInterface;
 using osu.Framework.Screens;
 using osu.Framework.Testing;
 using osuTK.Input;
@@ -83,7 +82,7 @@ namespace JukeBox.Game.Tests.Visual
             {
                 queue.Items.Clear();
                 mirror.Sets.Clear();
-                config.SetValue(JukeBoxSetting.UiLayout, UiLayout.FullscreenOverlay);
+                config.SetValue(JukeBoxSetting.UiLayout, UiLayout.ThreeColumn);
                 screen = new MainScreen { RelativeSizeAxes = Axes.Both };
                 // MainScreen is a Screen — osu!framework requires a Screen to be hosted by a
                 // ScreenStack (see JukeBoxGame's own top-level screenStack.Push(new MainScreen())).
@@ -92,59 +91,105 @@ namespace JukeBox.Game.Tests.Visual
         }
 
         [Test]
-        public void TypingOpensListingWithFullscreenLayout()
+        public void ThreeColumnLayoutStartsWithBothColumnsShownAndQueueTabActive()
         {
-            AddAssert("listing starts hidden", () => screen.ChildrenOfType<BeatmapListingOverlay>().Single().State.Value == Visibility.Hidden);
+            AddAssert("left column shown", () => screen.LeftColumn.Alpha == 1);
+            AddAssert("right column shown", () => screen.RightColumn.Alpha == 1);
+            AddAssert("queue tab active", () => screen.ChildrenOfType<QueuePanel>().Single().Alpha == 1);
+            AddAssert("settings tab inactive", () => screen.ChildrenOfType<SettingsOverlay>().Single().Alpha == 0);
+        }
+
+        [Test]
+        public void TypingFocusesAndSeedsTheDockedSearchBox()
+        {
+            AddAssert("search box starts empty", () => screen.ChildrenOfType<BeatmapListingOverlay>().Single().SearchBox.Text == string.Empty);
 
             AddStep("press 'a'", () => InputManager.Key(Key.A));
-            AddUntilStep("listing visible", () => screen.ChildrenOfType<BeatmapListingOverlay>().Single().State.Value == Visibility.Visible);
+
+            AddAssert("search box seeded with 'a'", () => screen.ChildrenOfType<BeatmapListingOverlay>().Single().SearchBox.Text == "a");
+            AddUntilStep("search box focused", () => screen.ChildrenOfType<BeatmapListingOverlay>().Single().SearchBox.HasFocus);
+            AddAssert("left column never left shown", () => screen.LeftColumn.Alpha == 1);
         }
 
+        // Escape's new contract: it blurs the docked search box but the column itself — unlike the
+        // old dismissable overlay — is never hidden.
         [Test]
-        public void TabTogglesSplitLayout()
+        public void EscapeUnfocusesSearchBoxWithoutHidingTheColumn()
         {
-            AddAssert("split layout hidden initially", () => screen.SplitLayoutContainer.Alpha == 0);
-            AddAssert("fullscreen layout visible initially", () => screen.FullscreenLayoutContainer.Alpha == 1);
-
-            AddStep("press tab", () => InputManager.Key(Key.Tab));
-            AddAssert("split layout shown", () => screen.SplitLayoutContainer.Alpha == 1);
-            AddAssert("fullscreen layout hidden", () => screen.FullscreenLayoutContainer.Alpha == 0);
-            AddAssert("config persisted the switch", () => config.Get<UiLayout>(JukeBoxSetting.UiLayout) == UiLayout.Split);
-
-            AddStep("press tab again", () => InputManager.Key(Key.Tab));
-            AddAssert("split layout hidden again", () => screen.SplitLayoutContainer.Alpha == 0);
-            AddAssert("fullscreen layout visible again", () => screen.FullscreenLayoutContainer.Alpha == 1);
-        }
-
-        // The listing replaces the old always-docked Split search panel: in Split the left column
-        // keeps only a compact search button that opens the (dismissable, visuals-covering)
-        // listing, and Escape closes it again in both layouts.
-        [Test]
-        public void SplitLayoutCompactSearchOpensListingAndEscapeClosesIt()
-        {
-            AddStep("press tab (switch to split)", () => InputManager.Key(Key.Tab));
-            AddUntilStep("split shown", () => screen.SplitLayoutContainer.Alpha == 1);
-            AddAssert("listing starts hidden", () => screen.ChildrenOfType<BeatmapListingOverlay>().Single().State.Value == Visibility.Hidden);
-
-            AddStep("click the compact search button",
-                () => screen.ChildrenOfType<CompactSearchButton>().Single().TriggerClick());
-            AddUntilStep("listing visible", () => screen.ChildrenOfType<BeatmapListingOverlay>().Single().State.Value == Visibility.Visible);
+            AddStep("press 'a' (focus + seed)", () => InputManager.Key(Key.A));
+            AddUntilStep("search box focused", () => screen.ChildrenOfType<BeatmapListingOverlay>().Single().SearchBox.HasFocus);
 
             AddStep("press escape", () => InputManager.Key(Key.Escape));
-            AddUntilStep("listing hidden again", () => screen.ChildrenOfType<BeatmapListingOverlay>().Single().State.Value == Visibility.Hidden);
+
+            AddUntilStep("search box no longer focused", () => !screen.ChildrenOfType<BeatmapListingOverlay>().Single().SearchBox.HasFocus);
+            AddAssert("left column still shown", () => screen.LeftColumn.Alpha == 1);
+            AddAssert("listing still present in the hierarchy", () => screen.ChildrenOfType<BeatmapListingOverlay>().Any());
         }
 
-        // Regression test for the queue drawer being unreachable in the fullscreen layout:
-        // QueuePanel.ToggleVisibility previously had no caller at all outside the layout switch
-        // (which only ever forces it open in Split via SetShown). Both new entry points — the
-        // Ctrl+Q hotkey and the corner "queue" button — must actually reach it while fullscreen.
         [Test]
-        public void QueueDrawerReachableViaHotkeyAndButtonInFullscreenLayout()
+        public void TabTogglesFocusMode()
         {
-            QueuePanel panel = null!;
-            AddStep("grab queue panel", () => panel = screen.ChildrenOfType<QueuePanel>().Single());
+            AddAssert("both columns shown initially", () => screen.LeftColumn.Alpha == 1 && screen.RightColumn.Alpha == 1);
+            AddAssert("config starts ThreeColumn", () => config.Get<UiLayout>(JukeBoxSetting.UiLayout) == UiLayout.ThreeColumn);
 
-            AddAssert("starts off-screen (hidden) in fullscreen layout", () => panel.X > 0);
+            AddStep("press tab", () => InputManager.Key(Key.Tab));
+            AddAssert("both columns hidden (focus mode)", () => screen.LeftColumn.Alpha == 0 && screen.RightColumn.Alpha == 0);
+            AddAssert("config persisted Focus", () => config.Get<UiLayout>(JukeBoxSetting.UiLayout) == UiLayout.Focus);
+
+            AddStep("press tab again", () => InputManager.Key(Key.Tab));
+            AddAssert("both columns shown again", () => screen.LeftColumn.Alpha == 1 && screen.RightColumn.Alpha == 1);
+            AddAssert("config back to ThreeColumn", () => config.Get<UiLayout>(JukeBoxSetting.UiLayout) == UiLayout.ThreeColumn);
+        }
+
+        // Type-anywhere-to-search only makes sense while the column hosting the search box is
+        // actually reachable — while focus mode hides it, a keypress must fall through untouched
+        // rather than silently seeding/focusing a now-invisible box.
+        [Test]
+        public void TypingDoesNothingWhileInFocusMode()
+        {
+            AddStep("press tab (enter focus mode)", () => InputManager.Key(Key.Tab));
+            AddUntilStep("columns hidden", () => screen.LeftColumn.Alpha == 0);
+
+            AddStep("press 'a'", () => InputManager.Key(Key.A));
+
+            AddAssert("search box was not seeded", () => screen.ChildrenOfType<BeatmapListingOverlay>().Single().SearchBox.Text == string.Empty);
+        }
+
+        // Regression coverage for the gear button: it no longer pops a floating SettingsOverlay —
+        // it's a shortcut straight to the right column's Settings tab, whose content is now inline.
+        [Test]
+        public void GearButtonSwitchesRightPanelToSettingsTab()
+        {
+            QueuePanel queuePanel = null!;
+            SettingsOverlay settingsBody = null!;
+            AddStep("grab queue panel and settings body", () =>
+            {
+                queuePanel = screen.ChildrenOfType<QueuePanel>().Single();
+                settingsBody = screen.ChildrenOfType<SettingsOverlay>().Single();
+            });
+
+            AddAssert("queue tab active initially", () => queuePanel.Alpha == 1 && settingsBody.Alpha == 0);
+
+            AddStep("click the corner gear button",
+                () => screen.ChildrenOfType<IconButton>().Single(b => b.Icon.Equals(FontAwesome.Solid.Cog)).TriggerClick());
+
+            AddAssert("settings tab now active", () => settingsBody.Alpha == 1 && queuePanel.Alpha == 0);
+        }
+
+        // Regression coverage for Ctrl+Q: still a "jump to queue" shortcut, now switching the tab
+        // rather than sliding a drawer into view.
+        [Test]
+        public void CtrlQSwitchesRightPanelToQueueTab()
+        {
+            QueuePanel queuePanel = null!;
+            SettingsOverlay settingsBody = null!;
+            AddStep("grab queue panel and settings body, switch to settings", () =>
+            {
+                queuePanel = screen.ChildrenOfType<QueuePanel>().Single();
+                settingsBody = screen.ChildrenOfType<SettingsOverlay>().Single();
+                screen.ChildrenOfType<IconButton>().Single(b => b.Icon.Equals(FontAwesome.Solid.Cog)).TriggerClick();
+            });
+            AddAssert("settings tab active", () => settingsBody.Alpha == 1);
 
             AddStep("press ctrl+q", () =>
             {
@@ -152,76 +197,15 @@ namespace JukeBox.Game.Tests.Visual
                 InputManager.Key(Key.Q);
                 InputManager.ReleaseKey(Key.ControlLeft);
             });
-            AddUntilStep("panel slid into view", () => panel.X == 0);
 
-            AddStep("press ctrl+q again", () =>
-            {
-                InputManager.PressKey(Key.ControlLeft);
-                InputManager.Key(Key.Q);
-                InputManager.ReleaseKey(Key.ControlLeft);
-            });
-            AddUntilStep("panel slid back out", () => panel.X > 0);
-
-            AddStep("click the corner queue button",
-                () => screen.ChildrenOfType<BasicButton>().Single(b => b.Text == "queue").TriggerClick());
-            AddUntilStep("panel visible again", () => panel.X == 0);
+            AddAssert("queue tab active again", () => queuePanel.Alpha == 1 && settingsBody.Alpha == 0);
         }
 
-        // Regression test for stored-geometry bugs on layout round trips: applyLayout's Split
-        // branch switches QueuePanel to fully-relative sizing (Width/Height 1 inside the left
-        // panel's queue host); the fullscreen branch must restore the absolute drawer width and
-        // Y-only relative axes explicitly, since switching RelativeSizeAxes back never resets the
-        // stored Width/Height values.
+        // Regression coverage for the map-ID button: unaffected by the right column's tab state,
+        // and (being a small independent modal) still reachable even while focus mode has hidden
+        // both columns.
         [Test]
-        public void QueuePanelGeometryRestoredAfterSplitFullscreenRoundTrip()
-        {
-            QueuePanel panel = null!;
-            AddStep("grab queue panel", () => panel = screen.ChildrenOfType<QueuePanel>().Single());
-
-            AddAssert("starts at absolute drawer width in fullscreen layout", () => panel.Width == 320f);
-
-            AddStep("switch to split layout", () => InputManager.Key(Key.Tab));
-            AddUntilStep("split shown", () => screen.SplitLayoutContainer.Alpha == 1);
-            AddAssert("split layout sets fully-relative geometry", () => panel.RelativeSizeAxes == Axes.Both && panel.Width == 1f && panel.Height == 1f);
-
-            AddStep("switch back to fullscreen layout", () => InputManager.Key(Key.Tab));
-            AddUntilStep("fullscreen shown", () => screen.FullscreenLayoutContainer.Alpha == 1);
-
-            AddAssert("width restored to the absolute drawer width", () => panel.Width == 320f);
-            AddAssert("height restored to full", () => panel.Height == 1f);
-            AddAssert("relative axes restored to Y-only", () => panel.RelativeSizeAxes == Axes.Y);
-        }
-
-        // Regression coverage for the settings gear button: it must be reachable (and the overlay
-        // it opens must actually be present) in both layouts, not just whichever one MainScreen
-        // starts in.
-        [Test]
-        public void GearButtonTogglesSettingsOverlayInBothLayouts()
-        {
-            SettingsOverlay overlay = null!;
-            AddStep("grab settings overlay", () => overlay = screen.ChildrenOfType<SettingsOverlay>().Single());
-
-            AddAssert("starts hidden", () => overlay.State.Value == Visibility.Hidden);
-
-            AddStep("click the corner gear button",
-                () => screen.ChildrenOfType<IconButton>().Single(b => b.Icon.Equals(FontAwesome.Solid.Cog)).TriggerClick());
-            AddAssert("overlay visible", () => overlay.State.Value == Visibility.Visible);
-
-            AddStep("click the gear button again", () => screen.ChildrenOfType<IconButton>().Single(b => b.Icon.Equals(FontAwesome.Solid.Cog)).TriggerClick());
-            AddAssert("overlay hidden again", () => overlay.State.Value == Visibility.Hidden);
-
-            AddStep("switch to split layout", () => InputManager.Key(Key.Tab));
-            AddUntilStep("split shown", () => screen.SplitLayoutContainer.Alpha == 1);
-
-            AddStep("click the corner gear button in split layout",
-                () => screen.ChildrenOfType<IconButton>().Single(b => b.Icon.Equals(FontAwesome.Solid.Cog)).TriggerClick());
-            AddAssert("overlay visible in split layout too", () => overlay.State.Value == Visibility.Visible);
-        }
-
-        // Regression coverage for the map-ID button: it must be reachable (and the overlay it
-        // opens must actually be present) in both layouts, same as the settings gear button.
-        [Test]
-        public void HashtagButtonTogglesMapIdOverlayInBothLayouts()
+        public void HashtagButtonTogglesMapIdOverlayRegardlessOfFocusMode()
         {
             MapIdOverlay overlay = null!;
             AddStep("grab map-id overlay", () => overlay = screen.ChildrenOfType<MapIdOverlay>().Single());
@@ -235,12 +219,26 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("click the hashtag button again", () => screen.ChildrenOfType<IconButton>().Single(b => b.Icon.Equals(FontAwesome.Solid.Hashtag)).TriggerClick());
             AddAssert("overlay hidden again", () => overlay.State.Value == Visibility.Hidden);
 
-            AddStep("switch to split layout", () => InputManager.Key(Key.Tab));
-            AddUntilStep("split shown", () => screen.SplitLayoutContainer.Alpha == 1);
+            AddStep("enter focus mode", () => InputManager.Key(Key.Tab));
+            AddUntilStep("columns hidden", () => screen.LeftColumn.Alpha == 0);
 
-            AddStep("click the corner hashtag button in split layout",
+            AddStep("click the corner hashtag button in focus mode",
                 () => screen.ChildrenOfType<IconButton>().Single(b => b.Icon.Equals(FontAwesome.Solid.Hashtag)).TriggerClick());
-            AddAssert("overlay visible in split layout too", () => overlay.State.Value == Visibility.Visible);
+            AddAssert("overlay visible in focus mode too", () => overlay.State.Value == Visibility.Visible);
+        }
+
+        // Regression coverage for the queue drawer's old floating-drawer geometry (off-screen X,
+        // Y-only relative sizing) — MainScreen must override it to fully-relative fill-the-tab-body
+        // geometry once at load, since QueuePanel's own LoadComplete otherwise parks it off-screen.
+        [Test]
+        public void QueuePanelDockedFillsTheRightColumnTabBody()
+        {
+            AddAssert("queue panel X == 0", () => screen.ChildrenOfType<QueuePanel>().Single().X == 0);
+            AddAssert("queue panel anchored top-left", () => screen.ChildrenOfType<QueuePanel>().Single().Anchor == Anchor.TopLeft);
+            AddAssert("queue panel origin top-left", () => screen.ChildrenOfType<QueuePanel>().Single().Origin == Anchor.TopLeft);
+            AddAssert("queue panel fully relative", () => screen.ChildrenOfType<QueuePanel>().Single().RelativeSizeAxes == Axes.Both);
+            AddAssert("queue panel width == 1", () => screen.ChildrenOfType<QueuePanel>().Single().Width == 1f);
+            AddAssert("queue panel height == 1", () => screen.ChildrenOfType<QueuePanel>().Single().Height == 1f);
         }
 
         // Never exercised (queue stays empty and the mirror returns no candidates, so
