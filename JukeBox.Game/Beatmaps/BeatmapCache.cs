@@ -127,7 +127,6 @@ public class BeatmapCache
         if (preferred != null && preferredInfo != null)
         {
             string baseDir = Path.GetDirectoryName(preferred) ?? dir;
-            set.Widescreen = preferredInfo.Widescreen;
 
             if (preferredInfo.AudioFilename != null)
             {

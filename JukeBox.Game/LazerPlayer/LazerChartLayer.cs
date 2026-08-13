@@ -288,28 +288,6 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
     }
 
     /// <summary>
-    /// The beatmap folder as a legacy skin: beatmap-provided skin textures, custom hitsound
-    /// samples, and the .osu's own [Colours] section as skin configuration — the standalone
-    /// equivalent of lazer's realm-backed <see cref="LegacyBeatmapSkin"/>.
-    /// </summary>
-    private class BeatmapFolderSkin : LegacySkin
-    {
-        public BeatmapFolderSkin(string osuFile, IStorageResourceProvider resources, GameHost host)
-            : base(
-                new SkinInfo { Name = Path.GetFileName(osuFile) },
-                resources,
-                new StorageBackedResourceStore(new NativeStorage(Path.GetDirectoryName(osuFile)!, host)),
-                // LegacySkin's configuration parser accepts a .osu file (same trick as
-                // LegacyBeatmapSkin) — combo colours et al come from the beatmap itself.
-                Path.GetFileName(osuFile))
-        {
-            // Known deviation from LegacyBeatmapSkin: its AllowDefaultComboColoursFallback=false
-            // is internal to osu.Game, so a beatmap with no [Colours] section uses the classic
-            // default combo colours here instead of the active skin's own palette.
-        }
-    }
-
-    /// <summary>
     /// A standalone stand-in for lazer's <c>RulesetSkinProvidingContainer</c>: every skin source
     /// wrapped in the ruleset's own skin transformer (legacy/argon per-ruleset adaptations), plus
     /// the ruleset's bundled resources as the final source — minus the realm-backed SkinManager
