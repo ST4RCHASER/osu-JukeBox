@@ -123,6 +123,31 @@ namespace JukeBox.Game.Tests.Visual
                 screen.PlayerBox.ScreenSpaceDrawQuad.BottomLeft.Y
                 <= screen.ChildrenOfType<NowPlayingBar>().Single().ScreenSpaceDrawQuad.TopLeft.Y);
 
+            // Regression coverage for the fit-scale fix: with the side columns open, the boxed
+            // player is normally much narrower than the storyboard's 854x480 design canvas — before
+            // the fix the visuals stack was stretched to the box's raw size and its (wider) content
+            // overflowed the box horizontally, only saved from view by the mask. Now the whole
+            // visuals stack scales down uniformly to CONTAIN within the box, so its own
+            // (unmasked) ScreenSpaceDrawQuad must itself already fit inside the box and keep the
+            // design aspect ratio — never cropped, never distorted.
+            AddAssert("visuals stack fits entirely within the box (no crop)", () =>
+            {
+                var box = screen.PlayerBox.ScreenSpaceDrawQuad;
+                var visuals = screen.VisualsStack.ScreenSpaceDrawQuad;
+
+                return visuals.TopLeft.X >= box.TopLeft.X - 0.5f && visuals.TopRight.X <= box.TopRight.X + 0.5f
+                       && visuals.TopLeft.Y >= box.TopLeft.Y - 0.5f && visuals.BottomLeft.Y <= box.BottomLeft.Y + 0.5f;
+            });
+            AddAssert("visuals stack keeps the design aspect ratio (letterboxed, not stretched)", () =>
+            {
+                var visuals = screen.VisualsStack.ScreenSpaceDrawQuad;
+                float width = visuals.TopRight.X - visuals.TopLeft.X;
+                float height = visuals.BottomLeft.Y - visuals.TopLeft.Y;
+                const float design_aspect = 854f / 480f;
+
+                return Math.Abs(width / height - design_aspect) < 0.01f;
+            });
+
             AddStep("enter focus mode", () => InputManager.Key(Key.Tab));
             AddUntilStep("box padding animated away to full-bleed", () =>
                 screen.VisualsHostPadding.Left == 0 && screen.VisualsHostPadding.Right == 0
@@ -193,10 +218,10 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("search box was not seeded", () => screen.ChildrenOfType<BeatmapListingOverlay>().Single().SearchBox.Text == string.Empty);
         }
 
-        // Regression coverage for the gear button: it no longer pops a floating SettingsOverlay —
-        // it's a shortcut straight to the right column's Settings tab, whose content is now inline.
+        // Regression coverage for the (now-removed) corner gear: Settings is reachable purely by
+        // clicking its own tab header in the right column — no corner shortcut needed any more.
         [Test]
-        public void GearButtonSwitchesRightPanelToSettingsTab()
+        public void SettingsTabButtonSwitchesRightPanelToSettingsTab()
         {
             QueuePanel queuePanel = null!;
             SettingsOverlay settingsBody = null!;
@@ -208,8 +233,7 @@ namespace JukeBox.Game.Tests.Visual
 
             AddAssert("queue tab active initially", () => queuePanel.Alpha == 1 && settingsBody.Alpha == 0);
 
-            AddStep("click the corner gear button",
-                () => screen.ChildrenOfType<IconButton>().Single(b => b.Icon.Equals(FontAwesome.Solid.Cog)).TriggerClick());
+            AddStep("click the Settings tab button", () => clickTabButton("Settings"));
 
             // The tab switch crossfades (see MainScreen.showTabBody) rather than cutting
             // instantly, so this needs to poll rather than assert on the very next frame.
@@ -227,7 +251,7 @@ namespace JukeBox.Game.Tests.Visual
             {
                 queuePanel = screen.ChildrenOfType<QueuePanel>().Single();
                 settingsBody = screen.ChildrenOfType<SettingsOverlay>().Single();
-                screen.ChildrenOfType<IconButton>().Single(b => b.Icon.Equals(FontAwesome.Solid.Cog)).TriggerClick();
+                clickTabButton("Settings");
             });
             AddUntilStep("settings tab active", () => settingsBody.Alpha == 1);
 
@@ -241,31 +265,33 @@ namespace JukeBox.Game.Tests.Visual
             AddUntilStep("queue tab active again", () => queuePanel.Alpha == 1 && settingsBody.Alpha == 0);
         }
 
-        // Regression coverage for the map-ID button: unaffected by the right column's tab state,
-        // and (being a small independent modal) still reachable even while focus mode has hidden
-        // both columns.
+        // Regression coverage for the map-ID button: now docked inline at the right edge of the
+        // search box (left column) rather than a standalone corner button — it opens the same
+        // shared MapIdOverlay via BeatmapListingOverlay.MapIdRequested.
         [Test]
-        public void HashtagButtonTogglesMapIdOverlayRegardlessOfFocusMode()
+        public void HashtagButtonTogglesMapIdOverlay()
         {
             MapIdOverlay overlay = null!;
             AddStep("grab map-id overlay", () => overlay = screen.ChildrenOfType<MapIdOverlay>().Single());
 
             AddAssert("starts hidden", () => overlay.State.Value == Visibility.Hidden);
 
-            AddStep("click the corner hashtag button",
+            AddStep("click the hashtag button in the search box",
                 () => screen.ChildrenOfType<IconButton>().Single(b => b.Icon.Equals(FontAwesome.Solid.Hashtag)).TriggerClick());
             AddAssert("overlay visible", () => overlay.State.Value == Visibility.Visible);
 
-            AddStep("click the hashtag button again", () => screen.ChildrenOfType<IconButton>().Single(b => b.Icon.Equals(FontAwesome.Solid.Hashtag)).TriggerClick());
-            AddAssert("overlay hidden again", () => overlay.State.Value == Visibility.Hidden);
-
-            AddStep("enter focus mode", () => InputManager.Key(Key.Tab));
-            AddUntilStep("columns hidden", () => screen.LeftColumn.Alpha == 0);
-
-            AddStep("click the corner hashtag button in focus mode",
+            AddStep("click the hashtag button again",
                 () => screen.ChildrenOfType<IconButton>().Single(b => b.Icon.Equals(FontAwesome.Solid.Hashtag)).TriggerClick());
-            AddAssert("overlay visible in focus mode too", () => overlay.State.Value == Visibility.Visible);
+            AddAssert("overlay hidden again", () => overlay.State.Value == Visibility.Hidden);
         }
+
+        // RightPanelTabButton is a private nested type (MainScreen) — located by type name the
+        // same way TestSceneBeatmapListing locates FiltersToggleButton, then disambiguated by its
+        // own label text.
+        private void clickTabButton(string label)
+            => screen.ChildrenOfType<ClickableContainer>()
+                     .First(c => c.GetType().Name == "RightPanelTabButton" && c.ChildrenOfType<SpriteText>().Any(t => t.Text == label))
+                     .TriggerClick();
 
         // Regression coverage for the queue drawer's old floating-drawer geometry (off-screen X,
         // Y-only relative sizing) — MainScreen must override it to fully-relative fill-the-tab-body
