@@ -123,6 +123,18 @@ namespace JukeBox.Game.Tests.Visual
                 screen.PlayerBox.ScreenSpaceDrawQuad.BottomLeft.Y
                 <= screen.ChildrenOfType<NowPlayingBar>().Single().ScreenSpaceDrawQuad.TopLeft.Y);
 
+            // Stronger than the check above: the bar must be TILED below the box (its own strip,
+            // with a visible gutter), not merely touching/abutting it — the box's own padding is
+            // what carves out that strip (visualsHost.Padding.Bottom == bottom_bar_height +
+            // Theme.SectionSpacing), so this pins that gutter rather than allowing a zero-gap
+            // regression to silently pass the "<=" check above.
+            AddAssert("box bottom edge sits a full gutter above the bar's top edge, not just touching it", () =>
+            {
+                float boxBottom = screen.PlayerBox.ScreenSpaceDrawQuad.BottomLeft.Y;
+                float barTop = screen.ChildrenOfType<NowPlayingBar>().Single().ScreenSpaceDrawQuad.TopLeft.Y;
+                return barTop - boxBottom >= Theme.SectionSpacing - 0.5f;
+            });
+
             // Regression coverage for the fit-scale fix: with the side columns open, the boxed
             // player is normally much narrower than the storyboard's 854x480 design canvas — before
             // the fix the visuals stack was stretched to the box's raw size and its (wider) content
