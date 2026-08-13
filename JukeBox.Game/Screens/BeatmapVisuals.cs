@@ -42,9 +42,13 @@ public partial class BeatmapVisuals : CompositeDrawable
 
     private Box dimScrim = null!;
     private Container chartContainer = null!;
-    private ChartLayer? chartLayer;
+    private Drawable? chartLayer;
     private HitSoundPlayer? hitSoundPlayer;
     private ChartBeatmap? chartBeatmap;
+
+    // Game mode of the parsed difficulty (0 std / 1 taiko / 2 catch / 3 mania) — selects which
+    // renderer updateChartLayer builds. Only meaningful while chartBeatmap != null.
+    private int chartMode;
 
     // Config-bound (when a config manager is present — test scenes without one keep the
     // defaults). Fields, not locals: config bindables use weak references back to the master.
@@ -141,7 +145,10 @@ public partial class BeatmapVisuals : CompositeDrawable
     internal bool HasHitSoundPlayer => hitSoundPlayer != null;
 
     /// <summary>Test-only: number of hit-object drawables the chart layer compiled (0 = none/absent).</summary>
-    internal int ChartObjectCount => chartLayer?.TotalObjectCount ?? 0;
+    internal int ChartObjectCount => (chartLayer as IChartRenderer)?.TotalObjectCount ?? 0;
+
+    /// <summary>Test-only: the current chart renderer drawable (mode-specific type), if any.</summary>
+    internal Drawable? ChartRenderer => chartLayer;
 
     /// <summary>
     /// Why the chart (and hitsounds) are unavailable for this difficulty, or null when a chart
@@ -315,12 +322,13 @@ public partial class BeatmapVisuals : CompositeDrawable
             {
                 int mode = OsuFileScanner.Scan(osuFile).Mode;
 
-                if (mode != 0)
+                if (mode is < 0 or > 3)
                 {
-                    markChartUnavailable($"'{Path.GetFileName(osuFile)}' is game mode {mode} — only osu!std (mode 0) difficulties are chart-renderable");
+                    markChartUnavailable($"'{Path.GetFileName(osuFile)}' is unknown game mode {mode} — no chart renderer for it");
                 }
                 else
                 {
+                    chartMode = mode;
                     chartBeatmap = BeatmapParser.Parse(osuFile);
 
                     if (chartBeatmap.HitObjects.Count == 0)
@@ -374,7 +382,15 @@ public partial class BeatmapVisuals : CompositeDrawable
         if (renderChart.Value && chartBeatmap != null)
         {
             if (chartLayer == null)
-                chartContainer.Add(chartLayer = new ChartLayer(chartBeatmap));
+            {
+                chartContainer.Add(chartLayer = chartMode switch
+                {
+                    1 => new TaikoChartLayer(chartBeatmap),
+                    2 => new CatchChartLayer(chartBeatmap),
+                    3 => new ManiaChartLayer(chartBeatmap),
+                    _ => new ChartLayer(chartBeatmap),
+                });
+            }
         }
         else if (chartLayer != null)
         {

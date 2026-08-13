@@ -152,10 +152,11 @@ public partial class DifficultySwitcher : CompositeDrawable
         {
             background.FadeColour(selected ? Theme.Accent : Theme.ElevatedSurface, Theme.HoverFadeDuration);
 
-            // Non-std modes are greyed: they're still playable (audio/storyboard), just chartless.
+            // Every known mode (std/taiko/catch/mania) now has a native chart renderer; only
+            // unknown future modes are greyed (still playable — audio/storyboard — just chartless).
             label.Colour = selected
                 ? Theme.Background
-                : Difficulty.Mode == 0 ? Theme.TextPrimary : Theme.TextTertiary;
+                : Difficulty.Mode is >= 0 and <= 3 ? Theme.TextPrimary : Theme.TextTertiary;
         }
 
         protected override bool OnHover(HoverEvent e)
