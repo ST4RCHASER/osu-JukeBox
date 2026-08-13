@@ -87,6 +87,14 @@ namespace JukeBox.Game.Tests.Visual
 
             AddUntilStep("layer loaded", () => layer.IsLoaded);
             AddAssert("hold compiled", () => layer.TotalObjectCount == 1);
+
+            // The cap is the point: a 10^8ms hold at 700ms-per-370px scroll would otherwise build
+            // a ~52,857,000px box. Body height must clamp to 2000 + the 14px head cap.
+            AddAssert("hold body height clamped to 2014px", () =>
+            {
+                var hold = layer.ChildrenOfType<ManiaChartLayer.DrawableManiaHold>().Single();
+                return Math.Abs(hold.Height - 2014) < 0.5f;
+            });
         }
 
         // ---- Taiko -----------------------------------------------------------------------------

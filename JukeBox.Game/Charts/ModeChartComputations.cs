@@ -55,25 +55,43 @@ public static class ModeChartComputations
     /// <summary>
     /// Catcher-plate keyframes for autoplay: arrive at each target's X exactly at its time,
     /// visiting targets in time order (duplicates at the same time collapse to the last).
-    /// Simple linear moves between keyframes — visually adequate for a display layer. Bounded by
-    /// <see cref="max_plate_keyframes"/>.
+    /// Simple linear moves between keyframes — visually adequate for a display layer. When the
+    /// target count exceeds <see cref="max_plate_keyframes"/>, the timeline is DOWNSAMPLED
+    /// (every Nth target, final target always kept) rather than truncated — dense catch
+    /// marathons legitimately exceed the cap, and a plate that freezes partway through the song
+    /// is far worse than one that tracks coarsely end-to-end.
     /// </summary>
     public static List<PlateKeyframe> PlateKeyframes(IEnumerable<CatchDropSpec> targets)
     {
-        var result = new List<PlateKeyframe>();
+        var all = new List<PlateKeyframe>();
 
         foreach (var target in targets.OrderBy(t => t.Time))
         {
-            if (result.Count > 0 && Math.Abs(result[^1].Time - target.Time) < 1e-9)
+            if (all.Count > 0 && Math.Abs(all[^1].Time - target.Time) < 1e-9)
             {
-                result[^1] = new PlateKeyframe(target.Time, target.X);
+                all[^1] = new PlateKeyframe(target.Time, Math.Clamp(target.X, 0, 512));
                 continue;
             }
 
-            if (result.Count >= max_plate_keyframes)
-                break;
+            all.Add(new PlateKeyframe(target.Time, Math.Clamp(target.X, 0, 512)));
+        }
 
-            result.Add(new PlateKeyframe(target.Time, Math.Clamp(target.X, 0, 512)));
+        if (all.Count <= max_plate_keyframes)
+            return all;
+
+        int stride = (int)Math.Ceiling((double)all.Count / max_plate_keyframes);
+        var result = new List<PlateKeyframe>();
+
+        for (int i = 0; i < all.Count; i += stride)
+            result.Add(all[i]);
+
+        // The plate must reach the song's final catch no matter how the stride landed.
+        if (Math.Abs(result[^1].Time - all[^1].Time) > 1e-9)
+        {
+            if (result.Count >= max_plate_keyframes)
+                result[^1] = all[^1];
+            else
+                result.Add(all[^1]);
         }
 
         return result;

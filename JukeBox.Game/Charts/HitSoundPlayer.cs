@@ -76,9 +76,11 @@ public partial class HitSoundPlayer : Component
                     break;
 
                 case HitObjectKind.Hold:
-                    // Mania hold: press and release.
+                    // Mania hold: press and release — collapsed to one event for degenerate
+                    // zero-length holds so the same instant doesn't double-fire.
                     addEvent(beatmap, obj.Time, obj.HitSound);
-                    addEvent(beatmap, obj.EndTime, obj.HitSound);
+                    if (obj.EndTime > obj.Time)
+                        addEvent(beatmap, obj.EndTime, obj.HitSound);
                     break;
             }
         }
