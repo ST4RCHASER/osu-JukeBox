@@ -6,6 +6,13 @@ namespace JukeBox.Game.Configuration;
 
 public enum JukeBoxSetting
 {
+    /// <summary>
+    /// Deprecated: superseded by the framework's master volume
+    /// (<see cref="osu.Framework.Configuration.FrameworkSetting.VolumeUniversal"/>), which every
+    /// audio component (tracks, storyboard samples, chart hitsounds) already multiplies in.
+    /// Kept only so old ini values still parse; its value is copied into the framework setting
+    /// once, guarded by <see cref="VolumeMigrated"/>. See JukeBoxGameBase.load.
+    /// </summary>
     Volume,
     NoVideoDownloads,
     UiLayout,
@@ -15,6 +22,29 @@ public enum JukeBoxSetting
     RenderChart,
     PlayHitSounds,
     BackgroundDim,
+    /// <summary>One-shot guard for the <see cref="Volume"/> → VolumeUniversal migration.</summary>
+    VolumeMigrated,
+    Skin,
+    BackgroundBlur,
+    ShowStoryboardVideo,
+    UiScale,
+    /// <summary>Global audio offset in ms, added to the per-beatmap offset (BeatmapOffsetStore).</summary>
+    GlobalAudioOffset,
+}
+
+/// <summary>
+/// The bundled lazer skin driving the gameplay chart renderer. All four concrete entries are the
+/// skins constructible without a realm-backed SkinManager in ppy.osu.Game 2026.730.0 (each has an
+/// IStorageResourceProvider-only constructor); there is no bundled "retro" skin in that package.
+/// <see cref="Random"/> re-rolls one of the four concrete skins on every song change.
+/// </summary>
+public enum JukeBoxSkin
+{
+    Argon,
+    ArgonPro,
+    Triangles,
+    Classic,
+    Random,
 }
 
 /// <summary>
@@ -55,5 +85,11 @@ public class JukeBoxConfigManager : IniConfigManager<JukeBoxSetting>
         SetDefault(JukeBoxSetting.RenderChart, false);
         SetDefault(JukeBoxSetting.PlayHitSounds, false);
         SetDefault(JukeBoxSetting.BackgroundDim, 0.3, 0.0, 1.0);
+        SetDefault(JukeBoxSetting.VolumeMigrated, false);
+        SetDefault(JukeBoxSetting.Skin, JukeBoxSkin.Argon);
+        SetDefault(JukeBoxSetting.BackgroundBlur, 0.0, 0.0, 1.0);
+        SetDefault(JukeBoxSetting.ShowStoryboardVideo, true);
+        SetDefault(JukeBoxSetting.UiScale, 1.0, 0.8, 1.6);
+        SetDefault(JukeBoxSetting.GlobalAudioOffset, 0.0, -250.0, 250.0);
     }
 }

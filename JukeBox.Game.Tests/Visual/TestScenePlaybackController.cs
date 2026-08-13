@@ -86,6 +86,22 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("create controller", () => Child = controller = new PlaybackController());
         }
 
+        // Playback speed reaches the audible track as a Tempo adjustment (speed without pitch);
+        // the shared PlaybackClock follows the tempo-adjusted track, so no separate visual-rate
+        // assertion is needed — the clock IS the track's time.
+        [Test]
+        public void PlaybackRateAppliesTempoToTrack()
+        {
+            AddStep("play", () => _ = controller.PlayAsync(fixtureSet));
+            AddUntilStep("playing", () => controller.IsPlaying);
+
+            AddStep("set rate 1.5x", () => controller.PlaybackRate.Value = 1.5);
+            AddAssert("track aggregate tempo is 1.5", () => System.Math.Abs(controller.CurrentTrack!.AggregateTempo.Value - 1.5) < 0.001);
+
+            AddStep("restore rate 1x", () => controller.PlaybackRate.Value = 1);
+            AddAssert("track aggregate tempo back to 1", () => System.Math.Abs(controller.CurrentTrack!.AggregateTempo.Value - 1) < 0.001);
+        }
+
         [Test]
         public void PlayThenPauseStopsClock()
         {

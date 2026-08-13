@@ -18,6 +18,25 @@ namespace JukeBox.Game.Tests.Configuration
         }
 
         [Test]
+        public void LazerSettingsPanelDefaults()
+        {
+            var config = new JukeBoxConfigManager(new TemporaryNativeStorage(Path.Combine("jukebox-config-test", Path.GetRandomFileName())));
+
+            Assert.That(config.Get<JukeBoxSkin>(JukeBoxSetting.Skin), Is.EqualTo(JukeBoxSkin.Argon));
+            Assert.That(config.Get<double>(JukeBoxSetting.BackgroundBlur), Is.EqualTo(0.0));
+            Assert.That(config.Get<bool>(JukeBoxSetting.ShowStoryboardVideo), Is.True);
+            Assert.That(config.Get<double>(JukeBoxSetting.UiScale), Is.EqualTo(1.0));
+            Assert.That(config.Get<bool>(JukeBoxSetting.VolumeMigrated), Is.False);
+            Assert.That(config.Get<double>(JukeBoxSetting.GlobalAudioOffset), Is.EqualTo(0.0));
+
+            // UiScale range must clamp to the supported 0.8–1.6 window.
+            config.SetValue(JukeBoxSetting.UiScale, 5.0);
+            Assert.That(config.Get<double>(JukeBoxSetting.UiScale), Is.EqualTo(1.6));
+            config.SetValue(JukeBoxSetting.UiScale, 0.1);
+            Assert.That(config.Get<double>(JukeBoxSetting.UiScale), Is.EqualTo(0.8));
+        }
+
+        [Test]
         public void UiLayoutDefaultsToThreeColumn()
         {
             var config = new JukeBoxConfigManager(new TemporaryNativeStorage(Path.Combine("jukebox-config-test", Path.GetRandomFileName())));
