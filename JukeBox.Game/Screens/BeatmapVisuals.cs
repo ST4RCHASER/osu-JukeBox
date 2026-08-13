@@ -284,17 +284,10 @@ public partial class BeatmapVisuals : CompositeDrawable
         });
 
         // The chart (and hitsound player) get added/removed inside this fixed container as the
-        // settings toggle, so their z-position above the scrim is stable.
-        //
-        // 1024×768 (not the osu!-standard 512×384 playfield size) deliberately matches lazer's own
-        // Player-screen convention (DrawSizePreservingFillContainer.TargetSize — see
-        // OsuPlayfieldAdjustmentContainer's ScalingContainer.Update comment for the same constant).
-        // Every ruleset's PlayfieldAdjustmentContainer is calibrated against that canvas: standard/
-        // taiko/mania size themselves in RELATIVE fractions of it (scale-invariant — 512×384 would
-        // have looked identical for those), but catch's (CatchPlayfieldAdjustmentContainer) uses
-        // ABSOLUTE pixel constants (1024×768 base, +200 reserved below for the catcher) that only
-        // come out correctly when actually given a 1024×768 box — a 512×384 one made catch render
-        // at ~2x its correct size, pushing the catcher plate and fruits entirely outside the box.
+        // settings toggle, so their z-position above the scrim is stable. Sized properly (matching
+        // catch's absolute-pixel needs vs the other three rulesets' real-aspect needs) every
+        // Update() — see its own remarks there; the placeholder size here only matters for the
+        // very first layout pass before Update() has run once.
         audioAdjustments.Add(chartContainer = new Container
         {
             Anchor = Anchor.Centre,
@@ -448,21 +441,37 @@ public partial class BeatmapVisuals : CompositeDrawable
         // rule live so a faulted (black) video brings the background back.
         updateBackgroundVisibility();
 
-        // chartContainer's 1024×768 gameplay canvas and the storyboard's 480-tall canvas are both
-        // 4:3 at heart (1024/768 == 640/480), so dividing by 768 instead of the storyboard's own
-        // 480 carries the same "osu!-pixel maps 1:1 onto storyboard units" placement standard/
-        // taiko/mania already relied on (their rendered playfield footprint is unchanged by the
-        // 512×384 → 1024×768 container resize above — RelativeSizeAxes fractions are scale-
-        // invariant) while finally giving catch's absolute-pixel math the reference canvas size it
-        // expects.
+        // Catch alone needs chartContainer to actually BE a fixed 1024×768-ish canvas: its
+        // PlayfieldAdjustmentContainer positions the catcher/fruits with ABSOLUTE pixel constants
+        // calibrated against that exact reference size (see catch_reserved_height's remarks) —
+        // give it anything else and the catcher/fruits render at the wrong scale outright.
         //
-        // Catch alone divides by a slightly smaller design height (catch_reserved_height, see its
-        // own remarks) so its playfield renders a little bigger than std/taiko/mania's, pushing the
-        // catcher down toward the bottom of the scene the way it sits in real gameplay — the
-        // resulting top/bottom overflow is deliberately left unclipped here (see
-        // catch_reserved_height's remarks for why that's correct, not a bug).
-        float chartDesignHeight = chartMode == 2 ? catch_reserved_height : 768f;
-        chartContainer.Scale = new Vector2(DrawHeight / chartDesignHeight);
+        // Standard/taiko/mania are the opposite: their PlayfieldAdjustmentContainers size
+        // themselves in RELATIVE, scale-invariant fractions of whatever box they're actually
+        // given — a fixed 1024×768 (4:3) canvas here previously meant taiko's own
+        // TaikoPlayfieldAdjustmentContainer (which explicitly reads its parent's ASPECT to decide
+        // its own width — see its MINIMUM_ASPECT/MAXIMUM_ASPECT clamp, matching lazer's real
+        // Player-screen convention of a widescreen game window) was always told it lived in a 4:3
+        // box, regardless of what aspect the surrounding player UI actually has. Since our own
+        // player box is a 854×480 (16:9, see MainScreen.scene_width/height) design canvas, that
+        // mismatch let taiko compute a WIDTH matching a 4:3 box's shorter side, then centre that
+        // narrower box within the real (wider) one — visible as dead margins down both sides of
+        // the lane, ~12.5% each, with the note/drum/target confined to the narrower centre strip
+        // while non-taiko-playfield elements (the storyboard, which isn't a chartContainer child)
+        // correctly spanned the full width. Sizing chartContainer to the REAL available box
+        // (DrawSize, matching this Drawable's own actual aspect) instead of a fixed 1024×768 fixes
+        // this directly — std/mania's own on-screen footprint is unaffected (their sizing is
+        // scale-invariant, so this is a no-op for them beyond a harmless coordinate-scale change).
+        if (chartMode == 2)
+        {
+            chartContainer.Size = new Vector2(1024, 768);
+            chartContainer.Scale = new Vector2(DrawHeight / catch_reserved_height);
+        }
+        else
+        {
+            chartContainer.Size = DrawSize;
+            chartContainer.Scale = Vector2.One;
+        }
     }
 
     protected override void Dispose(bool isDisposing)
