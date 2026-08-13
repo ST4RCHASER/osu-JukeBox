@@ -698,6 +698,156 @@ namespace JukeBox.Game.Tests.Visual
             });
         }
 
+        // Regression coverage for reopen #4: a compositional mismatch distinct from every prior
+        // check in this investigation. Those all compared the NOTE's position against the HIT
+        // TARGET's — both live in TaikoPlayfield's own "Right area" and were always going to
+        // agree. This instead checks the LANE BACKGROUND (TaikoSkinComponents.
+        // PlayfieldBackgroundRight — despite the "Right" name, it's added as an unpadded,
+        // RelativeSizeAxes.Both TOP-LEVEL child of TaikoPlayfield, i.e. the single continuous
+        // backdrop spanning both the drum and the note areas, matching stable's one-piece dark
+        // lane) against the playfield's own bounds, the drum area ("Left overlay"), and the note
+        // — the exact three pieces reported detached from each other. A beatmap-provided legacy
+        // taiko skin (its own "taiko-bar-right"/"taikohitcircle" — the same "kirby-style" pattern
+        // as the prior beatmap-skin investigation) is used with a non-legacy user skin (Triangles)
+        // and the legacy Classic selection, Beatmap skins on; a bundled-Classic-only (no beatmap
+        // skin) case is included as a control.
+        [TestCase(JukeBoxSkin.Triangles, true)]
+        [TestCase(JukeBoxSkin.Classic, true)]
+        [TestCase(JukeBoxSkin.Classic, false)]
+        public void TaikoLaneBackgroundContainsDrumAndNoteBeforeHit(JukeBoxSkin skin, bool beatmapProvidesOwnSkin)
+        {
+            BeatmapVisuals visuals = null!;
+            var manual = new osu.Framework.Timing.ManualClock();
+            osu.Framework.Timing.FramedClock? clock = null;
+
+            AddStep("enable chart + select skin", () =>
+            {
+                config.SetValue(JukeBoxSetting.RenderChart, true);
+                config.SetValue(JukeBoxSetting.Skin, skin);
+            });
+
+            AddStep("create visuals", () =>
+            {
+                string mapDir = Path.Combine(tmp, $"lanebg-{skin}-{beatmapProvidesOwnSkin}");
+                Directory.CreateDirectory(mapDir);
+
+                if (beatmapProvidesOwnSkin)
+                {
+                    File.WriteAllBytes(Path.Combine(mapDir, "taiko-bar-right.png"), solidPng());
+                    File.WriteAllBytes(Path.Combine(mapDir, "taikohitcircle.png"), solidPng());
+                    File.WriteAllBytes(Path.Combine(mapDir, "taikohitcircleoverlay.png"), solidPng());
+                }
+
+                File.WriteAllBytes(Path.Combine(mapDir, "bg.png"), solidPng());
+
+                string osuFile = Path.Combine(mapDir, "taiko [x].osu");
+                File.WriteAllText(osuFile, """
+                    osu file format v14
+
+                    [General]
+                    AudioFilename: audio.mp3
+                    Mode: 1
+
+                    [Difficulty]
+                    HPDrainRate:5
+                    CircleSize:4
+                    OverallDifficulty:5
+                    ApproachRate:5
+                    SliderMultiplier:1.4
+                    SliderTickRate:1
+
+                    [TimingPoints]
+                    0,500,4,1,0,100,1,0
+
+                    [HitObjects]
+                    64,192,5000,1,0
+                    """);
+
+                var set = new CachedBeatmapSet
+                {
+                    SetId = 14,
+                    Directory = mapDir,
+                    BackgroundFile = Path.Combine(mapDir, "bg.png"),
+                    OsuFiles = { osuFile },
+                    PreferredOsuFile = osuFile,
+                };
+
+                clock = new osu.Framework.Timing.FramedClock(manual);
+                Add(visuals = new BeatmapVisuals(set, clock) { RelativeSizeAxes = Axes.Both });
+            });
+
+            AddUntilStep("chart loaded", () => visuals.IsLoaded && visuals.HasChartLayer && visuals.ChartRenderer?.DrawableRuleset != null);
+
+            AddStep("advance to just before the hit", () =>
+            {
+                manual.CurrentTime = 4990;
+                clock!.ProcessFrame();
+            });
+
+            AddUntilStep("note visible", () =>
+                visuals.ChartRenderer!.DrawableRuleset!.Playfield.AllHitObjects
+                       .OfType<osu.Game.Rulesets.Taiko.Objects.Drawables.DrawableHit>().Any());
+
+            AddAssert("lane background resolved (legacy or default) and spans ~full playfield width", () =>
+            {
+                var playfield = visuals.ChartRenderer!.DrawableRuleset!.Playfield;
+                var laneBg = laneBackground(playfield);
+                if (laneBg == null)
+                    return false;
+
+                var playfieldQuad = playfield.ScreenSpaceDrawQuad;
+                float playfieldWidth = playfieldQuad.TopRight.X - playfieldQuad.TopLeft.X;
+                var laneQuad = laneBg.ScreenSpaceDrawQuad;
+                float laneWidth = laneQuad.TopRight.X - laneQuad.TopLeft.X;
+
+                return laneWidth >= playfieldWidth * 0.95f;
+            });
+
+            AddAssert("lane background contains the drum area", () =>
+            {
+                var playfield = visuals.ChartRenderer!.DrawableRuleset!.Playfield;
+                var laneBg = laneBackground(playfield)!;
+                var drum = playfield.ChildrenOfType<osu.Framework.Graphics.Containers.Container>()
+                                     .Single(c => c.Name == "Left overlay");
+
+                return quadContains(laneBg.ScreenSpaceDrawQuad, drum.ScreenSpaceDrawQuad);
+            });
+
+            AddAssert("lane background contains the note", () =>
+            {
+                var playfield = visuals.ChartRenderer!.DrawableRuleset!.Playfield;
+                var laneBg = laneBackground(playfield)!;
+                var note = playfield.AllHitObjects.OfType<osu.Game.Rulesets.Taiko.Objects.Drawables.DrawableHit>().Single();
+
+                return quadContains(laneBg.ScreenSpaceDrawQuad, note.ScreenSpaceDrawQuad);
+            });
+
+            AddStep("remove visuals", () =>
+            {
+                config.SetValue(JukeBoxSetting.RenderChart, false);
+                config.SetValue(JukeBoxSetting.Skin, JukeBoxSkin.Argon);
+                Remove(visuals, true);
+            });
+        }
+
+        private static Drawable? laneBackground(osu.Game.Rulesets.UI.Playfield playfield)
+        {
+            Drawable? legacy = playfield.ChildrenOfType<osu.Game.Rulesets.Taiko.Skinning.Legacy.TaikoLegacyPlayfieldBackgroundRight>().FirstOrDefault();
+            if (legacy != null)
+                return legacy;
+
+            return playfield.ChildrenOfType<osu.Game.Rulesets.Taiko.UI.PlayfieldBackgroundRight>().FirstOrDefault();
+        }
+
+        // Whether `inner` lies entirely within `outer`'s screen-space bounding box (axis-aligned,
+        // small tolerance for floating-point noise).
+        private static bool quadContains(osu.Framework.Graphics.Primitives.Quad outer, osu.Framework.Graphics.Primitives.Quad inner)
+        {
+            const float tolerance = 1f;
+            return inner.TopLeft.X >= outer.TopLeft.X - tolerance && inner.TopRight.X <= outer.TopRight.X + tolerance
+                   && inner.TopLeft.Y >= outer.TopLeft.Y - tolerance && inner.BottomLeft.Y <= outer.BottomLeft.Y + tolerance;
+        }
+
         // 1x1 red pixel PNG — content is irrelevant, only that it decodes to a valid texture.
         private static byte[] solidPng() => Convert.FromBase64String(
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==");
