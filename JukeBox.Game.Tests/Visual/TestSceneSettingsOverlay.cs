@@ -48,9 +48,9 @@ namespace JukeBox.Game.Tests.Visual
         [SetUpSteps]
         public void SetUpSteps()
         {
-            AddStep("reset ShowFps/PreferredMirror and create overlay", () =>
+            AddStep("reset FpsDisplay/PreferredMirror and create overlay", () =>
             {
-                config.SetValue(JukeBoxSetting.ShowFps, false);
+                config.SetValue(JukeBoxSetting.FpsDisplay, FpsDisplayMode.Off);
                 config.SetValue(JukeBoxSetting.PreferredMirror, MirrorSource.Auto);
                 Child = overlay = new SettingsOverlay();
             });
@@ -73,36 +73,32 @@ namespace JukeBox.Game.Tests.Visual
         }
 
         [Test]
-        public void CheckingShowFpsBoxUpdatesConfigBindable()
+        public void ChangingFpsDisplayDropdownUpdatesConfigBindable()
         {
             AddStep("show overlay", () => overlay.Show());
-            AddAssert("config starts false", () => config.Get<bool>(JukeBoxSetting.ShowFps) == false);
-            AddAssert("checkbox starts unchecked", () => overlay.ShowFpsCheckbox.Current.Value == false);
+            AddAssert("config starts Off", () => config.Get<FpsDisplayMode>(JukeBoxSetting.FpsDisplay) == FpsDisplayMode.Off);
+            AddAssert("dropdown starts Off", () => overlay.FpsDisplayDropdown.Current.Value == FpsDisplayMode.Off);
 
-            AddStep("scroll checkbox into view", () => overlay.ScrollControlIntoView(overlay.ShowFpsCheckbox));
-            AddStep("click the checkbox", () =>
-            {
-                InputManager.MoveMouseTo(overlay.ShowFpsCheckbox);
-                InputManager.Click(MouseButton.Left);
-            });
+            AddStep("select Compact in dropdown", () => overlay.FpsDisplayDropdown.Current.Value = FpsDisplayMode.Compact);
+            AddAssert("config bindable flipped to Compact", () => config.Get<FpsDisplayMode>(JukeBoxSetting.FpsDisplay) == FpsDisplayMode.Compact);
 
-            AddAssert("checkbox now checked", () => overlay.ShowFpsCheckbox.Current.Value);
-            AddAssert("config bindable flipped to true", () => config.Get<bool>(JukeBoxSetting.ShowFps));
+            AddStep("select Details in dropdown", () => overlay.FpsDisplayDropdown.Current.Value = FpsDisplayMode.Details);
+            AddAssert("config bindable flipped to Details", () => config.Get<FpsDisplayMode>(JukeBoxSetting.FpsDisplay) == FpsDisplayMode.Details);
 
-            AddStep("click the checkbox again", () => InputManager.Click(MouseButton.Left));
-            AddAssert("config bindable flipped back to false", () => config.Get<bool>(JukeBoxSetting.ShowFps) == false);
+            AddStep("select Off in dropdown", () => overlay.FpsDisplayDropdown.Current.Value = FpsDisplayMode.Off);
+            AddAssert("config bindable flipped back to Off", () => config.Get<FpsDisplayMode>(JukeBoxSetting.FpsDisplay) == FpsDisplayMode.Off);
         }
 
         [Test]
-        public void ConfigStartingTrueChecksTheBoxOnCreation()
+        public void ConfigStartingWithNonOffFpsDisplaySelectsItOnCreation()
         {
-            AddStep("set ShowFps true then recreate overlay", () =>
+            AddStep("set FpsDisplay Details then recreate overlay", () =>
             {
-                config.SetValue(JukeBoxSetting.ShowFps, true);
+                config.SetValue(JukeBoxSetting.FpsDisplay, FpsDisplayMode.Details);
                 Child = overlay = new SettingsOverlay();
             });
 
-            AddAssert("checkbox starts checked", () => overlay.ShowFpsCheckbox.Current.Value);
+            AddAssert("dropdown starts Details", () => overlay.FpsDisplayDropdown.Current.Value == FpsDisplayMode.Details);
         }
 
         [Test]
@@ -145,22 +141,60 @@ namespace JukeBox.Game.Tests.Visual
         }
 
         // Docked content wires up to config exactly like the floating modal — same checkboxes,
-        // same bindables, just different chrome around them.
+        // same bindables, just different chrome around them. Drives a real mouse click (rather
+        // than a value-set) so the checkbox's own click handling is exercised for real too.
         [Test]
-        public void DockedInstanceChecksBoxUpdatesConfigBindable()
+        public void DockedInstanceChecksHardwareAccelerationBoxUpdatesConfigBindable()
         {
             SettingsOverlay dockedOverlay = null!;
-            AddStep("create docked overlay", () => Child = dockedOverlay = new SettingsOverlay(docked: true));
-            AddAssert("config starts false", () => config.Get<bool>(JukeBoxSetting.ShowFps) == false);
+            AddStep("reset HardwareVideoDecoder and create docked overlay", () =>
+            {
+                frameworkConfig.SetValue(osu.Framework.Configuration.FrameworkSetting.HardwareVideoDecoder, osu.Framework.Graphics.Video.HardwareVideoDecoder.None);
+                Child = dockedOverlay = new SettingsOverlay(docked: true);
+            });
+            AddAssert("config starts None", () => frameworkConfig.Get<osu.Framework.Graphics.Video.HardwareVideoDecoder>(osu.Framework.Configuration.FrameworkSetting.HardwareVideoDecoder) == osu.Framework.Graphics.Video.HardwareVideoDecoder.None);
+            AddAssert("checkbox starts unchecked", () => dockedOverlay.HardwareAccelerationCheckbox.Current.Value == false);
 
-            AddStep("scroll checkbox into view", () => dockedOverlay.ScrollControlIntoView(dockedOverlay.ShowFpsCheckbox));
+            AddStep("scroll checkbox into view", () => dockedOverlay.ScrollControlIntoView(dockedOverlay.HardwareAccelerationCheckbox));
             AddStep("click the checkbox", () =>
             {
-                InputManager.MoveMouseTo(dockedOverlay.ShowFpsCheckbox);
+                InputManager.MoveMouseTo(dockedOverlay.HardwareAccelerationCheckbox);
                 InputManager.Click(MouseButton.Left);
             });
 
-            AddAssert("config bindable flipped to true", () => config.Get<bool>(JukeBoxSetting.ShowFps));
+            AddAssert("checkbox now checked", () => dockedOverlay.HardwareAccelerationCheckbox.Current.Value);
+            AddAssert("config bindable flipped to Any", () => frameworkConfig.Get<osu.Framework.Graphics.Video.HardwareVideoDecoder>(osu.Framework.Configuration.FrameworkSetting.HardwareVideoDecoder) == osu.Framework.Graphics.Video.HardwareVideoDecoder.Any);
+
+            AddStep("click the checkbox again", () => InputManager.Click(MouseButton.Left));
+            AddAssert("config bindable flipped back to None", () => frameworkConfig.Get<osu.Framework.Graphics.Video.HardwareVideoDecoder>(osu.Framework.Configuration.FrameworkSetting.HardwareVideoDecoder) == osu.Framework.Graphics.Video.HardwareVideoDecoder.None);
+        }
+
+        [Test]
+        public void DockedInstanceChangingFpsDisplayUpdatesConfigBindable()
+        {
+            SettingsOverlay dockedOverlay = null!;
+            AddStep("create docked overlay", () => Child = dockedOverlay = new SettingsOverlay(docked: true));
+            AddAssert("config starts Off", () => config.Get<FpsDisplayMode>(JukeBoxSetting.FpsDisplay) == FpsDisplayMode.Off);
+
+            AddStep("select Details in dropdown", () => dockedOverlay.FpsDisplayDropdown.Current.Value = FpsDisplayMode.Details);
+            AddAssert("config bindable flipped to Details", () => config.Get<FpsDisplayMode>(JukeBoxSetting.FpsDisplay) == FpsDisplayMode.Details);
+        }
+
+        // Hardware acceleration is now a checkbox (checked = Any, unchecked = None) rather than a
+        // dropdown over the full HardwareVideoDecoder flags enum — a specific external value
+        // (e.g. just NVDEC, as a platform-detected default might set) must still read as checked.
+        [Test]
+        public void SpecificExternalDecoderValueReadsAsChecked()
+        {
+            AddStep("set HardwareVideoDecoder to NVDEC then recreate overlay", () =>
+            {
+                frameworkConfig.SetValue(osu.Framework.Configuration.FrameworkSetting.HardwareVideoDecoder, osu.Framework.Graphics.Video.HardwareVideoDecoder.NVDEC);
+                Child = overlay = new SettingsOverlay();
+            });
+
+            AddAssert("checkbox reads checked", () => overlay.HardwareAccelerationCheckbox.Current.Value);
+
+            AddStep("restore None", () => frameworkConfig.SetValue(osu.Framework.Configuration.FrameworkSetting.HardwareVideoDecoder, osu.Framework.Graphics.Video.HardwareVideoDecoder.None));
         }
 
         // The lazer dropdown's menu subtree (OsuDropdownMenu + its item drawables) only loads its
