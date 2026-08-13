@@ -315,12 +315,37 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
 
         double current = Clock.CurrentTime;
 
-        if (drawableRuleset != null && lastClockTime != null && Math.Abs(current - lastClockTime.Value) > seek_snap_threshold_ms)
+        if (drawableRuleset != null)
         {
-            if (SnapOnBigSeeks)
-                snapThroughSeek(current - lastClockTime.Value);
+            if (lastClockTime != null)
+            {
+                // Live seek: the driving clock jumped while we were attached.
+                if (Math.Abs(current - lastClockTime.Value) > seek_snap_threshold_ms)
+                {
+                    if (SnapOnBigSeeks)
+                        snapThroughSeek(current - lastClockTime.Value);
 
-            seekCatchupFrames = 0;
+                    seekCatchupFrames = 0;
+                }
+            }
+            else
+            {
+                // Construction catch-up: a FRESHLY ATTACHED layer (RenderChart toggled on
+                // mid-song, difficulty/skin-change rebuilds) starts its FrameStabilityContainer
+                // (and the autoplay replay walk) at the song start and would visibly fast-forward
+                // to the current position. Same crawl, same cure: if the driving clock is already
+                // meaningfully ahead of the freshly-born frame-stable clock on our first update,
+                // engage the snap for the initial catch-up too.
+                double gap = current - drawableRuleset.FrameStableClock.CurrentTime;
+
+                if (Math.Abs(gap) > seek_snap_threshold_ms)
+                {
+                    if (SnapOnBigSeeks)
+                        snapThroughSeek(gap);
+
+                    seekCatchupFrames = 0;
+                }
+            }
         }
 
         lastClockTime = current;
