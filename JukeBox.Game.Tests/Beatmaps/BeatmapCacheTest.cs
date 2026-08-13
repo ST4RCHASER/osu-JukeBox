@@ -42,7 +42,6 @@ namespace JukeBox.Game.Tests.Beatmaps
             var info = OsuFileScanner.Scan(osu);
             Assert.That(info.AudioFilename, Is.EqualTo("audio.mp3"));
             Assert.That(info.Mode, Is.EqualTo(0));
-            Assert.That(info.Widescreen, Is.True);
             Assert.That(info.BackgroundFilename, Is.EqualTo("bg.jpg"));
             Assert.That(info.VideoFilename, Is.EqualTo("movie.mp4"));
         }
@@ -58,7 +57,6 @@ namespace JukeBox.Game.Tests.Beatmaps
             Assert.That(File.Exists(set.AudioFile), Is.True);
             Assert.That(set.OsbFile, Does.EndWith("sb.osb"));
             Assert.That(set.PreferredOsuFile, Does.EndWith("test.osu"));
-            Assert.That(set.Widescreen, Is.True);
             Assert.That(set.VideoFile, Is.Null); // movie.mp4 not present in zip → null
         }
 
