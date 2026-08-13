@@ -155,6 +155,49 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("still masked in focus mode", () => screen.PlayerBox.Masking);
         }
 
+        // Regression coverage for a focus-mode transition asymmetry: entering focus mode used to
+        // snap the player box straight to full-bleed on the very same frame the columns started
+        // sliding away, while leaving focus animated the box's restore properly. Both directions
+        // must now tween the box's padding over the same orchestrated timeline as the panels.
+        [Test]
+        public void PlayerBoxExpandsAndRestoresSymmetricallyWithFocusMode()
+        {
+            float restoredLeft = 0;
+            AddStep("record the resting gutter", () => restoredLeft = screen.VisualsHostPadding.Left);
+            AddAssert("box has a gutter to start", () => restoredLeft > 0);
+
+            AddStep("enter focus mode", () => InputManager.Key(Key.Tab));
+            AddAssert("one frame in, box padding has not yet snapped to full-bleed", () =>
+                screen.VisualsHostPadding.Left > 0 || screen.VisualsHostPadding.Right > 0
+                || screen.VisualsHostPadding.Top > 0 || screen.VisualsHostPadding.Bottom > 0);
+            AddUntilStep("box padding eventually reaches full-bleed", () =>
+                screen.VisualsHostPadding.Left == 0 && screen.VisualsHostPadding.Right == 0
+                && screen.VisualsHostPadding.Top == 0 && screen.VisualsHostPadding.Bottom == 0);
+
+            AddStep("leave focus mode", () => InputManager.Key(Key.Tab));
+            AddAssert("one frame in, box padding has not yet snapped back to the resting gutter", () =>
+                screen.VisualsHostPadding.Left < restoredLeft);
+            AddUntilStep("box padding eventually restores its gutter", () =>
+                screen.VisualsHostPadding.Left == restoredLeft);
+        }
+
+        // Same regression, phrased against the actually-rendered DrawWidth (the pixels a user
+        // would see) rather than the target Padding value, in case the two ever diverge.
+        [Test]
+        public void PlayerBoxDrawWidthGrowsGraduallyOnEnterNotJustPaddingValue()
+        {
+            float startWidth = 0;
+            AddStep("record starting box width", () => startWidth = screen.PlayerBox.DrawWidth);
+
+            AddStep("enter focus mode", () => InputManager.Key(Key.Tab));
+            AddAssert("one frame in, box has not yet snapped to full container width", () =>
+                screen.PlayerBox.DrawWidth < screen.DrawWidth - 1);
+            AddAssert("one frame in, box has grown only partway (not still at its starting width either)", () =>
+                screen.PlayerBox.DrawWidth > startWidth);
+            AddUntilStep("box eventually reaches full-bleed width", () =>
+                screen.PlayerBox.DrawWidth >= screen.DrawWidth - 1);
+        }
+
         [Test]
         public void TypingFocusesAndSeedsTheDockedSearchBox()
         {
