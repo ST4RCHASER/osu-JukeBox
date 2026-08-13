@@ -16,6 +16,7 @@ using osu.Framework.Graphics.Textures;
 using osu.Framework.Graphics.UserInterface;
 using osu.Framework.Logging;
 using osuTK;
+using osuTK.Graphics;
 
 namespace JukeBox.Game.UI;
 
@@ -72,6 +73,7 @@ public partial class NowPlayingBar : CompositeDrawable
     private DifficultySwitcher difficultySwitcher = null!;
     private IconButton playPauseButton = null!;
     private SpriteText statusText = null!;
+    private FillFlowContainer songInfo = null!;
     private SpriteText titleText = null!;
     private Box titleUnderline = null!;
     private SpriteText artistText = null!;
@@ -151,36 +153,57 @@ public partial class NowPlayingBar : CompositeDrawable
                         Spacing = new Vector2(0, 2),
                         Children = new Drawable[]
                         {
-                            new Container
+                            // Title + artist share one wrapper so a song change can crossfade
+                            // both together (see onNowPlayingChanged) rather than each swapping
+                            // its text independently.
+                            songInfo = new FillFlowContainer
                             {
                                 AutoSizeAxes = Axes.Both,
+                                Direction = FillDirection.Vertical,
+                                Spacing = new Vector2(0, 2),
+                                // A song change fades this to 0 then straight back to 1 (see
+                                // onNowPlayingChanged) — without AlwaysPresent, osu!framework
+                                // throttles Update()/transform ticking for a not-present (Alpha 0)
+                                // drawable, stalling that FadeIn indefinitely instead of letting
+                                // it progress every frame.
+                                AlwaysPresent = true,
                                 Children = new Drawable[]
                                 {
-                                    titleText = new SpriteText
+                                    new Container
                                     {
-                                        Font = FontUsage.Default.With(size: Theme.RowTitleTextSize),
-                                        Colour = Theme.TextPrimary,
+                                        AutoSizeAxes = Axes.Both,
+                                        Children = new Drawable[]
+                                        {
+                                            titleText = new SpriteText
+                                            {
+                                                Font = FontUsage.Default.With(size: Theme.RowTitleTextSize),
+                                                Colour = Theme.TextPrimary,
+                                            },
+                                            titleUnderline = new Box
+                                            {
+                                                Anchor = Anchor.BottomLeft,
+                                                Origin = Anchor.BottomLeft,
+                                                RelativeSizeAxes = Axes.X,
+                                                Height = 2,
+                                                Y = 2,
+                                                Colour = Theme.Accent,
+                                            },
+                                        }
                                     },
-                                    titleUnderline = new Box
+                                    artistText = new SpriteText
                                     {
-                                        Anchor = Anchor.BottomLeft,
-                                        Origin = Anchor.BottomLeft,
-                                        RelativeSizeAxes = Axes.X,
-                                        Height = 2,
-                                        Y = 2,
-                                        Colour = Theme.Accent,
+                                        Font = FontUsage.Default.With(size: Theme.RowSecondaryTextSize),
+                                        Colour = Theme.TextSecondary,
                                     },
-                                }
-                            },
-                            artistText = new SpriteText
-                            {
-                                Font = FontUsage.Default.With(size: Theme.RowSecondaryTextSize),
-                                Colour = Theme.TextSecondary,
+                                },
                             },
                             statusText = new SpriteText
                             {
                                 Font = FontUsage.Default.With(size: Theme.CaptionTextSize),
                                 Colour = Theme.TextTertiary,
+                                // See songInfo's AlwaysPresent comment above — refreshStatus()
+                                // fades this to 0 then immediately back to 1.
+                                AlwaysPresent = true,
                             },
                             difficultySwitcher = new DifficultySwitcher(),
                         }
@@ -288,29 +311,45 @@ public partial class NowPlayingBar : CompositeDrawable
 
     private void refreshStatus()
     {
-        if (jukebox.LastError.Value != null)
+        string newText = jukebox.LastError.Value ?? jukebox.Status.Value ?? string.Empty;
+        Color4 newColour = jukebox.LastError.Value != null ? Theme.Error : Theme.TextTertiary;
+
+        if (newText == statusText.Text.ToString())
         {
-            statusText.Text = jukebox.LastError.Value;
-            statusText.Colour = Theme.Error;
+            statusText.Colour = newColour;
+            return;
         }
-        else
+
+        // A SpriteText can't crossfade its own glyphs, so the fade+swap+fade is done in two
+        // steps: fade out, swap the string once fully invisible, fade the new text back in.
+        statusText.FadeOut(Theme.DurationFast, Theme.EaseExit).OnComplete(_ =>
         {
-            statusText.Text = jukebox.Status.Value ?? string.Empty;
-            statusText.Colour = Theme.TextTertiary;
-        }
+            statusText.Text = newText;
+            statusText.Colour = newColour;
+            statusText.FadeIn(Theme.DurationFast, Theme.EaseEnter);
+        });
     }
 
     private void onNowPlayingChanged(ValueChangedEvent<BeatmapSetInfo?> change)
     {
-        titleText.Text = change.NewValue?.DisplayTitle ?? string.Empty;
-        artistText.Text = change.NewValue?.DisplayArtist ?? string.Empty;
+        string title = change.NewValue?.DisplayTitle ?? string.Empty;
+        string artist = change.NewValue?.DisplayArtist ?? string.Empty;
+
+        songInfo.FadeOut(Theme.DurationFast, Theme.EaseExit).OnComplete(_ =>
+        {
+            titleText.Text = title;
+            artistText.Text = artist;
+            songInfo.FadeIn(Theme.DurationFast, Theme.EaseEnter);
+        });
 
         int myGeneration = ++thumbnailGeneration;
 
         // The previous set's cover no longer matches what's playing (or nothing is playing) —
-        // drop it immediately rather than leave a stale thumbnail up while (or if) a new one loads.
-        coverSprite?.Expire();
+        // crossfade it out (rather than cutting it instantly) while the new one loads/fades in
+        // over it below; the placeholder box underneath stays put throughout either way.
+        var oldCover = coverSprite;
         coverSprite = null;
+        oldCover?.FadeOut(Theme.DurationNormal, Theme.EaseExit).Expire();
 
         if (change.NewValue == null || thumbnailStore == null)
             return;
@@ -342,13 +381,20 @@ public partial class NowPlayingBar : CompositeDrawable
             if (generation != thumbnailGeneration)
                 return;
 
-            // Drawn on top of (added after) the placeholder box from load(), so it simply covers it.
+            // Drawn on top of (added after) the placeholder box from load(), so it simply covers
+            // it; fading in rather than snapping is the other half of the crossfade started in
+            // onNowPlayingChanged (which faded the previous cover out).
             coverContainer.Add(coverSprite = new Sprite
             {
                 RelativeSizeAxes = Axes.Both,
                 FillMode = FillMode.Fill,
                 Texture = texture,
+                Alpha = 0,
+                // See songInfo's AlwaysPresent comment in load() — this starts at Alpha 0 and
+                // fades in immediately below.
+                AlwaysPresent = true,
             });
+            coverSprite.FadeIn(Theme.DurationNormal, Theme.EaseEnter);
         });
     }
 }
