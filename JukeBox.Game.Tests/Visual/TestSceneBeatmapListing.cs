@@ -252,6 +252,10 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("click the Filters toggle again",
                 () => overlay.ChildrenOfType<ClickableContainer>().First(c => c.GetType().Name == "FiltersToggleButton").TriggerClick());
             AddAssert("filters expanded again", () => overlay.FiltersExpanded);
+
+            // The section fades back in (see updateFiltersExpanded) rather than snapping — assert
+            // the animation itself actually reaches full opacity, not just the instant flag.
+            AddUntilStep("filters section fully visible again", () => overlay.FiltersBodyAlpha == 1);
         }
 
         // "grid -> 1-col in narrow width": the docked left column (~380px, minus panel padding)
