@@ -477,6 +477,111 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("remove visuals", () => Remove(visuals, true));
         }
 
+        // Regression coverage for taiko lane alignment: unlike catch's PlayfieldAdjustmentContainer
+        // (absolute-pixel math, needed the mode-aware 1024x768 hosting fix above),
+        // TaikoPlayfieldAdjustmentContainer sizes itself in RELATIVE, scale-invariant fractions of
+        // whatever box it's given, clamped to an aspect range of [5:4, 16:9]
+        // (TaikoPlayfieldAdjustmentContainer.MINIMUM_ASPECT/MAXIMUM_ASPECT) — chartContainer's
+        // fixed 1024x768 (4:3, aspect 1.333) sits comfortably inside that range, so no clamping
+        // (and therefore no distortion) applies. The hit target ("Elements behind hit objects")
+        // and every DrawableHit both live in the same RelativeSizeAxes.Both "Right area" row of
+        // TaikoPlayfield, so their vertical centres are expected to coincide exactly at all times
+        // up to and including the hit — this asserts that invariant under our real chartContainer
+        // hosting geometry, for both the default (Argon) skin and a legacy (Classic) skin, the
+        // two configurations a beatmap's own "Beatmap skins" toggle can produce.
+        [TestCase(JukeBoxSkin.Argon)]
+        [TestCase(JukeBoxSkin.Classic)]
+        public void TaikoNoteAlignsWithHitTargetBeforeHit(JukeBoxSkin skin)
+        {
+            BeatmapVisuals visuals = null!;
+            var manual = new osu.Framework.Timing.ManualClock();
+            osu.Framework.Timing.FramedClock? clock = null;
+
+            AddStep("enable chart + select skin", () =>
+            {
+                config.SetValue(JukeBoxSetting.RenderChart, true);
+                config.SetValue(JukeBoxSetting.Skin, skin);
+            });
+
+            AddStep("create visuals with a taiko difficulty", () =>
+            {
+                string osuFile = Path.Combine(tmp, $"taiko [{skin}].osu");
+                File.WriteAllText(osuFile, """
+                    osu file format v14
+
+                    [General]
+                    AudioFilename: audio.mp3
+                    Mode: 1
+
+                    [Difficulty]
+                    HPDrainRate:5
+                    CircleSize:4
+                    OverallDifficulty:5
+                    ApproachRate:5
+                    SliderMultiplier:1.4
+                    SliderTickRate:1
+
+                    [TimingPoints]
+                    0,500,4,1,0,100,1,0
+
+                    [HitObjects]
+                    64,192,5000,1,0
+                    """);
+
+                var set = new CachedBeatmapSet
+                {
+                    SetId = 11,
+                    Directory = tmp,
+                    BackgroundFile = fixtureSetA.BackgroundFile,
+                    OsuFiles = { osuFile },
+                    PreferredOsuFile = osuFile,
+                };
+
+                clock = new osu.Framework.Timing.FramedClock(manual);
+                Add(visuals = new BeatmapVisuals(set, clock) { RelativeSizeAxes = Axes.Both });
+            });
+
+            AddUntilStep("chart loaded", () => visuals.IsLoaded && visuals.HasChartLayer && visuals.ChartRenderer?.DrawableRuleset != null);
+            AddAssert("taiko ruleset chosen", () => visuals.ChartRenderer!.Ruleset?.GetType() == typeof(osu.Game.Rulesets.Taiko.TaikoRuleset));
+
+            // Sample well before the hit (still scrolling in) and right at the hit instant —
+            // deliberately BEFORE DrawableHit's post-judgement "gravity" fly-away transform
+            // (this.MoveToY(-200, ...) in DrawableHit.UpdateHitStateTransforms) has moved it, since
+            // that transform is an intentional lazer/stable visual flourish, not a layout bug.
+            foreach (double time in new[] { 4500d, 4990d, 5000d })
+            {
+                AddStep($"advance to {time}ms", () =>
+                {
+                    manual.CurrentTime = time;
+                    clock!.ProcessFrame();
+                });
+
+                AddUntilStep($"note visible @ {time}ms", () =>
+                    visuals.ChartRenderer!.DrawableRuleset!.Playfield.AllHitObjects
+                           .OfType<osu.Game.Rulesets.Taiko.Objects.Drawables.DrawableHit>().Any());
+
+                AddAssert($"note centre Y matches hit target centre Y @ {time}ms", () =>
+                {
+                    var playfield = visuals.ChartRenderer!.DrawableRuleset!.Playfield;
+                    var target = playfield.ChildrenOfType<osu.Framework.Graphics.Containers.Container>()
+                                           .Single(c => c.Name == "Elements behind hit objects");
+                    var note = playfield.AllHitObjects.OfType<osu.Game.Rulesets.Taiko.Objects.Drawables.DrawableHit>().Single();
+
+                    float targetCentre = (target.ScreenSpaceDrawQuad.TopLeft.Y + target.ScreenSpaceDrawQuad.BottomLeft.Y) / 2;
+                    float noteCentre = (note.ScreenSpaceDrawQuad.TopLeft.Y + note.ScreenSpaceDrawQuad.BottomLeft.Y) / 2;
+
+                    return Math.Abs(noteCentre - targetCentre) < 2f;
+                });
+            }
+
+            AddStep("remove visuals", () =>
+            {
+                config.SetValue(JukeBoxSetting.RenderChart, false);
+                config.SetValue(JukeBoxSetting.Skin, JukeBoxSkin.Argon);
+                Remove(visuals, true);
+            });
+        }
+
         // 1x1 red pixel PNG — content is irrelevant, only that it decodes to a valid texture.
         private static byte[] solidPng() => Convert.FromBase64String(
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==");
