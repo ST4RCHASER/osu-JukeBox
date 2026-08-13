@@ -54,11 +54,20 @@ namespace JukeBox.Game.Screens;
 /// The boxed player never crops the scene: <see cref="visualsStack"/> renders into a fixed
 /// <see cref="scene_width"/>×<see cref="scene_height"/> design canvas (<see cref="sceneContainer"/>)
 /// that is uniformly scaled to CONTAIN within <see cref="playerBox"/> (aspect-preserving, letterboxed
-/// on whichever axis has slack) whenever the three-column layout is active — recomputed every
-/// <see cref="Update"/> so it tracks the box through the focus-mode transition and window resizes.
-/// Focus mode deliberately keeps the old height-only scale (full-bleed; the box there is normally
-/// wider than the canvas so this already reads as contained in practice, and is left alone rather
-/// than switched to the same uniform-min formula).
+/// on whichever axis has slack) at all times, in both layouts — recomputed every frame (see
+/// <see cref="updateSceneScale"/>) from the box's own current <c>DrawWidth</c>/<c>DrawHeight</c> so
+/// it tracks continuously through
+/// the focus-mode transition and window resizes, never just the box's post-transition rest state.
+/// A single uniform-min formula for both layouts (rather than a mode-dependent branch) is what makes
+/// that tracking continuous: in settled focus mode the box is normally wider than the canvas anyway,
+/// so the min already resolves to the same height-driven scale a dedicated "focus" branch would have
+/// picked — but a boolean branch flips the instant <see cref="UiLayout"/> changes, before the box has
+/// moved at all, so during the transition it would use the box's still-mostly-unchanged height while
+/// ignoring its still-narrow, barely-animated width — scaling the content to nearly its final size on
+/// the very first frame while the box (and its mask) were still small, an overflow only hidden by
+/// <see cref="playerBox"/>'s masking, but visible the instant the mask caught up. The uniform-min
+/// formula has no such discontinuity: it already accounts for both axes every frame, so it can only
+/// ever scale the content up to what the box's *current* size actually permits.
 /// </para>
 /// </summary>
 public partial class MainScreen : Screen
@@ -293,6 +302,11 @@ public partial class MainScreen : Screen
         // The map-ID button now lives inline in the docked search box (see
         // BeatmapListingOverlay.MapIdRequested) rather than a corner button.
         listing.MapIdRequested += () => mapIdOverlay.ToggleVisibility();
+
+        // See updateSceneScale's own doc comment for why this is hung off playerBox's OnUpdate
+        // rather than this screen's Update() — it's what keeps the scale reading playerBox's
+        // current-frame (not previous-frame) size during the focus-mode transition.
+        playerBox.OnUpdate += _ => updateSceneScale();
     }
 
     protected override void LoadComplete()
@@ -315,32 +329,33 @@ public partial class MainScreen : Screen
         });
     }
 
-    protected override void Update()
-    {
-        base.Update();
-        updateSceneScale();
-    }
-
     /// <summary>
     /// Keeps <see cref="sceneContainer"/>'s scale matched to the current box size every frame — the
     /// box itself is continuously resizing during the focus-mode transition (padding/corner-radius
     /// animate in <see cref="applyLayout"/>), so a one-shot computation on layout change would lag
-    /// a frame behind. Three-column: uniform-min "contain" scale, so the whole design canvas always
-    /// stays inside the box (letterboxed on whichever axis has slack) — never cropped, never
-    /// distorted. Focus: height-only scale, deliberately left as the pre-existing behaviour (the
-    /// box there is normally wider than the canvas, so this already reads as contained in
-    /// practice — see the class summary).
+    /// a frame behind. Uniform-min "contain" scale in both layouts (see the class summary for why a
+    /// mode-dependent branch here previously caused the content to jump to near its final size on
+    /// the very first frame of entering focus mode), so the whole design canvas always stays inside
+    /// the box's *current* size (letterboxed on whichever axis has slack) — never cropped, never
+    /// distorted, whether settled or mid-transition.
+    ///
+    /// <para>
+    /// Driven off <see cref="playerBox"/>'s own <see cref="Drawable.OnUpdate"/> rather than this
+    /// screen's own <c>Update()</c>: <see cref="playerBox"/> is a descendant of this screen (via
+    /// <see cref="visualsHost"/>), and a parent's own <c>Update()</c> runs before its children's
+    /// transforms are applied for that frame — reading <c>playerBox.DrawWidth</c> from this
+    /// screen's <c>Update()</c> would therefore always be exactly one frame stale relative to
+    /// <see cref="visualsHost"/>'s animating <c>Padding</c>. By the time <see cref="playerBox"/>'s
+    /// own <c>OnUpdate</c> fires, its geometry for the current frame is already fully resolved, so
+    /// the scale computed here never lags behind what's actually on screen that frame.
+    /// </para>
     /// </summary>
     private void updateSceneScale()
     {
         if (playerBox.DrawWidth <= 0 || playerBox.DrawHeight <= 0)
             return;
 
-        bool focus = uiLayout != null && uiLayout.Value == UiLayout.Focus;
-
-        float scale = focus
-            ? playerBox.DrawHeight / scene_height
-            : Math.Min(playerBox.DrawWidth / scene_width, playerBox.DrawHeight / scene_height);
+        float scale = Math.Min(playerBox.DrawWidth / scene_width, playerBox.DrawHeight / scene_height);
 
         sceneContainer.Scale = new Vector2(scale);
     }
