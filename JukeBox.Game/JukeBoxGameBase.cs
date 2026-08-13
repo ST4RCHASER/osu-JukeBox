@@ -75,6 +75,21 @@ namespace JukeBox.Game
         protected override IReadOnlyDependencyContainer CreateChildDependencies(IReadOnlyDependencyContainer parent)
             => dependencies = new DependencyContainer(base.CreateChildDependencies(parent));
 
+        /// <summary>
+        /// See the cache site in load(): a beat-sync provider with nothing to sync to. The clock
+        /// must be non-null — BeatSyncedContainer.Update dereferences it unconditionally (lazer's
+        /// Beatmap-backed provider always has a track clock); a never-started stopwatch keeps
+        /// IsBeatSyncedWithTrack false, which is the documented idle-animation path.
+        /// </summary>
+        private class SilentBeatSyncProvider : osu.Game.Beatmaps.IBeatSyncProvider
+        {
+            private readonly osu.Framework.Timing.StopwatchClock stoppedClock = new osu.Framework.Timing.StopwatchClock();
+
+            public osu.Game.Beatmaps.ControlPoints.ControlPointInfo? ControlPoints => null;
+            public osu.Framework.Timing.IClock? Clock => stoppedClock;
+            public osu.Framework.Audio.Track.ChannelAmplitudes CurrentAmplitudes => osu.Framework.Audio.Track.ChannelAmplitudes.Empty;
+        }
+
         // Lazer-side dependencies backing the LazerChartLayer's DrawableRuleset host — owned (and
         // disposed) here because they're game-lifetime singletons, exactly like OsuGameBase owns
         // its equivalents. The realm database only ever stores lazer-side settings (ruleset
@@ -83,6 +98,7 @@ namespace JukeBox.Game
         private OsuConfigManager lazerConfig = null!;
         private LazerRulesetConfigCache lazerRulesetConfigs = null!;
         private SkinSelection skinSelection = null!;
+        private osu.Game.Skinning.SkinManager skinManager = null!;
 
         [BackgroundDependencyLoader]
         private void load(osu.Framework.Configuration.FrameworkConfigManager frameworkConfig)
@@ -147,6 +163,26 @@ namespace JukeBox.Game
             dependencies.Cache(new OsuColour());
             dependencies.CacheAs<osu.Game.IO.IStorageResourceProvider>(
                 new LazerResourceProvider(Host, Audio, Resources, lazerRealm));
+
+            // The realm-backed skin store, cached exactly as OsuGameBase caches it. Nothing in our
+            // own skin chain consults it (LazerSkinProvider never falls back to parent lookups) —
+            // it exists because scattered lazer gameplay pieces hard-resolve it for default-skin
+            // textures (e.g. catch's LegacyHitExplosion reads DefaultClassicSkin), which crashed
+            // the first catch map that drew a legacy hit explosion.
+            dependencies.Cache(skinManager = new osu.Game.Skinning.SkinManager(lazerStorage, lazerRealm, Host, Resources, Audio, Scheduler));
+            dependencies.CacheAs<osu.Game.Skinning.ISkinSource>(skinManager);
+
+            // Game-level beat-sync fallback: lazer's BeatSyncedContainer pieces (the Nub inside
+            // OsuCheckbox/RoundedSliderBar used by the settings panel, kiai-reactive skin pieces)
+            // hard-resolve IBeatSyncProvider. OsuGameBase provides its Beatmap-backed one; ours is
+            // silent (no control points → the containers simply never pulse). LazerChartLayer
+            // still overrides this within its own subtree via the interface's [Cached] attribute,
+            // so in-chart pieces keep real beat sync.
+            dependencies.CacheAs<osu.Game.Beatmaps.IBeatSyncProvider>(new SilentBeatSyncProvider());
+
+            // Session-lifetime statics OsuGameBase caches: lazer's hover/click sound components
+            // (HoverSampleDebounceComponent, used by every lazer settings control) resolve this.
+            dependencies.Cache(new SessionStatics());
 
             var config = new JukeBoxConfigManager(Host.Storage);
             dependencies.Cache(config);
