@@ -10,10 +10,8 @@ public class OsuFileInfo
 {
     public string? AudioFilename;
     public int Mode;
-    public bool Widescreen;
     public string? BackgroundFilename;
     public string? VideoFilename;
-    public double VideoOffsetMs;
 
     /// <summary>[Metadata] Version — the difficulty name (e.g. "Easy", "Insane").</summary>
     public string? Version;
@@ -21,7 +19,7 @@ public class OsuFileInfo
 
 public class OsuFileScanner
 {
-    // Reads [General] (AudioFilename, Mode, WidescreenStoryboard), [Metadata] (Version) and
+    // Reads [General] (AudioFilename, Mode), [Metadata] (Version) and
     // [Events] (background "0,0,\"bg.jpg\"" and video "Video,offset,\"v.mp4\"" / "1,offset,..." lines).
     public static OsuFileInfo Scan(string osuPath)
     {
@@ -61,9 +59,6 @@ public class OsuFileScanner
                         case "Mode":
                             int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out info.Mode);
                             break;
-                        case "WidescreenStoryboard":
-                            info.Widescreen = value == "1";
-                            break;
                     }
                     break;
 
@@ -88,7 +83,6 @@ public class OsuFileScanner
                     }
                     else if (type.Equals("Video", StringComparison.OrdinalIgnoreCase) || type == "1")
                     {
-                        double.TryParse(parts[1].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out info.VideoOffsetMs);
                         info.VideoFilename = stripQuotes(parts[2]);
                     }
                     break;
