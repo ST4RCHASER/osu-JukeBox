@@ -217,8 +217,11 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("header shows 2", () => panel.HeaderText == "Queue (2)");
 
             AddStep("remove first row via its ✕ button", () => panel.TriggerRemoveAt(0));
-            AddAssert("1 row left", () => panel.RowCount == 1);
             AddAssert("removed set is gone from the queue itself", () => queue.Items.All(i => i.Id != 1));
+
+            // The removed row fades + collapses out (QueueRow.AnimateOut) rather than vanishing
+            // instantly, so RowCount only drops once that animation finishes and the row expires.
+            AddUntilStep("1 row left", () => panel.RowCount == 1);
         }
 
         // Regression test for a production crash: MusicQueue.Items is a BindableList that
