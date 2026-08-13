@@ -475,7 +475,7 @@ public partial class SettingsOverlay : FocusedOverlayContainer
 
         // ---- ours ----
         skinDropdown.Current = config.GetBindable<JukeBoxSkin>(JukeBoxSetting.Skin);
-        fpsDisplayDropdown.Current = config.GetBindable<FpsDisplayMode>(JukeBoxSetting.FpsDisplay);
+        fpsDisplayDropdown.Current = config.GetBindable<FpsDisplayMode>(JukeBoxSetting.FpsDisplayMode);
         renderChartCheckbox.Current = config.GetBindable<bool>(JukeBoxSetting.RenderChart);
         playHitSoundsCheckbox.Current = config.GetBindable<bool>(JukeBoxSetting.PlayHitSounds);
         showStoryboardVideoCheckbox.Current = config.GetBindable<bool>(JukeBoxSetting.ShowStoryboardVideo);
