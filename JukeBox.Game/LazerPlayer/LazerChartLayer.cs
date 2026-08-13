@@ -88,6 +88,14 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
     /// </summary>
     internal int LastSeekCatchupFrames { get; private set; } = -1;
 
+    /// <summary>
+    /// Test hook: how many times the big-seek snap actually engaged (i.e. the internal
+    /// FrameStablePlayback hook was found via reflection AND toggled). Stays 0 when snapping is
+    /// disabled or the reflection hook is unavailable — lets tests assert the MECHANISM rather
+    /// than racy frame-count comparisons.
+    /// </summary>
+    internal int SeekSnapsEngaged { get; private set; }
+
     private int seekCatchupFrames = -1;
 
     /// <summary>The ruleset instance rendering this difficulty (test hook; assigned during load).</summary>
@@ -242,6 +250,7 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
         frame_stable_playback_property.SetValue(drawableRuleset, false);
         frameStableResetDelegate = ScheduleAfterChildren(() => frame_stable_playback_property.SetValue(drawableRuleset, true));
 
+        SeekSnapsEngaged++;
         osu.Framework.Logging.Logger.Log($"[LazerChartLayer] seek snap: {jump:+0;-0}ms clock jump, bypassing frame-stable catch-up for one frame");
     }
 
