@@ -41,9 +41,14 @@ public enum JukeBoxSetting
 public enum JukeBoxSkin
 {
     Argon,
+
+    [System.ComponentModel.Description("Argon Pro")]
     ArgonPro,
+
     Triangles,
     Classic,
+
+    [System.ComponentModel.Description("<Random Skin>")]
     Random,
 }
 

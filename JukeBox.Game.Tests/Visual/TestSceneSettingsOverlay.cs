@@ -159,6 +159,28 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("config bindable flipped to true", () => config.Get<bool>(JukeBoxSetting.ShowFps));
         }
 
+        // The lazer dropdown's menu subtree (OsuDropdownMenu + its item drawables) only loads its
+        // items when the menu opens — a DI gap there would crash the real app on first click while
+        // every value-set test stays green. Open one for real.
+        [Test]
+        public void SkinDropdownMenuOpensOnClick()
+        {
+            AddStep("show overlay", () => overlay.Show());
+            AddStep("scroll dropdown into view", () => overlay.ScrollControlIntoView(overlay.SkinDropdown));
+
+            AddStep("click dropdown header", () =>
+            {
+                InputManager.MoveMouseTo(overlay.SkinDropdown.ChildrenOfType<osu.Game.Graphics.UserInterface.OsuDropdown<JukeBoxSkin>.OsuDropdownHeader>().First());
+                InputManager.Click(MouseButton.Left);
+            });
+
+            AddUntilStep("menu open with all skin entries", () => overlay.SkinDropdown
+                .ChildrenOfType<osu.Framework.Graphics.UserInterface.Menu>().Any(m =>
+                    m.State == osu.Framework.Graphics.UserInterface.MenuState.Open && m.Items.Count == 5));
+
+            AddStep("close menu", () => InputManager.Key(Key.Escape));
+        }
+
         [Test]
         public void SkinChoicePersistsToConfig()
         {
