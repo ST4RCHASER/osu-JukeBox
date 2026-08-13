@@ -582,6 +582,122 @@ namespace JukeBox.Game.Tests.Visual
             });
         }
 
+        // Regression coverage for the reopened report: a beatmap shipping its OWN partial legacy
+        // taiko skin (provides "taikohitcircle"/"taikohitcircleoverlay" for notes — a common
+        // "kirby-style" skin authoring pattern — but NOT "taikobigcircle" for the hit target, so
+        // the target must fall back through the chain) combined with a NON-legacy user skin
+        // (Triangles) or the legacy Classic selection, Beatmap skins on — the exact path through
+        // BeatmapFolderSkin → BeatmapSkinGate → LazerSkinProvider the prior (no-beatmap-skin) test
+        // didn't exercise. Confirms both that the beatmap's own texture actually resolves (so the
+        // fallback chain is genuinely exercised, not accidentally skipped) and that the note stays
+        // aligned with the target.
+        [TestCase(JukeBoxSkin.Triangles)]
+        [TestCase(JukeBoxSkin.Classic)]
+        public void TaikoBeatmapSkinNoteAlignsWithHitTargetBeforeHit(JukeBoxSkin skin)
+        {
+            BeatmapVisuals visuals = null!;
+            var manual = new osu.Framework.Timing.ManualClock();
+            osu.Framework.Timing.FramedClock? clock = null;
+
+            AddStep("enable chart + select skin", () =>
+            {
+                config.SetValue(JukeBoxSetting.RenderChart, true);
+                config.SetValue(JukeBoxSetting.Skin, skin);
+            });
+
+            AddStep("create visuals with a taiko difficulty + beatmap-provided partial legacy skin", () =>
+            {
+                string mapDir = Path.Combine(tmp, $"beatmapskin-{skin}");
+                Directory.CreateDirectory(mapDir);
+
+                // Beatmap provides its OWN note textures but deliberately omits "taikobigcircle" —
+                // the hit target must fall back to the user/Classic chain.
+                File.WriteAllBytes(Path.Combine(mapDir, "taikohitcircle.png"), solidPng());
+                File.WriteAllBytes(Path.Combine(mapDir, "taikohitcircleoverlay.png"), solidPng());
+                File.WriteAllBytes(Path.Combine(mapDir, "bg.png"), solidPng());
+
+                string osuFile = Path.Combine(mapDir, "taiko [x].osu");
+                File.WriteAllText(osuFile, """
+                    osu file format v14
+
+                    [General]
+                    AudioFilename: audio.mp3
+                    Mode: 1
+
+                    [Difficulty]
+                    HPDrainRate:5
+                    CircleSize:4
+                    OverallDifficulty:5
+                    ApproachRate:5
+                    SliderMultiplier:1.4
+                    SliderTickRate:1
+
+                    [TimingPoints]
+                    0,500,4,1,0,100,1,0
+
+                    [HitObjects]
+                    64,192,5000,1,0
+                    """);
+
+                var set = new CachedBeatmapSet
+                {
+                    SetId = 12,
+                    Directory = mapDir,
+                    BackgroundFile = Path.Combine(mapDir, "bg.png"),
+                    OsuFiles = { osuFile },
+                    PreferredOsuFile = osuFile,
+                };
+
+                clock = new osu.Framework.Timing.FramedClock(manual);
+                Add(visuals = new BeatmapVisuals(set, clock) { RelativeSizeAxes = Axes.Both });
+            });
+
+            AddUntilStep("chart loaded", () => visuals.IsLoaded && visuals.HasChartLayer && visuals.ChartRenderer?.DrawableRuleset != null);
+
+            // Sample well before the hit and right at the hit instant — before DrawableHit's
+            // intentional post-judgement "gravity" fly-away transform (see
+            // TaikoNoteAlignsWithHitTargetBeforeHit's remarks) could move it.
+            foreach (double time in new[] { 4500d, 4990d, 5000d })
+            {
+                AddStep($"advance to {time}ms", () =>
+                {
+                    manual.CurrentTime = time;
+                    clock!.ProcessFrame();
+                });
+
+                AddUntilStep($"note visible @ {time}ms", () =>
+                    visuals.ChartRenderer!.DrawableRuleset!.Playfield.AllHitObjects
+                           .OfType<osu.Game.Rulesets.Taiko.Objects.Drawables.DrawableHit>().Any());
+
+                AddAssert($"note resolves via the beatmap's own legacy texture @ {time}ms", () =>
+                {
+                    var note = visuals.ChartRenderer!.DrawableRuleset!.Playfield.AllHitObjects
+                                       .OfType<osu.Game.Rulesets.Taiko.Objects.Drawables.DrawableHit>().Single();
+                    return note.ChildrenOfType<osu.Game.Rulesets.Taiko.Skinning.Legacy.LegacyCirclePiece>().Any();
+                });
+
+                AddAssert($"note centre Y matches hit target centre Y @ {time}ms", () =>
+                {
+                    var playfield = visuals.ChartRenderer!.DrawableRuleset!.Playfield;
+                    var target = playfield.ChildrenOfType<osu.Framework.Graphics.Containers.Container>()
+                                           .Single(c => c.Name == "Elements behind hit objects");
+                    var note = playfield.AllHitObjects.OfType<osu.Game.Rulesets.Taiko.Objects.Drawables.DrawableHit>().Single();
+
+                    float targetCentre = (target.ScreenSpaceDrawQuad.TopLeft.Y + target.ScreenSpaceDrawQuad.BottomLeft.Y) / 2;
+                    float noteCentre = (note.ScreenSpaceDrawQuad.TopLeft.Y + note.ScreenSpaceDrawQuad.BottomLeft.Y) / 2;
+
+                    return Math.Abs(noteCentre - targetCentre) < 2f;
+                });
+            }
+
+            AddStep("remove visuals", () =>
+            {
+                config.SetValue(JukeBoxSetting.RenderChart, false);
+                config.SetValue(JukeBoxSetting.Skin, JukeBoxSkin.Argon);
+                Remove(visuals, true);
+            });
+        }
+
         // 1x1 red pixel PNG — content is irrelevant, only that it decodes to a valid texture.
         private static byte[] solidPng() => Convert.FromBase64String(
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==");
