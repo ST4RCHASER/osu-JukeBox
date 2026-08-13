@@ -14,13 +14,19 @@ using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Rendering;
 using osu.Framework.Graphics.Shapes;
 using osu.Framework.Graphics.Sprites;
-using osu.Framework.Graphics.UserInterface;
 using osu.Framework.Graphics.Video;
 using osu.Framework.Extensions.ObjectExtensions;
 using osu.Framework.Input.Events;
 using osu.Framework.Localisation;
 using osu.Framework.Platform;
 using osu.Game.Configuration;
+using osu.Game.Graphics;
+using osu.Game.Graphics.Containers;
+using osu.Game.Graphics.Cursor;
+using osu.Game.Graphics.Sprites;
+using osu.Game.Graphics.UserInterface;
+using osu.Game.Overlays;
+using osu.Game.Overlays.Settings;
 using osu.Game.Rulesets;
 using osu.Game.Rulesets.Mania;
 using osu.Game.Rulesets.Mania.Configuration;
@@ -47,6 +53,13 @@ namespace JukeBox.Game.UI;
 /// load and never hidden again (tab switching toggles the tab body's own Alpha instead).</item>
 /// </list>
 ///
+/// Presented with osu!lazer's REAL settings components (<see cref="SettingsCheckbox"/>,
+/// <see cref="SettingsSlider{T}"/>, <see cref="SettingsDropdown{T}"/> inside
+/// <see cref="SettingsSection"/>/<see cref="SettingsSubsection"/>), which carry lazer's pill
+/// toggles, rounded tooltip-valued sliders, dropdown styling and the built-in hover
+/// revert-to-default arrow. Those components resolve an <see cref="OverlayColourProvider"/> —
+/// cached for this subtree with the same purple scheme lazer's own SettingsPanel caches.
+///
 /// Every control binds a REAL config bindable, from one of four config sources:
 /// <see cref="JukeBoxConfigManager"/> (ours), <see cref="FrameworkConfigManager"/> (host-cached,
 /// always present), the lazer-side <see cref="OsuConfigManager"/> and the per-ruleset config
@@ -63,6 +76,11 @@ public partial class SettingsOverlay : FocusedOverlayContainer
 
     /// <summary>See the class summary.</summary>
     private readonly bool docked;
+
+    // The exact DI lazer's SettingsPanel provides its subtree (same scheme): every lazer settings
+    // control below resolves this for the purple pill/slider/dropdown palette.
+    [Cached]
+    private readonly OverlayColourProvider colourProvider = new OverlayColourProvider(OverlayColourScheme.Purple);
 
     [Resolved]
     private JukeBoxConfigManager config { get; set; } = null!;
@@ -95,52 +113,52 @@ public partial class SettingsOverlay : FocusedOverlayContainer
     // card to pop, and its PopIn/PopOut are both guarded no-ops (see their own comments below).
     private Container? panelCard;
 
-    private BasicScrollContainer scroll = null!;
+    private OsuScrollContainer scroll = null!;
 
     // ---- our settings ----
-    private BasicDropdown<JukeBoxSkin> skinDropdown = null!;
-    private BasicCheckbox showFpsCheckbox = null!;
-    private BasicCheckbox renderChartCheckbox = null!;
-    private BasicCheckbox playHitSoundsCheckbox = null!;
-    private BasicCheckbox showStoryboardVideoCheckbox = null!;
-    private SliderRow<double> backgroundDimRow = null!;
-    private SliderRow<double> backgroundBlurRow = null!;
-    private SliderRow<double> uiScaleRow = null!;
-    private BasicDropdown<MirrorSource> mirrorDropdown = null!;
+    private SettingsEnumDropdown<JukeBoxSkin> skinDropdown = null!;
+    private SettingsCheckbox showFpsCheckbox = null!;
+    private SettingsCheckbox renderChartCheckbox = null!;
+    private SettingsCheckbox playHitSoundsCheckbox = null!;
+    private SettingsCheckbox showStoryboardVideoCheckbox = null!;
+    private SettingsSlider<double> backgroundDimRow = null!;
+    private SettingsSlider<double> backgroundBlurRow = null!;
+    private SettingsSlider<double> uiScaleRow = null!;
+    private SettingsEnumDropdown<MirrorSource> mirrorDropdown = null!;
 
     // ---- framework settings ----
-    private DeviceDropdown audioDeviceDropdown = null!;
-    private SliderRow<double> masterVolumeRow = null!;
-    private SliderRow<double> effectVolumeRow = null!;
-    private SliderRow<double> musicVolumeRow = null!;
-    private BasicDropdown<RendererType> rendererDropdown = null!;
-    private BasicDropdown<FrameSync> frameLimiterDropdown = null!;
-    private BasicDropdown<ExecutionMode> threadingDropdown = null!;
-    private BasicDropdown<HardwareVideoDecoder> hardwareVideoDropdown = null!;
-    private BasicDropdown<WindowMode>? screenModeDropdown;
-    private BasicDropdown<Display>? displayDropdown;
+    private DeviceSettingsDropdown audioDeviceDropdown = null!;
+    private SettingsSlider<double> masterVolumeRow = null!;
+    private SettingsSlider<double> effectVolumeRow = null!;
+    private SettingsSlider<double> musicVolumeRow = null!;
+    private SettingsEnumDropdown<RendererType> rendererDropdown = null!;
+    private SettingsEnumDropdown<FrameSync> frameLimiterDropdown = null!;
+    private SettingsEnumDropdown<ExecutionMode> threadingDropdown = null!;
+    private SettingsEnumDropdown<HardwareVideoDecoder> hardwareVideoDropdown = null!;
+    private SettingsEnumDropdown<WindowMode>? screenModeDropdown;
+    private DisplaySettingsDropdown? displayDropdown;
     private readonly Bindable<Display> currentDisplay = new Bindable<Display>();
 
     // ---- lazer (OsuConfigManager) settings; only built when lazerConfig is present ----
-    private BasicCheckbox hitLightingCheckbox = null!;
-    private BasicCheckbox beatmapSkinsCheckbox = null!;
-    private BasicCheckbox beatmapColoursCheckbox = null!;
-    private BasicCheckbox beatmapHitsoundsCheckbox = null!;
-    private SliderRow<float> comboNormalisationRow = null!;
-    private SliderRow<double> inactiveVolumeRow = null!;
-    private SliderRow<float> positionalHitsoundsRow = null!;
+    private SettingsCheckbox hitLightingCheckbox = null!;
+    private SettingsCheckbox beatmapSkinsCheckbox = null!;
+    private SettingsCheckbox beatmapColoursCheckbox = null!;
+    private SettingsCheckbox beatmapHitsoundsCheckbox = null!;
+    private SettingsSlider<float> comboNormalisationRow = null!;
+    private SettingsSlider<double> inactiveVolumeRow = null!;
+    private SettingsSlider<float> positionalHitsoundsRow = null!;
 
     // ---- playback (controller-bound; only built when a PlaybackController is present) ----
-    private SliderRow<double> playbackRateRow = null!;
-    private SliderRow<double> beatmapOffsetRow = null!;
-    private SliderRow<double> globalOffsetRow = null!;
+    private SettingsSlider<double> playbackRateRow = null!;
+    private SettingsSlider<double> beatmapOffsetRow = null!;
+    private SettingsSlider<double> globalOffsetRow = null!;
 
     // ---- replay analysis (osu! ruleset config; only built with the ruleset config cache) ----
-    private BasicCheckbox clickMarkersCheckbox = null!;
-    private BasicCheckbox frameMarkersCheckbox = null!;
-    private BasicCheckbox cursorPathCheckbox = null!;
-    private BasicCheckbox hideCursorCheckbox = null!;
-    private SliderRow<int> analysisLengthRow = null!;
+    private SettingsCheckbox clickMarkersCheckbox = null!;
+    private SettingsCheckbox frameMarkersCheckbox = null!;
+    private SettingsCheckbox cursorPathCheckbox = null!;
+    private SettingsCheckbox hideCursorCheckbox = null!;
+    private SettingsSlider<int> analysisLengthRow = null!;
 
     // Ranged local for the display-length slider, synced two-way with the config value: the config
     // bindable is declared rangeless upstream, and BindTo would copy that (unusable) range onto
@@ -149,31 +167,31 @@ public partial class SettingsOverlay : FocusedOverlayContainer
     private Bindable<int>? analysisLengthConfig;
 
     // ---- ruleset settings; only built when the ruleset config cache is present ----
-    private BasicCheckbox snakingInCheckbox = null!;
-    private BasicCheckbox snakingOutCheckbox = null!;
-    private BasicCheckbox osuHitAnimationsCheckbox = null!;
-    private BasicCheckbox cursorTrailCheckbox = null!;
-    private BasicCheckbox cursorRipplesCheckbox = null!;
-    private BasicDropdown<PlayfieldBorderStyle> playfieldBorderDropdown = null!;
-    private BasicCheckbox taikoHitAnimationsCheckbox = null!;
-    private BasicDropdown<ManiaScrollingDirection> maniaDirectionDropdown = null!;
-    private SliderRow<double> maniaScrollSpeedRow = null!;
-    private BasicCheckbox maniaTimingColourCheckbox = null!;
+    private SettingsCheckbox snakingInCheckbox = null!;
+    private SettingsCheckbox snakingOutCheckbox = null!;
+    private SettingsCheckbox osuHitAnimationsCheckbox = null!;
+    private SettingsCheckbox cursorTrailCheckbox = null!;
+    private SettingsCheckbox cursorRipplesCheckbox = null!;
+    private SettingsEnumDropdown<PlayfieldBorderStyle> playfieldBorderDropdown = null!;
+    private SettingsCheckbox taikoHitAnimationsCheckbox = null!;
+    private SettingsEnumDropdown<ManiaScrollingDirection> maniaDirectionDropdown = null!;
+    private SettingsSlider<double> maniaScrollSpeedRow = null!;
+    private SettingsCheckbox maniaTimingColourCheckbox = null!;
 
     /// <summary>
     /// Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to controls, to drive/assert
     /// them without depending on this panel's internal layout.
     /// </summary>
-    internal BasicCheckbox ShowFpsCheckbox => showFpsCheckbox;
+    internal SettingsCheckbox ShowFpsCheckbox => showFpsCheckbox;
 
-    internal BasicDropdown<MirrorSource> MirrorDropdown => mirrorDropdown;
-    internal BasicCheckbox RenderChartCheckbox => renderChartCheckbox;
-    internal BasicCheckbox PlayHitSoundsCheckbox => playHitSoundsCheckbox;
-    internal BasicSliderBar<double> BackgroundDimSlider => backgroundDimRow.Slider;
-    internal BasicDropdown<JukeBoxSkin> SkinDropdown => skinDropdown;
-    internal BasicSliderBar<double>? ManiaScrollSpeedSlider => rulesetConfigs != null ? maniaScrollSpeedRow.Slider : null;
-    internal DeviceDropdown AudioDeviceDropdown => audioDeviceDropdown;
-    internal BasicSliderBar<double> MasterVolumeSlider => masterVolumeRow.Slider;
+    internal SettingsDropdown<MirrorSource> MirrorDropdown => mirrorDropdown;
+    internal SettingsCheckbox RenderChartCheckbox => renderChartCheckbox;
+    internal SettingsCheckbox PlayHitSoundsCheckbox => playHitSoundsCheckbox;
+    internal SettingsSlider<double> BackgroundDimSlider => backgroundDimRow;
+    internal SettingsDropdown<JukeBoxSkin> SkinDropdown => skinDropdown;
+    internal SettingsSlider<double>? ManiaScrollSpeedSlider => rulesetConfigs != null ? maniaScrollSpeedRow : null;
+    internal SettingsDropdown<string> AudioDeviceDropdown => audioDeviceDropdown;
+    internal SettingsSlider<double> MasterVolumeSlider => masterVolumeRow;
 
     /// <summary>Test-only: scrolls a control into view (instantly, so the very next test step's
     /// mouse coordinates are already final) so real mouse input can reach it.</summary>
@@ -189,223 +207,254 @@ public partial class SettingsOverlay : FocusedOverlayContainer
     {
         RelativeSizeAxes = Axes.Both;
 
-        InternalChildren = docked
-            ? new Drawable[]
-            {
-                // No scrim, no floating card, no fixed width — this is inline tab-body content
-                // inside the three-column layout's right panel, which already supplies the
-                // surrounding panel surface/padding.
-                scroll = new BasicScrollContainer
+        // Tooltip host for the whole panel: lazer's RoundedSliderBar surfaces its value through a
+        // tooltip, which only renders inside a TooltipContainer ancestor.
+        InternalChild = new OsuTooltipContainer(null)
+        {
+            RelativeSizeAxes = Axes.Both,
+            Children = docked
+                ? new Drawable[]
                 {
-                    RelativeSizeAxes = Axes.Both,
-                    Child = createBody(),
-                },
-            }
-            : new Drawable[]
-            {
-                new Box
-                {
-                    RelativeSizeAxes = Axes.Both,
-                    Colour = Theme.ModalScrim,
-                },
-                panelCard = new Container
-                {
-                    Anchor = Anchor.Centre,
-                    Origin = Anchor.Centre,
-                    Width = panel_width,
-                    RelativeSizeAxes = Axes.Y,
-                    Height = floating_height,
-                    Masking = true,
-                    CornerRadius = Theme.CornerRadius,
-                    EdgeEffect = Theme.PanelShadow,
-                    Children = new Drawable[]
+                    // No scrim, no floating card, no fixed width — this is inline tab-body content
+                    // inside the three-column layout's right panel. The backdrop matches lazer's
+                    // settings panel ground (Background4 of the shared purple scheme) so the lazer
+                    // controls sit on their intended surface.
+                    new Box
                     {
-                        new Box
+                        RelativeSizeAxes = Axes.Both,
+                        Colour = colourProvider.Background4,
+                    },
+                    scroll = new OsuScrollContainer
+                    {
+                        RelativeSizeAxes = Axes.Both,
+                        ScrollbarVisible = true,
+                        Child = createBody(),
+                    },
+                }
+                : new Drawable[]
+                {
+                    new Box
+                    {
+                        RelativeSizeAxes = Axes.Both,
+                        Colour = Theme.ModalScrim,
+                    },
+                    panelCard = new Container
+                    {
+                        Anchor = Anchor.Centre,
+                        Origin = Anchor.Centre,
+                        Width = panel_width,
+                        RelativeSizeAxes = Axes.Y,
+                        Height = floating_height,
+                        Masking = true,
+                        CornerRadius = Theme.CornerRadius,
+                        EdgeEffect = Theme.PanelShadow,
+                        Children = new Drawable[]
                         {
-                            RelativeSizeAxes = Axes.Both,
-                            Colour = Theme.PanelSurface,
-                        },
-                        scroll = new BasicScrollContainer
-                        {
-                            RelativeSizeAxes = Axes.Both,
-                            Child = createBody(),
+                            new Box
+                            {
+                                RelativeSizeAxes = Axes.Both,
+                                Colour = colourProvider.Background4,
+                            },
+                            scroll = new OsuScrollContainer
+                            {
+                                RelativeSizeAxes = Axes.Both,
+                                ScrollbarVisible = true,
+                                Child = createBody(),
+                            },
                         },
                     },
                 },
-            };
+        };
     }
 
     /// <summary>
     /// The actual settings content, shared by both presentations (see the class summary). Always
     /// <see cref="Axes.X"/>-relative: the floating modal's fixed <see cref="panel_width"/> already
-    /// constrains the outer card, and both presentations scroll vertically.
+    /// constrains the outer card, and both presentations scroll vertically. Layout is lazer's:
+    /// big TorusAlternate section headers (via <see cref="SettingsSection"/>), bold subsection
+    /// headers (via <see cref="SettingsSubsection"/>), items carrying their own content padding.
     /// </summary>
     private Drawable createBody()
     {
         var sections = new List<Drawable>
         {
-            new SpriteText
+            new OsuSpriteText
             {
-                Font = FontUsage.Default.With(size: Theme.HeaderTextSize),
-                Colour = Theme.TextPrimary,
+                Font = OsuFont.TorusAlternate.With(size: 32),
                 Text = "Settings",
+                Margin = new MarginPadding { Left = SettingsPanel.CONTENT_PADDING.Left, Top = 18, Bottom = 4 },
             },
-            section("Skin",
-                labelled("Gameplay skin", skinDropdown = new BasicDropdown<JukeBoxSkin>
+            new Section("Skin", FontAwesome.Solid.PaintBrush)
+            {
+                Children = new Drawable[]
                 {
-                    RelativeSizeAxes = Axes.X,
-                    Items = Enum.GetValues<JukeBoxSkin>(),
-                })),
+                    skinDropdown = new SettingsEnumDropdown<JukeBoxSkin> { LabelText = "Gameplay skin" },
+                },
+            },
         };
 
         if (playback != null)
         {
-            sections.Add(section("Playback",
-                new TransportRow(playback, jukebox),
-                playbackRateRow = new SliderRow<double>("Playback speed", v => $"{v:0.00}x")));
+            sections.Add(new Section("Playback", FontAwesome.Solid.Play)
+            {
+                Children = new Drawable[]
+                {
+                    new TransportRow(playback, jukebox, colourProvider),
+                    playbackRateRow = new SettingsSlider<double> { LabelText = "Playback speed", KeyboardStep = 0.05f },
+                },
+            });
         }
 
         // Per-ruleset settings need the ruleset config cache (realm-backed); a bare test scene
-        // without it gets no dead controls.
+        // without it gets no dead controls. One big "Rulesets" section, lazer-style, with one
+        // subsection per ruleset (same rows, same bindables as before).
         if (rulesetConfigs != null)
         {
-            sections.Add(section("osu!",
-                snakingInCheckbox = new BasicCheckbox { LabelText = "Snaking in sliders" },
-                snakingOutCheckbox = new BasicCheckbox { LabelText = "Snaking out sliders" },
-                osuHitAnimationsCheckbox = new BasicCheckbox { LabelText = "Hit animations" },
-                cursorTrailCheckbox = new BasicCheckbox { LabelText = "Cursor trail" },
-                cursorRipplesCheckbox = new BasicCheckbox { LabelText = "Cursor ripples" },
-                labelled("Playfield border style", playfieldBorderDropdown = new BasicDropdown<PlayfieldBorderStyle>
+            sections.Add(new Section("Rulesets", FontAwesome.Solid.Gamepad)
+            {
+                Children = new Drawable[]
                 {
-                    RelativeSizeAxes = Axes.X,
-                    Items = Enum.GetValues<PlayfieldBorderStyle>(),
-                })));
-
-            sections.Add(section("osu!taiko",
-                taikoHitAnimationsCheckbox = new BasicCheckbox { LabelText = "Hit animations" }));
-
-            sections.Add(section("osu!mania",
-                labelled("Scrolling direction", maniaDirectionDropdown = new BasicDropdown<ManiaScrollingDirection>
-                {
-                    RelativeSizeAxes = Axes.X,
-                    Items = Enum.GetValues<ManiaScrollingDirection>(),
-                }),
-                maniaScrollSpeedRow = new SliderRow<double>("Scroll speed", v => $"{v:0.0}"),
-                maniaTimingColourCheckbox = new BasicCheckbox { LabelText = "Timing-based note colouring" }));
-
-            // Replay-analysis overlays: our autoplay chart IS replay-driven, and LazerChartLayer
-            // attaches lazer's ReplayAnalysisOverlay for osu! charts, bound to these keys.
-            sections.Add(section("Analysis (osu!)",
-                clickMarkersCheckbox = new BasicCheckbox { LabelText = "Show click markers" },
-                frameMarkersCheckbox = new BasicCheckbox { LabelText = "Show frame markers" },
-                cursorPathCheckbox = new BasicCheckbox { LabelText = "Show cursor path" },
-                hideCursorCheckbox = new BasicCheckbox { LabelText = "Hide gameplay cursor" },
-                analysisLengthRow = new SliderRow<int>("Display length", v => $"{v} ms")));
+                    new Subsection("osu!")
+                    {
+                        Children = new Drawable[]
+                        {
+                            snakingInCheckbox = new SettingsCheckbox { LabelText = "Snaking in sliders" },
+                            snakingOutCheckbox = new SettingsCheckbox { LabelText = "Snaking out sliders" },
+                            osuHitAnimationsCheckbox = new SettingsCheckbox { LabelText = "Hit animations" },
+                            cursorTrailCheckbox = new SettingsCheckbox { LabelText = "Cursor trail" },
+                            cursorRipplesCheckbox = new SettingsCheckbox { LabelText = "Cursor ripples" },
+                            playfieldBorderDropdown = new SettingsEnumDropdown<PlayfieldBorderStyle> { LabelText = "Playfield border style" },
+                        },
+                    },
+                    new Subsection("osu!taiko")
+                    {
+                        Children = new Drawable[]
+                        {
+                            taikoHitAnimationsCheckbox = new SettingsCheckbox { LabelText = "Hit animations" },
+                        },
+                    },
+                    new Subsection("osu!mania")
+                    {
+                        Children = new Drawable[]
+                        {
+                            maniaDirectionDropdown = new SettingsEnumDropdown<ManiaScrollingDirection> { LabelText = "Scrolling direction" },
+                            maniaScrollSpeedRow = new SettingsSlider<double> { LabelText = "Scroll speed", KeyboardStep = 0.5f },
+                            maniaTimingColourCheckbox = new SettingsCheckbox { LabelText = "Timing-based note colouring" },
+                        },
+                    },
+                    // Replay-analysis overlays: our autoplay chart IS replay-driven, and
+                    // LazerChartLayer attaches lazer's ReplayAnalysisOverlay for osu! charts,
+                    // bound to these keys.
+                    new Subsection("Analysis (osu!)")
+                    {
+                        Children = new Drawable[]
+                        {
+                            clickMarkersCheckbox = new SettingsCheckbox { LabelText = "Show click markers" },
+                            frameMarkersCheckbox = new SettingsCheckbox { LabelText = "Show frame markers" },
+                            cursorPathCheckbox = new SettingsCheckbox { LabelText = "Show cursor path" },
+                            hideCursorCheckbox = new SettingsCheckbox { LabelText = "Hide gameplay cursor" },
+                            analysisLengthRow = new SettingsSlider<int> { LabelText = "Display length", KeyboardStep = 100 },
+                        },
+                    },
+                },
+            });
         }
 
         var gameplayRows = new List<Drawable>();
 
         if (lazerConfig != null)
-            gameplayRows.Add(hitLightingCheckbox = new BasicCheckbox { LabelText = "Hit lighting" });
+            gameplayRows.Add(hitLightingCheckbox = new SettingsCheckbox { LabelText = "Hit lighting" });
 
-        gameplayRows.Add(backgroundDimRow = new SliderRow<double>("Background dim", v => $"{v:P0}"));
-        gameplayRows.Add(backgroundBlurRow = new SliderRow<double>("Background blur", v => $"{v:P0}"));
-        gameplayRows.Add(renderChartCheckbox = new BasicCheckbox { LabelText = "Render chart" });
-        gameplayRows.Add(playHitSoundsCheckbox = new BasicCheckbox { LabelText = "Play hit sounds" });
-        sections.Add(section("Gameplay", gameplayRows.ToArray()));
+        gameplayRows.Add(backgroundDimRow = new SettingsSlider<double> { LabelText = "Background dim", DisplayAsPercentage = true, KeyboardStep = 0.01f });
+        gameplayRows.Add(backgroundBlurRow = new SettingsSlider<double> { LabelText = "Background blur", DisplayAsPercentage = true, KeyboardStep = 0.01f });
+        gameplayRows.Add(renderChartCheckbox = new SettingsCheckbox { LabelText = "Render chart" });
+        gameplayRows.Add(playHitSoundsCheckbox = new SettingsCheckbox { LabelText = "Play hit sounds" });
+        sections.Add(new Section("Gameplay", FontAwesome.Regular.DotCircle) { Children = gameplayRows });
 
         var beatmapRows = new List<Drawable>();
 
         if (lazerConfig != null)
         {
-            beatmapRows.Add(beatmapSkinsCheckbox = new BasicCheckbox { LabelText = "Beatmap skins" });
-            beatmapRows.Add(beatmapColoursCheckbox = new BasicCheckbox { LabelText = "Beatmap colours" });
-            beatmapRows.Add(beatmapHitsoundsCheckbox = new BasicCheckbox { LabelText = "Beatmap hitsounds" });
+            beatmapRows.Add(beatmapSkinsCheckbox = new SettingsCheckbox { LabelText = "Beatmap skins" });
+            beatmapRows.Add(beatmapColoursCheckbox = new SettingsCheckbox { LabelText = "Beatmap colours" });
+            beatmapRows.Add(beatmapHitsoundsCheckbox = new SettingsCheckbox { LabelText = "Beatmap hitsounds" });
         }
 
-        beatmapRows.Add(showStoryboardVideoCheckbox = new BasicCheckbox { LabelText = "Storyboard / video" });
+        beatmapRows.Add(showStoryboardVideoCheckbox = new SettingsCheckbox { LabelText = "Storyboard / video" });
 
         if (lazerConfig != null)
-            beatmapRows.Add(comboNormalisationRow = new SliderRow<float>("Combo colour normalisation", v => $"{v:P0}"));
+            beatmapRows.Add(comboNormalisationRow = new SettingsSlider<float> { LabelText = "Combo colour normalisation", DisplayAsPercentage = true, KeyboardStep = 0.01f });
 
-        sections.Add(section("Beatmap", beatmapRows.ToArray()));
+        sections.Add(new Section("Beatmap", FontAwesome.Solid.Music) { Children = beatmapRows });
 
         var audioRows = new List<Drawable>();
-        audioRows.Add(labelled("Output device", audioDeviceDropdown = new DeviceDropdown { RelativeSizeAxes = Axes.X }));
-        audioRows.Add(masterVolumeRow = new SliderRow<double>("Master", v => $"{v:P0}"));
+        audioRows.Add(audioDeviceDropdown = new DeviceSettingsDropdown { LabelText = "Output device" });
+        audioRows.Add(masterVolumeRow = new SettingsSlider<double> { LabelText = "Master", DisplayAsPercentage = true, KeyboardStep = 0.01f });
 
         if (lazerConfig != null)
-            audioRows.Add(inactiveVolumeRow = new SliderRow<double>("Master (window inactive)", v => $"{v:P0}"));
+            audioRows.Add(inactiveVolumeRow = new SettingsSlider<double> { LabelText = "Master (window inactive)", DisplayAsPercentage = true, KeyboardStep = 0.01f });
 
-        audioRows.Add(effectVolumeRow = new SliderRow<double>("Effect", v => $"{v:P0}"));
-        audioRows.Add(musicVolumeRow = new SliderRow<double>("Music", v => $"{v:P0}"));
+        audioRows.Add(effectVolumeRow = new SettingsSlider<double> { LabelText = "Effect", DisplayAsPercentage = true, KeyboardStep = 0.01f });
+        audioRows.Add(musicVolumeRow = new SettingsSlider<double> { LabelText = "Music", DisplayAsPercentage = true, KeyboardStep = 0.01f });
 
         if (offsetStore != null)
-            audioRows.Add(beatmapOffsetRow = new SliderRow<double>("Audio offset (this beatmap)", v => $"{v:+0;-0;0} ms"));
+            audioRows.Add(beatmapOffsetRow = new SettingsSlider<double> { LabelText = "Audio offset (this beatmap)", KeyboardStep = 1 });
 
-        audioRows.Add(globalOffsetRow = new SliderRow<double>("Audio offset (global)", v => $"{v:+0;-0;0} ms"));
+        audioRows.Add(globalOffsetRow = new SettingsSlider<double> { LabelText = "Audio offset (global)", KeyboardStep = 1 });
 
         if (lazerConfig != null)
-            audioRows.Add(positionalHitsoundsRow = new SliderRow<float>("Hitsound stereo separation", v => $"{v:P0}"));
+            audioRows.Add(positionalHitsoundsRow = new SettingsSlider<float> { LabelText = "Hitsound stereo separation", DisplayAsPercentage = true, KeyboardStep = 0.01f });
 
-        sections.Add(section("Audio", audioRows.ToArray()));
+        sections.Add(new Section("Audio", FontAwesome.Solid.VolumeUp) { Children = audioRows });
 
         var graphicsRows = new List<Drawable>();
 
         // A headless host has no window — the window-bound rows simply don't exist there.
         if (host.Window != null)
         {
-            graphicsRows.Add(labelled("Screen mode", screenModeDropdown = new BasicDropdown<WindowMode>
+            graphicsRows.Add(screenModeDropdown = new SettingsEnumDropdown<WindowMode>
             {
-                RelativeSizeAxes = Axes.X,
+                LabelText = "Screen mode",
                 Items = host.Window.SupportedWindowModes,
-            }));
+            });
 
-            graphicsRows.Add(labelled("Display", displayDropdown = new BasicDropdown<Display>
+            graphicsRows.Add(displayDropdown = new DisplaySettingsDropdown
             {
-                RelativeSizeAxes = Axes.X,
+                LabelText = "Display",
                 Items = host.Window.Displays,
-            }));
+            });
         }
 
-        graphicsRows.Add(uiScaleRow = new SliderRow<double>("UI scaling", v => $"{v:0.00}x"));
-        graphicsRows.Add(labelled("Renderer (requires restart)", rendererDropdown = new BasicDropdown<RendererType>
+        graphicsRows.Add(uiScaleRow = new SettingsSlider<double> { LabelText = "UI scaling", KeyboardStep = 0.05f });
+        graphicsRows.Add(rendererDropdown = new SettingsEnumDropdown<RendererType>
         {
-            RelativeSizeAxes = Axes.X,
+            LabelText = "Renderer (requires restart)",
             Items = host.GetPreferredRenderersForCurrentPlatform(),
-        }));
-        graphicsRows.Add(labelled("Frame limiter", frameLimiterDropdown = new BasicDropdown<FrameSync>
+        });
+        graphicsRows.Add(frameLimiterDropdown = new SettingsEnumDropdown<FrameSync> { LabelText = "Frame limiter" });
+        graphicsRows.Add(threadingDropdown = new SettingsEnumDropdown<ExecutionMode> { LabelText = "Threading mode" });
+        graphicsRows.Add(showFpsCheckbox = new SettingsCheckbox { LabelText = "Show FPS" });
+        graphicsRows.Add(hardwareVideoDropdown = new SettingsEnumDropdown<HardwareVideoDecoder>
         {
-            RelativeSizeAxes = Axes.X,
-            Items = Enum.GetValues<FrameSync>(),
-        }));
-        graphicsRows.Add(labelled("Threading mode", threadingDropdown = new BasicDropdown<ExecutionMode>
-        {
-            RelativeSizeAxes = Axes.X,
-            Items = Enum.GetValues<ExecutionMode>(),
-        }));
-        graphicsRows.Add(showFpsCheckbox = new BasicCheckbox { LabelText = "Show FPS" });
-        graphicsRows.Add(labelled("Video hardware acceleration", hardwareVideoDropdown = new BasicDropdown<HardwareVideoDecoder>
-        {
-            RelativeSizeAxes = Axes.X,
+            LabelText = "Video hardware acceleration",
             Items = new[] { HardwareVideoDecoder.None, HardwareVideoDecoder.Any },
-        }));
-        sections.Add(section("Graphics", graphicsRows.ToArray()));
+        });
+        sections.Add(new Section("Graphics", FontAwesome.Solid.Laptop) { Children = graphicsRows });
 
-        sections.Add(section("Online",
-            labelled("Beatmap mirror", mirrorDropdown = new BasicDropdown<MirrorSource>
+        sections.Add(new Section("Online", FontAwesome.Solid.GlobeAsia)
+        {
+            Children = new Drawable[]
             {
-                RelativeSizeAxes = Axes.X,
-                Items = Enum.GetValues<MirrorSource>(),
-            })));
+                mirrorDropdown = new SettingsEnumDropdown<MirrorSource> { LabelText = "Beatmap mirror" },
+            },
+        });
 
         return new FillFlowContainer
         {
             RelativeSizeAxes = Axes.X,
             AutoSizeAxes = Axes.Y,
-            Padding = new MarginPadding(Theme.PanelPadding),
+            Padding = new MarginPadding { Bottom = 20 },
             Direction = FillDirection.Vertical,
-            Spacing = new Vector2(0, Theme.SectionSpacing),
             Children = sections,
         };
     }
@@ -420,25 +469,25 @@ public partial class SettingsOverlay : FocusedOverlayContainer
         renderChartCheckbox.Current = config.GetBindable<bool>(JukeBoxSetting.RenderChart);
         playHitSoundsCheckbox.Current = config.GetBindable<bool>(JukeBoxSetting.PlayHitSounds);
         showStoryboardVideoCheckbox.Current = config.GetBindable<bool>(JukeBoxSetting.ShowStoryboardVideo);
-        backgroundDimRow.Slider.Current = config.GetBindable<double>(JukeBoxSetting.BackgroundDim);
-        backgroundBlurRow.Slider.Current = config.GetBindable<double>(JukeBoxSetting.BackgroundBlur);
-        uiScaleRow.Slider.Current = config.GetBindable<double>(JukeBoxSetting.UiScale);
-        globalOffsetRow.Slider.Current = config.GetBindable<double>(JukeBoxSetting.GlobalAudioOffset);
+        backgroundDimRow.Current = config.GetBindable<double>(JukeBoxSetting.BackgroundDim);
+        backgroundBlurRow.Current = config.GetBindable<double>(JukeBoxSetting.BackgroundBlur);
+        uiScaleRow.Current = config.GetBindable<double>(JukeBoxSetting.UiScale);
+        globalOffsetRow.Current = config.GetBindable<double>(JukeBoxSetting.GlobalAudioOffset);
         mirrorDropdown.Current = config.GetBindable<MirrorSource>(JukeBoxSetting.PreferredMirror);
 
         // Session-only, like lazer's replay playback control (deliberately not persisted).
         if (playback != null)
-            playbackRateRow.Slider.Current = playback.PlaybackRate;
+            playbackRateRow.Current = playback.PlaybackRate;
 
         // Per-set offset: the store retargets this bindable on every song change and persists edits.
         if (offsetStore != null)
-            beatmapOffsetRow.Slider.Current = offsetStore.CurrentOffset;
+            beatmapOffsetRow.Current = offsetStore.CurrentOffset;
 
         // ---- framework (all apply live; renderer takes effect on restart) ----
         audioDeviceDropdown.Current = frameworkConfig.GetBindable<string>(FrameworkSetting.AudioDevice);
-        masterVolumeRow.Slider.Current = frameworkConfig.GetBindable<double>(FrameworkSetting.VolumeUniversal);
-        effectVolumeRow.Slider.Current = frameworkConfig.GetBindable<double>(FrameworkSetting.VolumeEffect);
-        musicVolumeRow.Slider.Current = frameworkConfig.GetBindable<double>(FrameworkSetting.VolumeMusic);
+        masterVolumeRow.Current = frameworkConfig.GetBindable<double>(FrameworkSetting.VolumeUniversal);
+        effectVolumeRow.Current = frameworkConfig.GetBindable<double>(FrameworkSetting.VolumeEffect);
+        musicVolumeRow.Current = frameworkConfig.GetBindable<double>(FrameworkSetting.VolumeMusic);
         rendererDropdown.Current = frameworkConfig.GetBindable<RendererType>(FrameworkSetting.Renderer);
         frameLimiterDropdown.Current = frameworkConfig.GetBindable<FrameSync>(FrameworkSetting.FrameSync);
         threadingDropdown.Current = frameworkConfig.GetBindable<ExecutionMode>(FrameworkSetting.ExecutionMode);
@@ -467,9 +516,9 @@ public partial class SettingsOverlay : FocusedOverlayContainer
             beatmapSkinsCheckbox.Current = lazerConfig.GetBindable<bool>(OsuSetting.BeatmapSkins);
             beatmapColoursCheckbox.Current = lazerConfig.GetBindable<bool>(OsuSetting.BeatmapColours);
             beatmapHitsoundsCheckbox.Current = lazerConfig.GetBindable<bool>(OsuSetting.BeatmapHitsounds);
-            comboNormalisationRow.Slider.Current = lazerConfig.GetBindable<float>(OsuSetting.ComboColourNormalisationAmount);
-            inactiveVolumeRow.Slider.Current = lazerConfig.GetBindable<double>(OsuSetting.VolumeInactive);
-            positionalHitsoundsRow.Slider.Current = lazerConfig.GetBindable<float>(OsuSetting.PositionalHitsoundsLevel);
+            comboNormalisationRow.Current = lazerConfig.GetBindable<float>(OsuSetting.ComboColourNormalisationAmount);
+            inactiveVolumeRow.Current = lazerConfig.GetBindable<double>(OsuSetting.VolumeInactive);
+            positionalHitsoundsRow.Current = lazerConfig.GetBindable<float>(OsuSetting.PositionalHitsoundsLevel);
         }
 
         // ---- rulesets ----
@@ -508,6 +557,18 @@ public partial class SettingsOverlay : FocusedOverlayContainer
             cursorTrailCheckbox.Current = osuRulesetConfig.GetBindable<bool>(OsuRulesetSetting.ShowCursorTrail);
             cursorRipplesCheckbox.Current = osuRulesetConfig.GetBindable<bool>(OsuRulesetSetting.ShowCursorRipples);
             playfieldBorderDropdown.Current = osuRulesetConfig.GetBindable<PlayfieldBorderStyle>(OsuRulesetSetting.PlayfieldBorderStyle);
+
+            clickMarkersCheckbox.Current = osuRulesetConfig.GetBindable<bool>(OsuRulesetSetting.ReplayClickMarkersEnabled);
+            frameMarkersCheckbox.Current = osuRulesetConfig.GetBindable<bool>(OsuRulesetSetting.ReplayFrameMarkersEnabled);
+            cursorPathCheckbox.Current = osuRulesetConfig.GetBindable<bool>(OsuRulesetSetting.ReplayCursorPathEnabled);
+            hideCursorCheckbox.Current = osuRulesetConfig.GetBindable<bool>(OsuRulesetSetting.ReplayCursorHideEnabled);
+
+            // Two-way sync (see analysisDisplayLength remarks) instead of a direct bind.
+            analysisLengthConfig = osuRulesetConfig.GetBindable<int>(OsuRulesetSetting.ReplayAnalysisDisplayLength);
+            analysisDisplayLength.Value = analysisLengthConfig.Value;
+            analysisDisplayLength.BindValueChanged(e => analysisLengthConfig!.Value = e.NewValue);
+            analysisLengthConfig.BindValueChanged(e => analysisDisplayLength.Value = e.NewValue);
+            analysisLengthRow.Current = analysisDisplayLength;
         }
 
         if (rulesetConfigs.GetConfigFor(new TaikoRuleset()) is TaikoRulesetConfigManager taikoRulesetConfig)
@@ -516,23 +577,8 @@ public partial class SettingsOverlay : FocusedOverlayContainer
         if (rulesetConfigs.GetConfigFor(new ManiaRuleset()) is ManiaRulesetConfigManager maniaRulesetConfig)
         {
             maniaDirectionDropdown.Current = maniaRulesetConfig.GetBindable<ManiaScrollingDirection>(ManiaRulesetSetting.ScrollDirection);
-            maniaScrollSpeedRow.Slider.Current = maniaRulesetConfig.GetBindable<double>(ManiaRulesetSetting.ScrollSpeed);
+            maniaScrollSpeedRow.Current = maniaRulesetConfig.GetBindable<double>(ManiaRulesetSetting.ScrollSpeed);
             maniaTimingColourCheckbox.Current = maniaRulesetConfig.GetBindable<bool>(ManiaRulesetSetting.TimingBasedNoteColouring);
-        }
-
-        if (rulesetConfigs.GetConfigFor(new OsuRuleset()) is OsuRulesetConfigManager osuAnalysisConfig)
-        {
-            clickMarkersCheckbox.Current = osuAnalysisConfig.GetBindable<bool>(OsuRulesetSetting.ReplayClickMarkersEnabled);
-            frameMarkersCheckbox.Current = osuAnalysisConfig.GetBindable<bool>(OsuRulesetSetting.ReplayFrameMarkersEnabled);
-            cursorPathCheckbox.Current = osuAnalysisConfig.GetBindable<bool>(OsuRulesetSetting.ReplayCursorPathEnabled);
-            hideCursorCheckbox.Current = osuAnalysisConfig.GetBindable<bool>(OsuRulesetSetting.ReplayCursorHideEnabled);
-
-            // Two-way sync (see analysisDisplayLength remarks) instead of a direct bind.
-            analysisLengthConfig = osuAnalysisConfig.GetBindable<int>(OsuRulesetSetting.ReplayAnalysisDisplayLength);
-            analysisDisplayLength.Value = analysisLengthConfig.Value;
-            analysisDisplayLength.BindValueChanged(e => analysisLengthConfig!.Value = e.NewValue);
-            analysisLengthConfig.BindValueChanged(e => analysisDisplayLength.Value = e.NewValue);
-            analysisLengthRow.Slider.Current = analysisDisplayLength;
         }
     }
 
@@ -564,47 +610,6 @@ public partial class SettingsOverlay : FocusedOverlayContainer
         if (host.IsNotNull() && host.Window != null)
             host.Window.DisplaysChanged -= onDisplaysChanged;
     }
-
-    private static Drawable section(string title, params Drawable[] rows)
-    {
-        var flow = new FillFlowContainer
-        {
-            RelativeSizeAxes = Axes.X,
-            AutoSizeAxes = Axes.Y,
-            Direction = FillDirection.Vertical,
-            Spacing = new Vector2(0, Theme.RowSpacing),
-        };
-
-        flow.Add(new SpriteText
-        {
-            Font = FontUsage.Default.With(size: 16),
-            Colour = Theme.Accent,
-            Text = title,
-        });
-
-        foreach (var row in rows)
-            flow.Add(row);
-
-        return flow;
-    }
-
-    private static Drawable labelled(string label, Drawable control) => new FillFlowContainer
-    {
-        RelativeSizeAxes = Axes.X,
-        AutoSizeAxes = Axes.Y,
-        Direction = FillDirection.Vertical,
-        Spacing = new Vector2(0, 4),
-        Children = new[]
-        {
-            new SpriteText
-            {
-                Font = FontUsage.Default.With(size: Theme.RowSecondaryTextSize),
-                Colour = Theme.TextSecondary,
-                Text = label,
-            },
-            control,
-        },
-    };
 
     // Docked: PopIn/PopOut deliberately do NOT touch Alpha at all — a docked instance's Alpha is
     // owned entirely and exclusively by the tab strip (MainScreen.selectTab), never by this
@@ -645,89 +650,74 @@ public partial class SettingsOverlay : FocusedOverlayContainer
     }
 
     /// <summary>
-    /// A slider with its label on the left and the live formatted value on the right — the shared
-    /// row shape for every slider in the panel.
+    /// A concrete lazer <see cref="SettingsSection"/> (big TorusAlternate header, separator,
+    /// content padding). Standalone-safe: with no SettingsPanel in DI it self-selects, so the
+    /// section-dimming/scroll-to-section machinery is inert.
     /// </summary>
-    private partial class SliderRow<T> : FillFlowContainer
-        where T : struct, System.Numerics.INumber<T>, System.Numerics.IMinMaxValue<T>
+    private partial class Section : SettingsSection
     {
-        public readonly BasicSliderBar<T> Slider;
+        private readonly LocalisableString header;
+        private readonly IconUsage icon;
 
-        private readonly SpriteText valueLabel;
-        private readonly Func<T, string> format;
-
-        public SliderRow(string label, Func<T, string> format)
+        public Section(LocalisableString header, IconUsage icon)
         {
-            this.format = format;
-
-            RelativeSizeAxes = Axes.X;
-            AutoSizeAxes = Axes.Y;
-            Direction = FillDirection.Vertical;
-            Spacing = new Vector2(0, 4);
-
-            Children = new Drawable[]
-            {
-                new Container
-                {
-                    RelativeSizeAxes = Axes.X,
-                    AutoSizeAxes = Axes.Y,
-                    Children = new Drawable[]
-                    {
-                        new SpriteText
-                        {
-                            Anchor = Anchor.CentreLeft,
-                            Origin = Anchor.CentreLeft,
-                            Font = FontUsage.Default.With(size: Theme.RowSecondaryTextSize),
-                            Colour = Theme.TextSecondary,
-                            Text = label,
-                        },
-                        valueLabel = new SpriteText
-                        {
-                            Anchor = Anchor.CentreRight,
-                            Origin = Anchor.CentreRight,
-                            Font = FontUsage.Default.With(size: Theme.RowSecondaryTextSize),
-                            Colour = Theme.TextPrimary,
-                        },
-                    },
-                },
-                Slider = new BasicSliderBar<T>
-                {
-                    RelativeSizeAxes = Axes.X,
-                    Height = 8,
-                    CornerRadius = 4,
-                    Masking = true,
-                    BackgroundColour = Theme.ElevatedSurface,
-                    SelectionColour = Theme.Accent,
-                    FocusColour = Theme.Accent,
-                },
-            };
+            this.header = header;
+            this.icon = icon;
         }
 
-        protected override void LoadComplete()
-        {
-            base.LoadComplete();
+        public override LocalisableString Header => header;
 
-            // Bound on the slider's own Current (a stable BindableWithCurrent) so the label keeps
-            // tracking across any later Current reassignment.
-            Slider.Current.BindValueChanged(e => valueLabel.Text = format(e.NewValue), true);
+        public override Drawable CreateIcon() => new SpriteIcon { Icon = icon };
+    }
+
+    /// <summary>A concrete lazer <see cref="SettingsSubsection"/> (bold subsection header).</summary>
+    private partial class Subsection : SettingsSubsection
+    {
+        private readonly LocalisableString header;
+
+        public Subsection(LocalisableString header)
+        {
+            this.header = header;
         }
+
+        protected override LocalisableString Header => header;
     }
 
     /// <summary>
     /// Audio output device dropdown: device names are raw BASS strings, with the empty string
-    /// meaning "let the system decide" (AudioManager's documented convention).
+    /// meaning "let the system decide" (AudioManager's documented convention). Same shape as
+    /// lazer's AudioDevicesSettings dropdown.
     /// </summary>
-    internal partial class DeviceDropdown : BasicDropdown<string>
+    internal partial class DeviceSettingsDropdown : SettingsDropdown<string>
     {
-        protected override LocalisableString GenerateItemText(string item)
-            => string.IsNullOrEmpty(item) ? "System default" : item;
+        protected override OsuDropdown<string> CreateDropdown() => new DeviceDropdownControl();
+
+        private partial class DeviceDropdownControl : DropdownControl
+        {
+            protected override LocalisableString GenerateItemText(string item)
+                => string.IsNullOrEmpty(item) ? "System default" : base.GenerateItemText(item);
+        }
+    }
+
+    /// <summary>Display picker labelled "index: name", the same shape as lazer's DisplayDropdown.</summary>
+    internal partial class DisplaySettingsDropdown : SettingsDropdown<Display>
+    {
+        protected override OsuDropdown<Display> CreateDropdown() => new DisplayDropdownControl();
+
+        private partial class DisplayDropdownControl : DropdownControl
+        {
+            protected override LocalisableString GenerateItemText(Display item)
+                => $"{item.Index}: {item.Name}";
+        }
     }
 
     /// <summary>
     /// The lazer replay-player transport strip: restart, −5s, play/pause, +5s, skip-next — all
     /// routed through the existing controller/jukebox methods (no new playback machinery). The
     /// play/pause icon tracks <see cref="Playback.PlaybackController.IsPlaying"/> (a plain
-    /// property, hence the per-frame refresh).
+    /// property, hence the per-frame refresh). Custom control (no lazer 1:1 equivalent outside the
+    /// full replay player), coloured from the shared <see cref="OverlayColourProvider"/> and
+    /// padded like a settings item so it aligns with the lazer rows around it.
     /// </summary>
     internal partial class TransportRow : FillFlowContainer
     {
@@ -736,7 +726,7 @@ public partial class SettingsOverlay : FocusedOverlayContainer
 
         private const double seek_step_ms = 5000;
 
-        public TransportRow(Playback.PlaybackController playback, Playback.Jukebox? jukebox)
+        public TransportRow(Playback.PlaybackController playback, Playback.Jukebox? jukebox, OverlayColourProvider colourProvider)
         {
             this.playback = playback;
 
@@ -744,31 +734,39 @@ public partial class SettingsOverlay : FocusedOverlayContainer
             AutoSizeAxes = Axes.Y;
             Direction = FillDirection.Horizontal;
             Spacing = new Vector2(Theme.RowSpacing, 0);
+            Padding = new MarginPadding { Left = SettingsPanel.CONTENT_MARGINS, Right = SettingsPanel.CONTENT_MARGINS };
 
             Add(new IconButton
             {
                 Icon = FontAwesome.Solid.UndoAlt,
                 Size = new Vector2(32),
+                IdleColour = colourProvider.Background3,
+                HoverColour = colourProvider.Background1,
                 Action = () => playback.Seek(0),
             });
             Add(new IconButton
             {
                 Icon = FontAwesome.Solid.Backward,
                 Size = new Vector2(32),
+                IdleColour = colourProvider.Background3,
+                HoverColour = colourProvider.Background1,
                 Action = () => playback.Seek(Math.Max(0, playback.CurrentTimeMs - seek_step_ms)),
             });
             Add(playPause = new IconButton
             {
                 Icon = FontAwesome.Solid.Play,
                 Size = new Vector2(32),
-                IdleColour = Theme.AccentDim,
-                HoverColour = Theme.Accent,
+                IdleColour = colourProvider.Highlight1,
+                HoverColour = colourProvider.Light1,
+                IconColour = colourProvider.Background5,
                 Action = playback.TogglePause,
             });
             Add(new IconButton
             {
                 Icon = FontAwesome.Solid.Forward,
                 Size = new Vector2(32),
+                IdleColour = colourProvider.Background3,
+                HoverColour = colourProvider.Background1,
                 Action = () => playback.Seek(Math.Min(playback.LengthMs, playback.CurrentTimeMs + seek_step_ms)),
             });
 
@@ -778,6 +776,8 @@ public partial class SettingsOverlay : FocusedOverlayContainer
                 {
                     Icon = FontAwesome.Solid.StepForward,
                     Size = new Vector2(32),
+                    IdleColour = colourProvider.Background3,
+                    HoverColour = colourProvider.Background1,
                     Action = jukebox.SkipCurrent,
                 });
             }
