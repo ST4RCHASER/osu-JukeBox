@@ -15,6 +15,7 @@ using osu.Framework.Screens;
 using osu.Framework.Testing;
 using osu.Framework.Timing;
 using osu.Game.Rulesets.Catch;
+using SixLabors.ImageSharp;
 using osu.Game.Rulesets.Catch.UI;
 
 namespace JukeBox.Game.Tests.Visual
@@ -1149,8 +1150,137 @@ namespace JukeBox.Game.Tests.Visual
             });
         }
 
+        // Regression coverage for reopen #7: a prior fix here (LazerChartLayer.
+        // unmaskLegacyTaikoDrumFlash, since removed) disabled LegacyHalfDrum's Masking on the
+        // theory that some legacy skins ship an oversized drum-flash texture meant to bloom
+        // outward past the drum. A follow-up screenshot showed that was wrong — with masking
+        // disabled, the flash renders as misshapen, offset crescents spilling past the drum
+        // instead of a clean flash, because LegacyHalfDrum's masking isn't cropping an oversized
+        // bloom down: each "half" is DESIGNED to show only its own semicircle of a combined flash
+        // (Rim/Centre are separately Origin/Scale-flipped per side for exactly this), relying on
+        // that masking to keep a plain, unfit Sprite (LegacyHalfDrum applies no scale/fit beyond
+        // upstream's own @2x detection) looking correct regardless of the texture's exact
+        // proportions — removing it exposes whatever raw, unfit geometry that Sprite actually has.
+        // Locks in that Masking must stay enabled (guards against reintroducing exactly this
+        // mistake) and separately verifies the plausible root cause raised alongside it — that our
+        // BeatmapFolderSkin might not replicate lazer's own "@2x"-suffixed high-resolution texture
+        // detection (LegacySkin.GetTexture: an "x@2x.png" sibling halves the DISPLAYED size of a
+        // higher-resolution asset) — by asserting a real @2x pair actually gets displayed at its
+        // 1x sibling's size, not its own raw (larger) pixel size.
+        [Test]
+        public void TaikoDrumFlashMaskingStaysEnabledAndBeatmapSkinRespectsAt2xTextures()
+        {
+            BeatmapVisuals visuals = null!;
+            var manual = new osu.Framework.Timing.ManualClock();
+            osu.Framework.Timing.FramedClock? clock = null;
+
+            AddStep("enable chart, Classic skin", () =>
+            {
+                config.SetValue(JukeBoxSetting.RenderChart, true);
+                config.SetValue(JukeBoxSetting.Skin, JukeBoxSkin.Classic);
+            });
+
+            AddStep("create visuals with a legacy beatmap skin providing an @2x drum flash texture", () =>
+            {
+                string mapDir = Path.Combine(tmp, "drumflash-at2x");
+                Directory.CreateDirectory(mapDir);
+
+                // A 64x64 "1x" texture and a DIFFERENT-content 128x128 "@2x" sibling for the same
+                // component — if @2x detection works, the displayed sprite matches the 1x file's
+                // 64x64 size (ScaleAdjust halves the higher-resolution asset), not 128x128 raw.
+                File.WriteAllBytes(Path.Combine(mapDir, "taiko-drum-outer.png"), solidPng(64, 64));
+                File.WriteAllBytes(Path.Combine(mapDir, "taiko-drum-outer@2x.png"), solidPng(128, 128));
+                File.WriteAllBytes(Path.Combine(mapDir, "taiko-drum-inner.png"), solidPng(64, 64));
+                File.WriteAllBytes(Path.Combine(mapDir, "taiko-bar-left.png"), solidPng(64, 64));
+                File.WriteAllBytes(Path.Combine(mapDir, "bg.png"), solidPng(4, 4));
+
+                string osuFile = Path.Combine(mapDir, "taiko [x].osu");
+                File.WriteAllText(osuFile, """
+                    osu file format v14
+
+                    [General]
+                    AudioFilename: audio.mp3
+                    Mode: 1
+
+                    [Difficulty]
+                    HPDrainRate:5
+                    CircleSize:4
+                    OverallDifficulty:5
+                    ApproachRate:5
+                    SliderMultiplier:1.4
+                    SliderTickRate:1
+
+                    [TimingPoints]
+                    0,500,4,1,0,100,1,0
+
+                    [HitObjects]
+                    64,192,5000,1,0
+                    """);
+
+                var set = new CachedBeatmapSet
+                {
+                    SetId = 18,
+                    Directory = mapDir,
+                    BackgroundFile = Path.Combine(mapDir, "bg.png"),
+                    OsuFiles = { osuFile },
+                    PreferredOsuFile = osuFile,
+                };
+
+                clock = new osu.Framework.Timing.FramedClock(manual);
+                Add(visuals = new BeatmapVisuals(set, clock) { RelativeSizeAxes = Axes.Both });
+            });
+
+            AddUntilStep("chart loaded", () => visuals.IsLoaded && visuals.HasChartLayer && visuals.ChartRenderer?.DrawableRuleset != null);
+
+            AddStep("advance past the hit", () =>
+            {
+                manual.CurrentTime = 5010;
+                clock!.ProcessFrame();
+            });
+
+            AddAssert("both half-drum containers found", () =>
+            {
+                var playfield = visuals.ChartRenderer!.DrawableRuleset!.Playfield;
+                return playfield.ChildrenOfType<osu.Framework.Graphics.Containers.Container>()
+                                .Count(c => c.Name is "Left Half" or "Right Half") == 2;
+            });
+
+            AddAssert("half-drum containers keep Masking enabled (matches upstream; do not disable it)", () =>
+            {
+                var playfield = visuals.ChartRenderer!.DrawableRuleset!.Playfield;
+                return playfield.ChildrenOfType<osu.Framework.Graphics.Containers.Container>()
+                                .Where(c => c.Name is "Left Half" or "Right Half")
+                                .All(c => c.Masking);
+            });
+
+            AddAssert("the @2x drum-outer texture displays at its 1x sibling's size, not its own raw size", () =>
+            {
+                var playfield = visuals.ChartRenderer!.DrawableRuleset!.Playfield;
+                var half = playfield.ChildrenOfType<osu.Framework.Graphics.Containers.Container>().First(c => c.Name is "Left Half" or "Right Half");
+                var sprite = half.ChildrenOfType<osu.Framework.Graphics.Sprites.Sprite>().FirstOrDefault(s => s.Texture != null);
+
+                return sprite?.Texture != null && Math.Abs(sprite.Texture.DisplayWidth - 64) < 1f;
+            });
+
+            AddStep("remove visuals", () =>
+            {
+                config.SetValue(JukeBoxSetting.RenderChart, false);
+                Remove(visuals, true);
+            });
+        }
+
         // 1x1 red pixel PNG — content is irrelevant, only that it decodes to a valid texture.
         private static byte[] solidPng() => Convert.FromBase64String(
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==");
+
+        // Solid-colour PNG at an explicit size, for texture-scale tests where dimensions matter.
+        private static byte[] solidPng(int width, int height)
+        {
+            using var image = new SixLabors.ImageSharp.Image<SixLabors.ImageSharp.PixelFormats.Rgba32>(width, height,
+                new SixLabors.ImageSharp.PixelFormats.Rgba32(255, 128, 0, 255));
+            using var ms = new MemoryStream();
+            image.SaveAsPng(ms);
+            return ms.ToArray();
+        }
     }
 }
