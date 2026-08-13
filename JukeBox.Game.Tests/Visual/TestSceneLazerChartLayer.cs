@@ -97,6 +97,35 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("remove layer", () => Remove(host, true));
         }
 
+        // Regression guard for the construction-time crawl: a layer freshly attached with the
+        // playback clock already mid-song (RenderChart toggled on mid-track, difficulty/skin
+        // rebuilds) starts its FrameStabilityContainer and autoplay replay walk at the song start
+        // and would visibly fast-forward to the current position. The first-update construction
+        // snap must engage the same FrameStablePlayback hook and land at the current time within
+        // a few updates.
+        [TestCase(true)]
+        [TestCase(false)]
+        public void MidSongConstructionSnapBehaviour(bool snap)
+        {
+            createLayer(0, 60000, snap);
+
+            AddUntilStep("layer loaded", () => layer.IsLoaded && layer.DrawableRuleset != null);
+            AddUntilStep("caught up to 60s", () => layer.LastSeekCatchupFrames >= 0 && frameStableTimeNear(60000));
+
+            AddStep("report catch-up cost", () => osu.Framework.Logging.Logger.Log(
+                $"[attach-snap] snap={snap}: mid-song construction caught up in {layer.LastSeekCatchupFrames} layer update(s), snaps engaged: {layer.SeekSnapsEngaged}"));
+
+            if (snap)
+            {
+                AddAssert("construction snap engaged exactly once", () => layer.SeekSnapsEngaged == 1);
+                AddAssert("snapped within 3 updates", () => layer.LastSeekCatchupFrames is >= 1 and <= 3);
+            }
+            else
+                AddAssert("caught up without the snap hook", () => layer.SeekSnapsEngaged == 0);
+
+            AddStep("remove layer", () => Remove(host, true));
+        }
+
         [Test]
         public void SeekingKeepsFrameStableClockFollowing()
         {
@@ -134,11 +163,11 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("remove layer", () => Remove(host, true));
         }
 
-        private void createLayer(int mode)
+        private void createLayer(int mode, double startTime = 0, bool snap = true)
         {
             AddStep("create layer", () =>
             {
-                manual.CurrentTime = 0;
+                manual.CurrentTime = startTime;
 
                 string osu = Path.Combine(dir, $"test [{mode}].osu");
                 File.WriteAllText(osu, beatmapForMode(mode));
@@ -147,7 +176,9 @@ namespace JukeBox.Game.Tests.Visual
                 {
                     RelativeSizeAxes = Axes.Both,
                     Clock = new FramedClock(manual),
-                    Child = layer = new LazerChartLayer(new FlatWorkingBeatmap(osu), osu),
+                    // Snap configured at construction: the first Update (which owns the
+                    // construction-snap decision) can run before any later test step.
+                    Child = layer = new LazerChartLayer(new FlatWorkingBeatmap(osu), osu) { SnapOnBigSeeks = snap },
                 });
             });
         }
