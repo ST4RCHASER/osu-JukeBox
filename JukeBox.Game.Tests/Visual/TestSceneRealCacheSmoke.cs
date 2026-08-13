@@ -101,9 +101,13 @@ namespace JukeBox.Game.Tests.Visual
 
             AddStep("seek forward", () => manual.CurrentTime = 60000);
             AddUntilStep("clock followed forward seek", () => frameStableNear(visuals, 60000));
+            AddAssert("forward seek snapped (≤3 layer updates)",
+                () => visuals.ChartRenderer?.LastSeekCatchupFrames is >= 1 and <= 3);
 
             AddStep("seek backward", () => manual.CurrentTime = 10000);
             AddUntilStep("clock followed backward seek", () => frameStableNear(visuals, 10000));
+            AddAssert("backward seek snapped (≤3 layer updates)",
+                () => visuals.ChartRenderer?.LastSeekCatchupFrames is >= 1 and <= 3);
 
             AddStep("remove visuals", () => Remove(wrapper, true));
 

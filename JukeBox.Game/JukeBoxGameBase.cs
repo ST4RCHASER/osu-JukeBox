@@ -1,3 +1,4 @@
+using System;
 using System.Net.Http;
 using JukeBox.Game.Beatmaps;
 using JukeBox.Game.Configuration;
@@ -102,7 +103,7 @@ namespace JukeBox.Game
             // settings, kept isolated in the lazer subdirectory), the per-ruleset config cache and
             // the game colour palette.
             var lazerStorage = Host.Storage.GetStorageForDirectory("lazer");
-            lazerRealm = new RealmAccess(lazerStorage, "client.realm", Host.UpdateThread);
+            lazerRealm = CreateLazerRealmWithRecovery(lazerStorage, Host.UpdateThread);
             dependencies.Cache(lazerRealm);
             dependencies.Cache(lazerConfig = new OsuConfigManager(lazerStorage));
             // DrawableHitObject resolves the game-level IGameplaySettings for combo-colour
@@ -153,6 +154,64 @@ namespace JukeBox.Game
             // already sitting in FrameStatistics by the time base.LoadComplete() runs.
             showFps = config.GetBindable<bool>(JukeBoxSetting.ShowFps);
             showFps.BindValueChanged(e => FrameStatistics.Value = FrameStatisticsModeFor(e.NewValue), true);
+        }
+
+        /// <summary>
+        /// Opens the lazer-side realm database, recovering from a corrupt/unopenable file by
+        /// deleting it and retrying once. A hard-crash on corrupt realm is a known lazer startup
+        /// failure mode (ppy/osu#16441) — but unlike lazer, this database is entirely throwaway
+        /// (default key bindings and ruleset configs regenerate), so deletion is always safe.
+        /// A second failure (a genuinely broken environment) propagates.
+        /// Internal for testing (JukeBox.Game.Tests has InternalsVisibleTo).
+        /// </summary>
+        internal static RealmAccess CreateLazerRealmWithRecovery(osu.Framework.Platform.Storage storage, osu.Framework.Threading.GameThread? updateThread)
+        {
+            try
+            {
+                return openAndProbeRealm(storage, updateThread);
+            }
+            catch (Exception e)
+            {
+                osu.Framework.Logging.Logger.Error(e, "lazer realm database failed to open — deleting it and retrying (it only holds regenerable key-binding/ruleset-config data)");
+
+                try
+                {
+                    foreach (string f in storage.GetFiles(string.Empty, "client.realm*"))
+                        storage.Delete(f);
+
+                    foreach (string d in storage.GetDirectories(string.Empty))
+                    {
+                        if (d.StartsWith("client.realm", StringComparison.Ordinal))
+                            storage.DeleteDirectory(d);
+                    }
+                }
+                catch (Exception deleteError)
+                {
+                    // Deletion failing means the retry below will fail too and propagate the
+                    // real, more useful error — don't mask it with the cleanup failure.
+                    osu.Framework.Logging.Logger.Error(deleteError, "failed to delete lazer realm files");
+                }
+
+                return openAndProbeRealm(storage, updateThread);
+            }
+        }
+
+        private static RealmAccess openAndProbeRealm(osu.Framework.Platform.Storage storage, osu.Framework.Threading.GameThread? updateThread)
+        {
+            var realm = new RealmAccess(storage, "client.realm", updateThread);
+
+            try
+            {
+                // Corruption can surface on first real access rather than construction — force it
+                // now so the recovery path above sees it.
+                realm.Run(_ => { });
+                return realm;
+            }
+            catch
+            {
+                realm.Dispose();
+                throw;
+            }
         }
 
         protected override void Dispose(bool isDisposing)
