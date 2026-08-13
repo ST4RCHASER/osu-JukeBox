@@ -1,5 +1,7 @@
 #nullable enable
 
+using System.Collections.Generic;
+using System.Linq;
 using JukeBox.Game.Beatmaps;
 using JukeBox.Game.Online;
 using JukeBox.Game.Playback;
@@ -49,6 +51,12 @@ public partial class QueuePanel : CompositeDrawable
     private FillFlowContainer rowsFlow = null!;
 
     private bool shown;
+
+    /// <summary>Live rows keyed by their set (reference identity — matches how removal itself is
+    /// keyed via <c>queue.Items.Remove(set)</c>), so <see cref="rebuildRows"/> can diff against
+    /// <see cref="MusicQueue.Items"/> instead of tearing down and recreating every row on every
+    /// mutation — needed so only the row that actually changed animates.</summary>
+    private readonly Dictionary<BeatmapSetInfo, QueueRow> rows = new();
 
     public QueuePanel(bool docked = false)
     {
@@ -129,6 +137,11 @@ public partial class QueuePanel : CompositeDrawable
                             AutoSizeAxes = Axes.Y,
                             Direction = FillDirection.Vertical,
                             Spacing = new Vector2(0, Theme.RowSpacing),
+                            // Animates the reflow as rows are added/removed around each other —
+                            // this is what actually makes a removed row's departure read as a
+                            // "collapse" rather than the remaining rows instantly snapping up.
+                            LayoutDuration = (float)Theme.DurationNormal,
+                            LayoutEasing = Theme.EaseEnter,
                         }
                     }
                 }
@@ -178,14 +191,46 @@ public partial class QueuePanel : CompositeDrawable
         ToggleVisibility();
     }
 
+    /// <summary>
+    /// Diffs against <see cref="MusicQueue.Items"/> instead of clearing and rebuilding wholesale —
+    /// a set that's still queued keeps its existing <see cref="QueueRow"/> untouched (so it never
+    /// re-flickers on an unrelated mutation elsewhere in the queue); a set that dropped out
+    /// animates its row out instead of vanishing instantly; a newly-queued set gets a fresh row
+    /// that animates in. New rows are always appended (queueing only ever adds at the end — see
+    /// <see cref="MusicQueue.Enqueue"/>), so flow order stays correct without needing to
+    /// re-sequence existing rows.
+    /// </summary>
     private void rebuildRows()
     {
         headerText.Text = $"Queue ({queue.Items.Count})";
 
-        rowsFlow.Clear();
+        var current = new HashSet<BeatmapSetInfo>(queue.Items);
+
+        foreach (var (set, row) in rows.ToList())
+        {
+            if (current.Contains(set))
+                continue;
+
+            rows.Remove(set);
+
+            // Scheduled rather than removing inline: onComplete fires from inside the row's own
+            // transform-completion processing (itself inside that row's Update() call), so
+            // disposing it synchronously right there corrupts the in-progress update walk
+            // (ObjectDisposedException on its children later in that same frame). Scheduling
+            // defers the removal to a fresh frame, outside that call stack.
+            row.AnimateOut(() => Schedule(() => rowsFlow.Remove(row, true)));
+        }
 
         foreach (var set in queue.Items)
-            rowsFlow.Add(new QueueRow(set, cache, () => queue.Items.Remove(set)));
+        {
+            if (rows.ContainsKey(set))
+                continue;
+
+            var row = new QueueRow(set, cache, () => queue.Items.Remove(set));
+            rows[set] = row;
+            rowsFlow.Add(row);
+            row.AnimateIn();
+        }
     }
 
     private partial class QueueRow : CompositeDrawable
@@ -194,6 +239,9 @@ public partial class QueuePanel : CompositeDrawable
         // but there's no need to do it 60 times a second either — throttled to roughly twice a
         // second, which is plenty responsive for a status label a human is watching.
         private const int poll_interval_frames = 30;
+
+        private const float slide_offset = 16;
+        private const float row_height = 32;
 
         private readonly BeatmapSetInfo set;
         private readonly BeatmapCache? cache;
@@ -210,7 +258,13 @@ public partial class QueuePanel : CompositeDrawable
             this.cache = cache;
 
             RelativeSizeAxes = Axes.X;
-            Height = 32;
+            Height = row_height;
+
+            // AnimateIn starts this row at Alpha 0 and AnimateOut fades it back down before
+            // removal — without AlwaysPresent, osu!framework throttles Update()/Scheduler
+            // ticking for a not-IsPresent (Alpha 0) drawable, which stalls its own FadeIn/FadeOut
+            // transforms indefinitely instead of letting them progress every frame as intended.
+            AlwaysPresent = true;
 
             Masking = true;
             CornerRadius = Theme.CornerRadius;
@@ -258,6 +312,27 @@ public partial class QueuePanel : CompositeDrawable
         {
             base.LoadComplete();
             ready = true;
+        }
+
+        /// <summary>Fades + slides the row in from the side — called once, right after this row
+        /// is first added to <c>rowsFlow</c> by <see cref="QueuePanel.rebuildRows"/>.</summary>
+        public void AnimateIn()
+        {
+            Alpha = 0;
+            X = slide_offset;
+            this.FadeIn(Theme.DurationNormal, Theme.EaseEnter);
+            this.MoveToX(0, Theme.DurationNormal, Theme.EaseEnter);
+        }
+
+        /// <summary>Fades out and collapses this row's own height (letting <c>rowsFlow</c>'s
+        /// <c>LayoutDuration</c> animate the remaining rows sliding up to fill the gap), then
+        /// invokes <paramref name="onComplete"/> — which the caller uses to actually remove this
+        /// row from its parent — once that animation finishes. Called once the owning set has
+        /// left the queue.</summary>
+        public void AnimateOut(System.Action onComplete)
+        {
+            this.FadeOut(Theme.DurationFast, Theme.EaseExit);
+            this.ResizeHeightTo(0, Theme.DurationNormal, Theme.EaseExit).OnComplete(_ => onComplete());
         }
 
         protected override bool OnHover(HoverEvent e)
