@@ -184,6 +184,13 @@ namespace JukeBox.Game
             // (HoverSampleDebounceComponent, used by every lazer settings control) resolve this.
             dependencies.Cache(new SessionStatics());
 
+            // Menu open/close sounds: every lazer OsuMenu (settings dropdowns included) hard-resolves
+            // this Component; OsuGameBase caches + adds it, so we must too or opening any dropdown
+            // crashes with DependencyNotRegisteredException.
+            var menuSamples = new osu.Game.Graphics.UserInterface.OsuMenuSamples();
+            dependencies.Cache(menuSamples);
+            Add(menuSamples);
+
             var config = new JukeBoxConfigManager(Host.Storage);
             dependencies.Cache(config);
 
