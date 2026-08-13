@@ -175,6 +175,117 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("still zero visible cards", () => !overlay.ChildrenOfType<BeatmapCard>().Any());
         }
 
+        // Docked mode (the three-column layout's permanent left column) is permanently visible from
+        // the moment it's loaded — no pop-in, no Show()/Hide() toggling.
+        [Test]
+        public void DockedInstanceStartsVisibleWithoutBeingShown()
+        {
+            BeatmapListingOverlay docked = null!;
+            AddStep("create docked overlay", () => Child = docked = new BeatmapListingOverlay(docked: true) { RelativeSizeAxes = Axes.Both });
+
+            AddAssert("starts visible", () => docked.State.Value == Visibility.Visible);
+        }
+
+        // Docked's Escape contract: blur the search box, never hide anything (there's nothing to
+        // hide — it's a permanent column, not an overlay).
+        [Test]
+        public void DockedInstanceEscapeUnfocusesWithoutHiding()
+        {
+            BeatmapListingOverlay docked = null!;
+            AddStep("create docked overlay and focus the search box", () =>
+            {
+                Child = docked = new BeatmapListingOverlay(docked: true) { RelativeSizeAxes = Axes.Both };
+            });
+            AddStep("focus + seed", () => docked.ShowWithInitialChar('a'));
+            AddUntilStep("search box focused", () => docked.SearchBox.HasFocus);
+
+            AddStep("press escape", () => InputManager.Key(Key.Escape));
+
+            AddUntilStep("search box unfocused", () => !docked.SearchBox.HasFocus);
+            AddAssert("still visible", () => docked.State.Value == Visibility.Visible);
+        }
+
+        // Docked's Enter contract: queues the selection but never closes anything (there being
+        // nothing to close), unlike the floating overlay's Enter-closes behaviour.
+        [Test]
+        public void DockedInstanceEnterQueuesWithoutClosing()
+        {
+            BeatmapListingOverlay docked = null!;
+            BeatmapSetInfo? dockedPicked = null;
+            AddStep("create docked overlay", () =>
+            {
+                Child = docked = new BeatmapListingOverlay(docked: true) { RelativeSizeAxes = Axes.Both };
+                docked.SetPicked += set => dockedPicked = set;
+            });
+
+            AddStep("type 'a' (focus + seed)", () => docked.ShowWithInitialChar('a'));
+            AddUntilStep("3 cards shown", () => docked.ChildrenOfType<BeatmapCard>().Count() == 3);
+
+            AddStep("press enter", () => InputManager.Key(Key.Enter));
+
+            AddUntilStep("first set picked", () => dockedPicked?.Id == mirror.Sets[0].Id);
+            AddAssert("stays visible (nothing to close)", () => docked.State.Value == Visibility.Visible);
+        }
+
+        // The "Filters" expander: collapsing it hides the chip rows (reclaiming vertical room for
+        // the results list in the narrow docked column) without disturbing the chips' own state —
+        // reopening shows the same selections, and TriggerClick still reaches a collapsed chip
+        // (filter changes aren't gated on visibility).
+        [Test]
+        public void FiltersExpanderCollapsesAndRestoresChipRows()
+        {
+            // Shown first (as every other search/filter test in this fixture does) — the debounced
+            // search's Scheduler only actually runs while the overlay is visible/present.
+            AddStep("type 'a'", () => overlay.ShowWithInitialChar('a'));
+            AddUntilStep("initial search ran", () => overlay.ChildrenOfType<BeatmapCard>().Count() == 3);
+
+            AddAssert("filters start expanded", () => overlay.FiltersExpanded);
+
+            AddStep("click the Filters toggle",
+                () => overlay.ChildrenOfType<ClickableContainer>().First(c => c.GetType().Name == "FiltersToggleButton").TriggerClick());
+            AddAssert("filters now collapsed", () => !overlay.FiltersExpanded);
+
+            AddStep("click a filter chip while collapsed (a change must still apply)",
+                () => overlay.ChildrenOfType<FilterChip>().Single(c => c.Text == "Loved").TriggerClick());
+            AddUntilStep("new search issued with the collapsed section's chip change", () => mirror.LastRequest?.Status == "loved");
+
+            AddStep("click the Filters toggle again",
+                () => overlay.ChildrenOfType<ClickableContainer>().First(c => c.GetType().Name == "FiltersToggleButton").TriggerClick());
+            AddAssert("filters expanded again", () => overlay.FiltersExpanded);
+        }
+
+        // "grid -> 1-col in narrow width": the docked left column (~380px, minus panel padding)
+        // never reaches the two-column threshold, so results render single-file there, while a wide
+        // host (like this test's own full-size Child) still gets two per row.
+        [Test]
+        public void CardsRenderSingleColumnWhenNarrow()
+        {
+            AddStep("type 'a'", () => overlay.ShowWithInitialChar('a'));
+            AddUntilStep("3 cards shown", () => overlay.ChildrenOfType<BeatmapCard>().Count() == 3);
+            AddAssert("wide host renders two columns", () =>
+            {
+                var cards = overlay.ChildrenOfType<BeatmapCard>().ToList();
+                return Math.Abs(cards[0].Width - cards[1].Width) < 0.5f && cards[0].Width < overlay.DrawWidth;
+            });
+
+            AddStep("narrow the host to the docked column's rough width", () =>
+            {
+                // Switch to an absolute width — RelativeSizeAxes.X (this scene's default, matching
+                // how the standalone/full-visuals overlay is hosted) would otherwise reinterpret
+                // 380 as 380x the parent's width instead of 380px.
+                overlay.RelativeSizeAxes = Axes.Y;
+                overlay.Width = 380;
+            });
+            // Compared against the cards' own flow container, not the overlay itself — the flow
+            // sits inside the overlay's own padding, so its DrawWidth is narrower than the
+            // overlay's.
+            AddUntilStep("cards now span the full (narrow) width", () =>
+            {
+                float flowWidth = overlay.ChildrenOfType<FillFlowContainer<BeatmapCard>>().Single().DrawWidth;
+                return overlay.ChildrenOfType<BeatmapCard>().All(c => Math.Abs(c.Width - flowWidth) < 0.5f);
+            });
+        }
+
         private static List<BeatmapSetInfo> fullRockPage(int page)
         {
             var list = new List<BeatmapSetInfo>();

@@ -113,5 +113,38 @@ namespace JukeBox.Game.Tests.Visual
 
             AddAssert("dropdown starts OsuDirect", () => overlay.MirrorDropdown.Current.Value == MirrorSource.OsuDirect);
         }
+
+        // Docked mode (the three-column layout's "Settings" tab body): permanently visible from
+        // load, no scrim/floating card, and Escape is a no-op (there's nothing here to close — the
+        // owning tab strip controls visibility via Alpha instead).
+        [Test]
+        public void DockedInstanceStartsVisibleAndEscapeDoesNotHideIt()
+        {
+            SettingsOverlay dockedOverlay = null!;
+            AddStep("create docked overlay", () => Child = dockedOverlay = new SettingsOverlay(docked: true));
+
+            AddAssert("starts visible", () => dockedOverlay.State.Value == Visibility.Visible);
+
+            AddStep("press escape", () => InputManager.Key(Key.Escape));
+            AddAssert("still visible", () => dockedOverlay.State.Value == Visibility.Visible);
+        }
+
+        // Docked content wires up to config exactly like the floating modal — same checkboxes,
+        // same bindables, just different chrome around them.
+        [Test]
+        public void DockedInstanceChecksBoxUpdatesConfigBindable()
+        {
+            SettingsOverlay dockedOverlay = null!;
+            AddStep("create docked overlay", () => Child = dockedOverlay = new SettingsOverlay(docked: true));
+            AddAssert("config starts false", () => config.Get<bool>(JukeBoxSetting.ShowFps) == false);
+
+            AddStep("click the checkbox", () =>
+            {
+                InputManager.MoveMouseTo(dockedOverlay.ShowFpsCheckbox);
+                InputManager.Click(MouseButton.Left);
+            });
+
+            AddAssert("config bindable flipped to true", () => config.Get<bool>(JukeBoxSetting.ShowFps));
+        }
     }
 }
