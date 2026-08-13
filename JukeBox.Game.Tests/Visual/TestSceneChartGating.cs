@@ -2,6 +2,7 @@
 
 using System.IO;
 using JukeBox.Game.Beatmaps;
+using JukeBox.Game.Charts;
 using JukeBox.Game.Configuration;
 using JukeBox.Game.Playback;
 using JukeBox.Game.Screens;
@@ -146,12 +147,11 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("remove visuals", () => Remove(visuals, true));
         }
 
-        // The actual user-reported case, reproduced: storyboard-heavy sets are often mania/taiko-
-        // only (e.g. cached sets 154156 and 1986088 — every diff Mode 3). Chart + hitsounds are
-        // CORRECTLY unavailable there, but this used to be completely silent — no log, nothing to
-        // distinguish it from a bug. Now the reason is recorded and logged.
+        // Mania (and taiko/catch) sets now get NATIVE chart renderers — the old "mode 3 is
+        // chartless" gate is gone. The storyboard-heavy mania-only sets that motivated the
+        // silent-gate fix (cached 154156, 1986088) render a mania chart + hitsounds instead.
         [Test]
-        public void ManiaOnlyStoryboardSetReportsWhyChartIsUnavailable()
+        public void ManiaOnlyStoryboardSetGetsAManiaChart()
         {
             BeatmapVisuals visuals = null!;
             CachedBeatmapSet maniaSet = null!;
@@ -161,8 +161,8 @@ namespace JukeBox.Game.Tests.Visual
                 string dir = Path.Combine(tmp, "mania");
                 Directory.CreateDirectory(dir);
                 File.WriteAllText(Path.Combine(dir, "mania [4K].osu"),
-                    "osu file format v14\n\n[General]\nAudioFilename: audio.wav\nMode: 3\n\n[Metadata]\nVersion:4K\n\n" +
-                    "[TimingPoints]\n0,500,4,1,0,100,1,0\n\n[HitObjects]\n64,192,1000,1,0\n");
+                    "osu file format v14\n\n[General]\nAudioFilename: audio.wav\nMode: 3\n\n[Metadata]\nVersion:4K\n\n[Difficulty]\nCircleSize:4\n\n" +
+                    "[TimingPoints]\n0,500,4,1,0,100,1,0\n\n[HitObjects]\n64,192,1000,1,0\n448,192,1500,128,0,2500:0:0:0:0:\n");
                 File.Copy(fixture("heron.osb"), Path.Combine(dir, "mania.osb"));
 
                 var cache = new BeatmapCache(Path.Combine(tmp, "unused2"), new JukeBox.Game.Tests.Beatmaps.FileMirror(Path.Combine(tmp, "unused.osz")));
@@ -176,13 +176,45 @@ namespace JukeBox.Game.Tests.Visual
 
             AddUntilStep("visuals loaded", () => visuals.IsLoaded);
 
-            // The user's symptom — with the settings ON, no chart and no hitsounds...
+            AddUntilStep("mania chart present", () => visuals.ChartRenderer is ManiaChartLayer);
+            AddAssert("both objects compiled (note + hold)", () => visuals.ChartObjectCount == 2);
+            AddAssert("hitsound player present", () => visuals.HasHitSoundPlayer);
+            AddAssert("no unavailability reason", () => visuals.ChartUnavailableReason == null);
+
+            AddStep("remove visuals", () => Remove(visuals, true));
+        }
+
+        // Unknown FUTURE modes remain chartless — and, per the silent-gate post-mortem, never
+        // silently: the reason is still recorded and logged.
+        [Test]
+        public void UnknownModeSetReportsWhyChartIsUnavailable()
+        {
+            BeatmapVisuals visuals = null!;
+            CachedBeatmapSet weirdSet = null!;
+
+            AddStep("build unknown-mode set", () =>
+            {
+                string dir = Path.Combine(tmp, "weird");
+                Directory.CreateDirectory(dir);
+                File.WriteAllText(Path.Combine(dir, "weird [??].osu"),
+                    "osu file format v14\n\n[General]\nAudioFilename: audio.wav\nMode: 7\n\n[Metadata]\nVersion:??\n\n" +
+                    "[TimingPoints]\n0,500,4,1,0,100,1,0\n\n[HitObjects]\n64,192,1000,1,0\n");
+
+                var cache = new BeatmapCache(Path.Combine(tmp, "unused3"), new JukeBox.Game.Tests.Beatmaps.FileMirror(Path.Combine(tmp, "unused.osz")));
+                weirdSet = cache.LoadFromDirectory(999999, dir);
+            });
+
+            AddStep("create visuals", () => Add(visuals = new BeatmapVisuals(weirdSet, idleClock)
+            {
+                RelativeSizeAxes = Axes.Both,
+            }));
+
+            AddUntilStep("visuals loaded", () => visuals.IsLoaded);
+
             AddAssert("no chart layer", () => !visuals.HasChartLayer);
             AddAssert("no hitsound player", () => !visuals.HasHitSoundPlayer);
-
-            // ...but never silently: the reason is recorded (and logged) now.
-            AddAssert("unavailability reason names the game mode",
-                () => visuals.ChartUnavailableReason?.Contains("game mode 3") == true);
+            AddAssert("unavailability reason names the unknown mode",
+                () => visuals.ChartUnavailableReason?.Contains("unknown game mode 7") == true);
 
             AddStep("remove visuals", () => Remove(visuals, true));
         }
