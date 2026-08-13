@@ -31,13 +31,16 @@ namespace JukeBox.Game.UI;
 public partial class SettingsOverlay : FocusedOverlayContainer
 {
     private const float panel_width = 360;
-    private const float fade_duration = 200;
 
     /// <summary>See the class summary.</summary>
     private readonly bool docked;
 
     [Resolved]
     private JukeBoxConfigManager config { get; set; } = null!;
+
+    // Only ever assigned (and used) in the floating branch of load() — a docked instance has no
+    // card to pop, and its PopIn/PopOut are both guarded no-ops (see their own comments below).
+    private Container? panelCard;
 
     private BasicCheckbox showFpsCheckbox = null!;
     private BasicCheckbox renderChartCheckbox = null!;
@@ -103,7 +106,7 @@ public partial class SettingsOverlay : FocusedOverlayContainer
                     RelativeSizeAxes = Axes.Both,
                     Colour = Theme.ModalScrim,
                 },
-                new Container
+                panelCard = new Container
                 {
                     Anchor = Anchor.Centre,
                     Origin = Anchor.Centre,
@@ -231,13 +234,19 @@ public partial class SettingsOverlay : FocusedOverlayContainer
     protected override void PopIn()
     {
         if (!docked)
-            this.FadeIn(fade_duration, Easing.OutQuint);
+        {
+            this.FadeIn(Theme.DurationNormal, Theme.EaseEnter);
+            panelCard!.ScaleTo(Theme.PopScale).Then().ScaleTo(1f, Theme.DurationNormal, Theme.EaseEnter);
+        }
     }
 
     protected override void PopOut()
     {
         if (!docked)
-            this.FadeOut(fade_duration, Easing.OutQuint);
+        {
+            this.FadeOut(Theme.DurationFast, Theme.EaseExit);
+            panelCard!.ScaleTo(Theme.PopScale, Theme.DurationFast, Theme.EaseExit);
+        }
     }
 
     protected override bool OnKeyDown(KeyDownEvent e)

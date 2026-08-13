@@ -75,6 +75,17 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
     private const double debounce_ms = 300;
     private const int page_size = 30;
 
+    /// <summary>Cards that weren't already on screen fade+rise in, staggered by this many ms per
+    /// card — capped at <see cref="max_stagger_cards"/> so a large page doesn't feel sluggish.</summary>
+    private const double card_stagger_interval = 30;
+
+    /// <summary>Cap on how many cards' worth of stagger delay accumulates before further cards
+    /// all start together (see <see cref="card_stagger_interval"/>).</summary>
+    private const int max_stagger_cards = 10;
+
+    /// <summary>Vertical offset a card rises from as it fades in.</summary>
+    private const float card_rise_offset = 16;
+
     /// <summary>How close (px) to the bottom of the scroll the user must be before the next page
     /// is requested.</summary>
     private const float scroll_load_threshold = 200;
@@ -113,6 +124,11 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
     /// "Filters" section is currently expanded.</summary>
     internal bool FiltersExpanded => filtersExpanded;
 
+    /// <summary>Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the animated
+    /// Alpha of the "Filters" section's expand/collapse, to assert the animation itself actually
+    /// completes rather than only the instant <see cref="FiltersExpanded"/> flag.</summary>
+    internal float FiltersBodyAlpha => filtersBody.Alpha;
+
     private ScheduledDelegate? debounceDelegate;
 
     // Guards against a slower, older search response overwriting the results of a newer one that
@@ -144,6 +160,11 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
     private int currentPage;
     private bool isLoading;
     private bool hasMore;
+
+    /// <summary>Sets already rendered as of the last <see cref="rebuildCards"/> call — only cards
+    /// for sets NOT in here animate in, so an already-visible card never re-flickers on an
+    /// unrelated rebuild (e.g. a page append, or a client-side filter toggle).</summary>
+    private readonly HashSet<BeatmapSetInfo> previouslyShownSets = new HashSet<BeatmapSetInfo>();
 
     /// <summary>Auto-chained fetches consumed since the last user action — see
     /// <see cref="max_auto_chain_pages"/>.</summary>
@@ -226,6 +247,10 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
             AutoSizeAxes = Axes.Y,
             Direction = FillDirection.Vertical,
             Spacing = new Vector2(0, Theme.RowSpacing),
+            // Animates the reflow when filtersBody's presence toggles (see updateFiltersExpanded)
+            // so the "Filters" section reads as an expand/collapse rather than an instant jump.
+            LayoutDuration = (float)Theme.DurationNormal,
+            LayoutEasing = Theme.EaseEnter,
             Children = new Drawable[]
             {
                 searchBox = new ListingSearchBox
@@ -339,7 +364,16 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
 
     private void updateFiltersExpanded()
     {
-        filtersBody.Alpha = filtersExpanded ? 1 : 0;
+        // filtersBody deliberately has no AlwaysPresent (see its construction comment — a
+        // FillFlowContainer skips non-present children when flowing, which is what makes the
+        // collapsed state reclaim its space). But that same not-present state also throttles the
+        // drawable's own Update()/transform ticking, so re-expanding via a fade starting exactly
+        // at Alpha 0 would never progress — nudging it to a barely-nonzero value first restores
+        // presence (and ticking) immediately, with no visible difference from 0.
+        if (filtersExpanded && filtersBody.Alpha <= 0)
+            filtersBody.Alpha = 0.0001f;
+
+        filtersBody.FadeTo(filtersExpanded ? 1 : 0, Theme.DurationNormal, filtersExpanded ? Theme.EaseEnter : Theme.EaseExit);
         filtersToggleText.Text = filtersExpanded ? "▾ Filters" : "▸ Filters";
     }
 
@@ -788,10 +822,13 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
         if (visible.Count == 0)
         {
             statusText.Text = loadedSets.Count == 0 ? "no results" : "no results (client-side genre/language filter)";
+            previouslyShownSets.Clear();
             return;
         }
 
         statusText.Text = string.Empty;
+
+        int newCardIndex = 0;
 
         foreach (var set in visible)
         {
@@ -805,6 +842,29 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
             // dim it visually but still let it absorb clicks and show hover/press feedback.
             card.Action = set.DownloadDisabled ? null : () => pick(card);
             cardsFlow.Add(card);
+
+            // Only cards that weren't already rendered animate in — a card that was already on
+            // screen before this rebuild (e.g. every existing card during a page-append, or a
+            // still-matching card after a client-side filter toggle) is left exactly as it was,
+            // rather than flickering out and back in for no visual reason.
+            if (!previouslyShownSets.Contains(set))
+            {
+                double delay = Math.Min(newCardIndex, max_stagger_cards - 1) * card_stagger_interval;
+                newCardIndex++;
+
+                // Fade to the card's own resting alpha, not a hardcoded 1 — BeatmapCard.load()
+                // already dims download-disabled sets to 0.4, and this entrance animation must
+                // not undo that once it finishes.
+                float targetAlpha = card.Alpha;
+
+                card.Alpha = 0;
+                card.Y = card_rise_offset;
+                card.Delay(delay).FadeTo(targetAlpha, Theme.DurationNormal, Theme.EaseEnter);
+                card.Delay(delay).MoveToY(0, Theme.DurationNormal, Theme.EaseEnter);
+            }
         }
+
+        previouslyShownSets.Clear();
+        previouslyShownSets.UnionWith(visible);
     }
 }

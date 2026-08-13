@@ -66,9 +66,12 @@ public partial class MainScreen : Screen
 
     private Bindable<UiLayout> uiLayout = null!;
 
+    private const float tab_slide_offset = 20;
+
     private Container visualsHost = null!;
     private Container playerBox = null!;
     private ScreenStack visualsStack = null!;
+    private NowPlayingBar bottomBar = null!;
 
     private BeatmapListingOverlay listing = null!;
     private QueuePanel queuePanel = null!;
@@ -92,6 +95,27 @@ public partial class MainScreen : Screen
     /// </summary>
     internal Container RightColumn { get; private set; } = null!;
 
+    /// <summary>
+    /// Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the boxed player panel —
+    /// asserts it actually masks its content (so the visuals stack can never render outside its
+    /// own bounds, however it tries to overflow internally) without depending on layout internals.
+    /// </summary>
+    internal Container PlayerBox => playerBox;
+
+    /// <summary>
+    /// Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the visuals stack, to
+    /// assert it's parented inside <see cref="PlayerBox"/> (the masked box) rather than some
+    /// other, unmasked part of the hierarchy.
+    /// </summary>
+    internal ScreenStack VisualsStack => visualsStack;
+
+    /// <summary>
+    /// Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the padding that insets
+    /// <see cref="PlayerBox"/> away from the columns/bottom bar — non-zero on every side in
+    /// ThreeColumn mode is what makes it a gutter-framed box rather than a full-bleed underlay.
+    /// </summary>
+    internal MarginPadding VisualsHostPadding => visualsHost.Padding;
+
     private enum RightPanelTab
     {
         Queue,
@@ -110,6 +134,16 @@ public partial class MainScreen : Screen
 
         InternalChildren = new Drawable[]
         {
+            // The app's own background, sitting behind absolutely everything — the columns and
+            // bottom bar each paint their own opaque PanelSurface, and playerBox is masked to its
+            // own gutter-inset bounds (see below), so this is only ever actually visible in the
+            // thin SectionSpacing gutters between them. Without it those gutters fell through to
+            // the raw GL clear colour instead of the intended Theme background.
+            new Box
+            {
+                RelativeSizeAxes = Axes.Both,
+                Colour = Theme.Background,
+            },
             // The player is a BOXED panel (same card language as the columns: rounded, shadowed,
             // masked), not a full-bleed underlay the panels float over. visualsHost's padding
             // carves out the centre cell (applyLayout); the box inside it holds the actual player.
@@ -213,7 +247,7 @@ public partial class MainScreen : Screen
                     },
                 },
             },
-            new NowPlayingBar(),
+            bottomBar = new NowPlayingBar(),
             mapIdOverlay,
             createCornerPill(),
         };
@@ -231,10 +265,11 @@ public partial class MainScreen : Screen
 
         visualsStack.Push(new NowPlayingScreen());
 
-        selectTab(RightPanelTab.Queue);
+        selectTab(RightPanelTab.Queue, animate: false);
 
         uiLayout = config.GetBindable<UiLayout>(JukeBoxSetting.UiLayout);
-        uiLayout.BindValueChanged(e => applyLayout(e.NewValue), true);
+        applyLayout(uiLayout.Value, animate: false);
+        uiLayout.BindValueChanged(e => applyLayout(e.NewValue, animate: true));
 
         jukebox.Start();
         jukebox.LastError.BindValueChanged(e =>
@@ -281,17 +316,36 @@ public partial class MainScreen : Screen
     private void toggleFocusMode()
         => uiLayout.Value = uiLayout.Value == UiLayout.ThreeColumn ? UiLayout.Focus : UiLayout.ThreeColumn;
 
-    private void applyLayout(UiLayout layout)
+    /// <summary>
+    /// One orchestrated transition, reversed for either direction: both side columns slide out
+    /// past their own edge (+ fade), the bottom bar slides down off-screen (+ fade) and the
+    /// player box simultaneously expands to full-bleed (padding + rounding both animate away) —
+    /// so focus mode reads as pure fullscreen visuals with nothing left overlaying them, not just
+    /// the side columns disappearing. Restoring plays every part of that back in reverse.
+    /// </summary>
+    private void applyLayout(UiLayout layout, bool animate)
     {
         bool focus = layout == UiLayout.Focus;
 
-        LeftColumn.Alpha = focus ? 0 : 1;
-        RightColumn.Alpha = focus ? 0 : 1;
+        double duration = animate ? Theme.DurationSlow : 0;
+        Easing easing = focus ? Theme.EaseExit : Theme.EaseEnter;
+
+        LeftColumn.MoveToX(focus ? -(left_column_width + Theme.SectionSpacing) : 0, duration, easing);
+        LeftColumn.FadeTo(focus ? 0 : 1, duration, easing);
+
+        RightColumn.MoveToX(focus ? right_column_width + Theme.SectionSpacing : 0, duration, easing);
+        RightColumn.FadeTo(focus ? 0 : 1, duration, easing);
+
+        // Anchored BottomLeft: a positive Y pushes it straight down past the bottom edge.
+        bottomBar.MoveToY(focus ? bottom_bar_height + Theme.SectionSpacing : 0, duration, easing);
+        bottomBar.FadeTo(focus ? 0 : 1, duration, easing);
 
         // ThreeColumn: the player sits in its own box between the columns and above the bottom
-        // bar, with a visible gutter on every side. Focus: the box dissolves to full-bleed
-        // (padding + rounding removed; the bottom bar still overlays).
-        visualsHost.Padding = focus
+        // bar, with a visible gutter on every side that leaves room for the bar without ever
+        // being covered by it. Focus: the box dissolves to full-bleed (padding + rounding
+        // animate to zero; the bottom bar is sliding away in parallel above, not just sitting
+        // over the top of it).
+        var targetPadding = focus
             ? new MarginPadding()
             : new MarginPadding
             {
@@ -301,7 +355,8 @@ public partial class MainScreen : Screen
                 Bottom = bottom_bar_height + Theme.SectionSpacing,
             };
 
-        playerBox.CornerRadius = focus ? 0 : Theme.CornerRadius;
+        visualsHost.TransformTo(nameof(visualsHost.Padding), targetPadding, duration, easing);
+        playerBox.TransformTo(nameof(playerBox.CornerRadius), focus ? 0f : Theme.CornerRadius, duration, easing);
 
         // Defensive: drop keyboard focus before it ends up parked on a search box (or any other
         // input-consuming child) inside a column that just went Alpha 0 / non-present.
@@ -309,15 +364,49 @@ public partial class MainScreen : Screen
             GetContainingFocusManager()?.ChangeFocus(null);
     }
 
-    private void selectTab(RightPanelTab tab)
+    /// <summary>
+    /// Switches the right column's active tab body. <paramref name="animate"/> is false only for
+    /// the one-time initial call at <see cref="LoadComplete"/> (both bodies must land in their
+    /// correct state instantly, not mid-crossfade, before the first frame renders).
+    /// </summary>
+    private void selectTab(RightPanelTab tab, bool animate = true)
     {
+        // No-op re-selection (e.g. clicking an already-active tab, or Ctrl+Q while already on
+        // Queue) shouldn't restart the crossfade — but the one-time initial call must still apply
+        // regardless, since both bodies start at their construction-time default Alpha (1).
+        if (animate && tab == currentTab)
+            return;
+
         currentTab = tab;
 
-        queuePanel.Alpha = tab == RightPanelTab.Queue ? 1 : 0;
-        settingsBody.Alpha = tab == RightPanelTab.Settings ? 1 : 0;
+        double duration = animate ? Theme.DurationNormal : 0;
+
+        showTabBody(queuePanel, tab == RightPanelTab.Queue, duration);
+        showTabBody(settingsBody, tab == RightPanelTab.Settings, duration);
 
         queueTabButton.Active.Value = tab == RightPanelTab.Queue;
         settingsTabButton.Active.Value = tab == RightPanelTab.Settings;
+    }
+
+    /// <summary>
+    /// Crossfades <paramref name="body"/> to <paramref name="active"/>; the incoming body also
+    /// slides in ~20px from the right so a tab switch reads as one directional motion rather than
+    /// a flat alpha cut.
+    /// </summary>
+    private static void showTabBody(Drawable body, bool active, double duration)
+    {
+        if (active)
+        {
+            if (duration > 0)
+                body.X = tab_slide_offset;
+
+            body.FadeIn(duration, Theme.EaseEnter);
+            body.MoveToX(0, duration, Theme.EaseEnter);
+        }
+        else
+        {
+            body.FadeOut(duration, Theme.EaseExit);
+        }
     }
 
     private Drawable createTabHeader()
@@ -415,10 +504,15 @@ public partial class MainScreen : Screen
             Colour = Theme.Error,
             Text = message,
             Alpha = 0,
+            Scale = new Vector2(Theme.PopScale),
         };
 
         AddInternal(text);
-        text.FadeIn(200).Delay(4000).FadeOut(500).Expire();
+
+        // Two parallel sequences (fade, scale) rather than one chain — both need to pop in
+        // together, sit for the same 4s dwell, then pop back out together before expiring.
+        text.FadeIn(Theme.DurationNormal, Theme.EaseEnter).Delay(4000).FadeOut(Theme.DurationSlow, Theme.EaseExit).Expire();
+        text.ScaleTo(1f, Theme.DurationNormal, Theme.EaseEnter).Delay(4000).ScaleTo(Theme.PopScale, Theme.DurationSlow, Theme.EaseExit);
     }
 
     /// <summary>

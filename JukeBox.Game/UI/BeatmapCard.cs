@@ -75,6 +75,15 @@ public partial class BeatmapCard : ClickableContainer
     {
         Padding = new MarginPadding(gutter);
 
+        // The listing's entrance animation (BeatmapListingOverlay.rebuildCards) fades a newly
+        // added card in from Alpha 0 rather than adding it fully visible. Without AlwaysPresent,
+        // osu!framework throttles Update()/transform ticking for a not-present (Alpha 0) drawable,
+        // which stalls that very FadeIn indefinitely instead of letting it progress every frame —
+        // and separately, a not-present card is also un-hittable (IsPresent requires Alpha > 0)
+        // for real mouse-driven clicks (as opposed to TriggerClick()) going through actual
+        // hit-testing.
+        AlwaysPresent = true;
+
         Child = content = new Container
         {
             RelativeSizeAxes = Axes.Both,

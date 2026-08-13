@@ -99,6 +99,37 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("settings tab inactive", () => screen.ChildrenOfType<SettingsOverlay>().Single().Alpha == 0);
         }
 
+        // Regression coverage for a true contained player: the video/storyboard/background
+        // visuals must never render outside the boxed centre panel — not behind the side columns,
+        // not behind the bottom bar. Masking on the box is what actually enforces this (it clips
+        // everything inside, however far the visuals try to overflow); the geometry assertions
+        // below confirm the box itself is never positioned/sized to reach under a panel in the
+        // first place.
+        [Test]
+        public void PlayerBoxMasksVisualsAndNeverExtendsUnderAPanel()
+        {
+            AddAssert("player box masks its own content", () => screen.PlayerBox.Masking);
+            AddAssert("box has a gutter on every side in normal mode", () =>
+                screen.VisualsHostPadding.Left > 0 && screen.VisualsHostPadding.Right > 0
+                && screen.VisualsHostPadding.Top > 0 && screen.VisualsHostPadding.Bottom > 0);
+            AddAssert("the visuals stack lives inside the masked box, not some other unmasked parent",
+                () => screen.PlayerBox.ChildrenOfType<ScreenStack>().Any(s => s == screen.VisualsStack));
+
+            AddAssert("box never reaches under the left column", () =>
+                screen.PlayerBox.ScreenSpaceDrawQuad.TopLeft.X >= screen.LeftColumn.ScreenSpaceDrawQuad.TopRight.X);
+            AddAssert("box never reaches under the right column", () =>
+                screen.PlayerBox.ScreenSpaceDrawQuad.TopRight.X <= screen.RightColumn.ScreenSpaceDrawQuad.TopLeft.X);
+            AddAssert("box never reaches under the bottom bar", () =>
+                screen.PlayerBox.ScreenSpaceDrawQuad.BottomLeft.Y
+                <= screen.ChildrenOfType<NowPlayingBar>().Single().ScreenSpaceDrawQuad.TopLeft.Y);
+
+            AddStep("enter focus mode", () => InputManager.Key(Key.Tab));
+            AddUntilStep("box padding animated away to full-bleed", () =>
+                screen.VisualsHostPadding.Left == 0 && screen.VisualsHostPadding.Right == 0
+                && screen.VisualsHostPadding.Top == 0 && screen.VisualsHostPadding.Bottom == 0);
+            AddAssert("still masked in focus mode", () => screen.PlayerBox.Masking);
+        }
+
         [Test]
         public void TypingFocusesAndSeedsTheDockedSearchBox()
         {
@@ -126,19 +157,26 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("listing still present in the hierarchy", () => screen.ChildrenOfType<BeatmapListingOverlay>().Any());
         }
 
+        // Focus mode is now an animated transition (side columns + bottom bar all slide/fade out
+        // together, reversed on restore — see MainScreen.applyLayout), so the Alpha assertions
+        // need to poll (AddUntilStep) rather than land true on the very next frame.
         [Test]
         public void TabTogglesFocusMode()
         {
             AddAssert("both columns shown initially", () => screen.LeftColumn.Alpha == 1 && screen.RightColumn.Alpha == 1);
+            AddAssert("bottom bar shown initially", () => screen.ChildrenOfType<NowPlayingBar>().Single().Alpha == 1);
             AddAssert("config starts ThreeColumn", () => config.Get<UiLayout>(JukeBoxSetting.UiLayout) == UiLayout.ThreeColumn);
 
             AddStep("press tab", () => InputManager.Key(Key.Tab));
-            AddAssert("both columns hidden (focus mode)", () => screen.LeftColumn.Alpha == 0 && screen.RightColumn.Alpha == 0);
             AddAssert("config persisted Focus", () => config.Get<UiLayout>(JukeBoxSetting.UiLayout) == UiLayout.Focus);
+            AddUntilStep("both columns hidden (focus mode)", () => screen.LeftColumn.Alpha == 0 && screen.RightColumn.Alpha == 0);
+            AddUntilStep("bottom bar hidden too — focus mode is pure fullscreen visuals",
+                () => screen.ChildrenOfType<NowPlayingBar>().Single().Alpha == 0);
 
             AddStep("press tab again", () => InputManager.Key(Key.Tab));
-            AddAssert("both columns shown again", () => screen.LeftColumn.Alpha == 1 && screen.RightColumn.Alpha == 1);
             AddAssert("config back to ThreeColumn", () => config.Get<UiLayout>(JukeBoxSetting.UiLayout) == UiLayout.ThreeColumn);
+            AddUntilStep("both columns shown again", () => screen.LeftColumn.Alpha == 1 && screen.RightColumn.Alpha == 1);
+            AddUntilStep("bottom bar shown again", () => screen.ChildrenOfType<NowPlayingBar>().Single().Alpha == 1);
         }
 
         // Type-anywhere-to-search only makes sense while the column hosting the search box is
@@ -173,7 +211,9 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("click the corner gear button",
                 () => screen.ChildrenOfType<IconButton>().Single(b => b.Icon.Equals(FontAwesome.Solid.Cog)).TriggerClick());
 
-            AddAssert("settings tab now active", () => settingsBody.Alpha == 1 && queuePanel.Alpha == 0);
+            // The tab switch crossfades (see MainScreen.showTabBody) rather than cutting
+            // instantly, so this needs to poll rather than assert on the very next frame.
+            AddUntilStep("settings tab now active", () => settingsBody.Alpha == 1 && queuePanel.Alpha == 0);
         }
 
         // Regression coverage for Ctrl+Q: still a "jump to queue" shortcut, now switching the tab
@@ -189,7 +229,7 @@ namespace JukeBox.Game.Tests.Visual
                 settingsBody = screen.ChildrenOfType<SettingsOverlay>().Single();
                 screen.ChildrenOfType<IconButton>().Single(b => b.Icon.Equals(FontAwesome.Solid.Cog)).TriggerClick();
             });
-            AddAssert("settings tab active", () => settingsBody.Alpha == 1);
+            AddUntilStep("settings tab active", () => settingsBody.Alpha == 1);
 
             AddStep("press ctrl+q", () =>
             {
@@ -198,7 +238,7 @@ namespace JukeBox.Game.Tests.Visual
                 InputManager.ReleaseKey(Key.ControlLeft);
             });
 
-            AddAssert("queue tab active again", () => queuePanel.Alpha == 1 && settingsBody.Alpha == 0);
+            AddUntilStep("queue tab active again", () => queuePanel.Alpha == 1 && settingsBody.Alpha == 0);
         }
 
         // Regression coverage for the map-ID button: unaffected by the right column's tab state,
