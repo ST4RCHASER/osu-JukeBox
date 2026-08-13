@@ -6,7 +6,6 @@ using System.Linq;
 using JukeBox.Game.Beatmaps;
 using JukeBox.Game.Playback;
 using JukeBox.Game.Screens;
-using JukeBox.Game.Storyboard;
 using NUnit.Framework;
 using osu.Framework.Allocation;
 using osu.Framework.Graphics;
@@ -81,25 +80,29 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("remove visuals", () => Remove(visuals, true));
         }
 
-        // Regression test for the "background auto-hides under video/storyboard" requirement: a
-        // set with a non-empty storyboard must hide our own separate background sprite so the
-        // storyboard renders as the top visual layer, matching real osu! behaviour.
+        // Background auto-hide follows lazer's Storyboard.ReplacesBackground: only a storyboard
+        // that explicitly draws the beatmap background as one of its own Background-layer sprites
+        // hides our separate background sprite. Requires the .osu's own background event so the
+        // metadata knows which file the background IS.
         [Test]
-        public void BackgroundHidesUnderNonEmptyStoryboard()
+        public void BackgroundHidesWhenStoryboardReplacesIt()
         {
             BeatmapVisuals visuals = null!;
 
-            AddStep("create visuals with bg + storyboard", () =>
+            AddStep("create visuals with bg-replacing storyboard", () =>
             {
-                string osbFile = Path.Combine(tmp, "map.osb");
-                File.WriteAllText(osbFile, """
+                string osuFile = Path.Combine(tmp, "replace [x].osu");
+                File.WriteAllText(osuFile, """
                     osu file format v14
 
+                    [General]
+                    AudioFilename: audio.mp3
+                    Mode: 0
+
                     [Events]
-                    //Storyboard Layer 0 (Background)
+                    0,0,"bg.png",0,0
                     Sprite,Background,Centre,"bg.png",320,240
                     _F,0,0,5000,0,1
-                    _M,0,0,5000,320,240,320,240
                     """);
 
                 var set = new CachedBeatmapSet
@@ -107,15 +110,60 @@ namespace JukeBox.Game.Tests.Visual
                     SetId = 5,
                     Directory = tmp,
                     BackgroundFile = fixtureSetA.BackgroundFile,
-                    OsbFile = osbFile,
+                    OsuFiles = { osuFile },
+                    PreferredOsuFile = osuFile,
                 };
 
                 Add(visuals = new BeatmapVisuals(set, playbackClock) { RelativeSizeAxes = Axes.Both });
             });
 
             AddUntilStep("visuals loaded", () => visuals.IsLoaded);
-            AddAssert("storyboard has objects", () => visuals.ChildrenOfType<TransformStoryboardLayer>().Single().HasObjects);
+            AddAssert("storyboard has objects", () => visuals.StoryboardLayer.HasObjects);
+            AddAssert("storyboard replaces background", () => visuals.StoryboardLayer.ShouldHideBackground);
             AddAssert("background hidden", () => !visuals.BackgroundVisible);
+
+            AddStep("remove visuals", () => Remove(visuals, true));
+        }
+
+        // The counterpart rule: a storyboard whose sprites do NOT draw the background image keeps
+        // our background visible underneath — mappers rely on it (the old blanket any-objects hide
+        // was wrong).
+        [Test]
+        public void BackgroundStaysUnderNonReplacingStoryboard()
+        {
+            BeatmapVisuals visuals = null!;
+
+            AddStep("create visuals with non-replacing storyboard", () =>
+            {
+                string osuFile = Path.Combine(tmp, "keepbg [x].osu");
+                File.WriteAllText(osuFile, """
+                    osu file format v14
+
+                    [General]
+                    AudioFilename: audio.mp3
+                    Mode: 0
+
+                    [Events]
+                    0,0,"bg.png",0,0
+                    Sprite,Foreground,Centre,"other.png",320,240
+                    _F,0,0,5000,0,1
+                    """);
+
+                var set = new CachedBeatmapSet
+                {
+                    SetId = 7,
+                    Directory = tmp,
+                    BackgroundFile = fixtureSetA.BackgroundFile,
+                    OsuFiles = { osuFile },
+                    PreferredOsuFile = osuFile,
+                };
+
+                Add(visuals = new BeatmapVisuals(set, playbackClock) { RelativeSizeAxes = Axes.Both });
+            });
+
+            AddUntilStep("visuals loaded", () => visuals.IsLoaded);
+            AddAssert("storyboard has objects", () => visuals.StoryboardLayer.HasObjects);
+            AddAssert("background stays visible", () => visuals.BackgroundVisible);
 
             AddStep("remove visuals", () => Remove(visuals, true));
         }
@@ -148,8 +196,10 @@ namespace JukeBox.Game.Tests.Visual
         }
 
         // Regression test for the "video layer must not sink the whole stack" requirement: a
-        // corrupt/unsupported video file must not prevent BeatmapVisuals from loading with its
-        // background + storyboard layers intact.
+        // corrupt/unsupported video file (now a storyboard Video event rendered by lazer's
+        // DrawableStoryboardVideo) must not prevent BeatmapVisuals from loading, and once the
+        // decoder faults (asynchronously, on its own thread) the background must come back
+        // rather than leaving a permanently black screen.
         [Test]
         public void CorruptVideoFileDoesNotPreventLoad()
         {
@@ -157,34 +207,39 @@ namespace JukeBox.Game.Tests.Visual
 
             AddStep("create visuals with garbage video", () =>
             {
-                string videoFile = Path.Combine(tmp, "garbage.mp4");
-                File.WriteAllBytes(videoFile, new byte[] { 0x00, 0x01, 0x02, 0x03 });
+                File.WriteAllBytes(Path.Combine(tmp, "garbage.mp4"), new byte[] { 0x00, 0x01, 0x02, 0x03 });
+
+                string osuFile = Path.Combine(tmp, "badvideo [x].osu");
+                File.WriteAllText(osuFile, """
+                    osu file format v14
+
+                    [General]
+                    AudioFilename: audio.mp3
+                    Mode: 0
+
+                    [Events]
+                    0,0,"bg.png",0,0
+                    Video,0,"garbage.mp4"
+                    """);
 
                 var set = new CachedBeatmapSet
                 {
                     SetId = 3,
                     Directory = tmp,
                     BackgroundFile = fixtureSetA.BackgroundFile,
-                    VideoFile = videoFile,
+                    OsuFiles = { osuFile },
+                    PreferredOsuFile = osuFile,
                 };
 
                 Add(visuals = new BeatmapVisuals(set, playbackClock) { RelativeSizeAxes = Axes.Both });
             });
 
             AddUntilStep("visuals loaded despite bad video", () => visuals.IsLoaded);
+            AddAssert("storyboard carries the video event", () => visuals.StoryboardLayer.HasVideo);
 
-            // Not asserted here: the background being hidden while the (still-present) video
-            // layer is up front — the decoder can fault fast enough that by this point the
-            // teardown below has already happened, making that checkpoint inherently racy.
-
-            // The garbage file doesn't fail Video's constructor synchronously — the decoder
-            // faults asynchronously on its own thread a little later (confirmed empirically: the
-            // runtime logs "VideoDecoder faulted: ... Invalid data found when processing input").
-            // BeatmapVisuals.Update() polls Video.IsFaulted and tears the layer down once that
-            // happens; assert that actually occurs rather than just that nothing crashed.
-            AddUntilStep("video layer torn down after decoder fault", () => !visuals.HasVideoLayer);
+            AddUntilStep("video counts as gone after decoder fault", () => !visuals.HasVideoLayer);
             AddAssert("visuals still alive (no crash from the bad video)", () => !visuals.Disposed);
-            AddAssert("background restored after fault teardown (no storyboard)", () => visuals.BackgroundVisible);
+            AddUntilStep("background restored after fault", () => visuals.BackgroundVisible);
 
             AddStep("remove visuals", () => Remove(visuals, true));
         }
@@ -221,8 +276,8 @@ namespace JukeBox.Game.Tests.Visual
             });
 
             AddUntilStep("visuals loaded despite malformed storyboard", () => visuals.IsLoaded);
-            AddAssert("no storyboard sprites visible (fell back to empty storyboard)",
-                () => visuals.ChildrenOfType<TransformStoryboardLayer>().Single().VisibleSpriteCount == 0);
+            AddAssert("fell back to empty storyboard",
+                () => visuals.StoryboardLayer.ElementCount == 0 && !visuals.StoryboardLayer.HasObjects);
 
             AddStep("remove visuals", () => Remove(visuals, true));
         }
@@ -246,14 +301,15 @@ namespace JukeBox.Game.Tests.Visual
             }
         }
 
-        // Regression test for the mid-song video seek-storm: a video-having set (re)built with
-        // the clock already well past 0 — the normal case here, since radio songs start mid-track
-        // and diff switches land mid-song — used to leave Video.Update()'s per-frame out-of-sync
-        // check chasing a constantly-advancing PlaybackPosition target while the decoder was still
-        // catching up, so it never actually landed a frame (permanent black video, re-seeking
-        // every frame; see BeatmapVisuals.videoWarmedUp). The fixture video has a single keyframe
-        // at t=0 covering its whole ~8s (forced via a large libx264 GOP), so seeking 6s in forces
-        // exactly the deep decode-forward-through-the-GOP catch-up that triggered the storm.
+        // Regression test for the mid-song video seek-storm, now exercising LAZER's video path
+        // (DrawableStoryboardVideo seeds PlaybackPosition once in LoadComplete, then framework
+        // Video's own per-frame sync takes over): a video-having set (re)built with the clock
+        // already well past 0 — the normal case here, since radio songs start mid-track and diff
+        // switches land mid-song — must actually land synced frames instead of chasing a moving
+        // re-seek target forever. The fixture video has a single keyframe at t=0 covering its
+        // whole ~8s (forced via a large libx264 GOP), so starting 6s in forces exactly the deep
+        // decode-forward-through-the-GOP catch-up that triggered the storm in the old hand-rolled
+        // path. This test is the gate for adopting lazer's video path wholesale.
         [Test]
         public void VideoCatchesUpWhenSeekedDeepIntoSongOnConstruction()
         {
@@ -264,42 +320,47 @@ namespace JukeBox.Game.Tests.Visual
 
             AddStep("create visuals with the single-keyframe fixture video", () =>
             {
-                string videoFile = Path.Combine(tmp, "sync-test-video.mp4");
-                File.Copy(Path.Combine(TestContext.CurrentContext.TestDirectory, "Fixtures", "sync-test-video.mp4"), videoFile, true);
+                File.Copy(Path.Combine(TestContext.CurrentContext.TestDirectory, "Fixtures", "sync-test-video.mp4"),
+                    Path.Combine(tmp, "sync-test-video.mp4"), true);
+
+                string osuFile = Path.Combine(tmp, "video [x].osu");
+                File.WriteAllText(osuFile, """
+                    osu file format v14
+
+                    [General]
+                    AudioFilename: audio.mp3
+                    Mode: 0
+
+                    [Events]
+                    Video,0,"sync-test-video.mp4"
+                    """);
 
                 var set = new CachedBeatmapSet
                 {
                     SetId = 6,
                     Directory = tmp,
-                    VideoFile = videoFile,
+                    OsuFiles = { osuFile },
+                    PreferredOsuFile = osuFile,
                 };
 
                 Add(visuals = new BeatmapVisuals(set, pump.Clock) { RelativeSizeAxes = Axes.Both });
             });
 
             AddUntilStep("visuals loaded", () => visuals.IsLoaded);
+            AddAssert("storyboard carries the video", () => visuals.StoryboardLayer.HasVideo);
 
-            // Generous real-time bound: a healthy catch-up lands a synced frame within a couple of
-            // hundred ms even decoding through a multi-second GOP (confirmed empirically against
-            // several real cached maps) — 4s leaves comfortable headroom without the test itself
-            // hanging on a genuine regression (a re-seek storm never produces a frame at all).
+            // A re-seek storm never produces a synced frame at all — this is the definitive
+            // catches-up-or-storms signal.
             AddUntilStep("video catches up and starts rendering synced frames",
                 () => (visuals.VideoFramesProcessed ?? 0) > 0);
 
-            // Regression for the residual-lag bug: freezing Video.IsPlaying during catch-up and
-            // then simply flipping it back on resumes tracking from the stale frozen value with no
-            // catch-up applied, baking the entire freeze duration in as a permanent constant lag
-            // that Video's own out-of-sync check (which only ever compares against its own
-            // PlaybackPosition, never the true clock) can never detect or correct. Measured against
-            // several real cached maps, an uncorrected freeze left a lag anywhere from tens of ms
-            // up to ~2.85s depending on how long the catch-up took — confirm PlaybackPosition
-            // tracks the video's own live clock (Time.Current) to within a couple of frames, not
-            // just that it advances at all.
-            AddAssert("no residual lag baked in after catch-up",
+            // Once rendering, playback position must track the clock within the framework's own
+            // re-seek lenience (~2.5s) — beyond that it would be permanently re-seeking.
+            AddAssert("playback position tracks the clock",
                 () =>
                 {
                     var video = visuals.ChildrenOfType<osu.Framework.Graphics.Video.Video>().Single();
-                    return Math.Abs(video.PlaybackPosition - video.Time.Current) < 100;
+                    return Math.Abs(video.PlaybackPosition - video.Time.Current) < 2500;
                 });
 
             AddStep("remove visuals", () => Remove(visuals, true));

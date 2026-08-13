@@ -5,7 +5,6 @@ using System.IO;
 using JukeBox.Game.Beatmaps;
 using JukeBox.Game.Configuration;
 using JukeBox.Game.LazerPlayer;
-using JukeBox.Game.Storyboard;
 using osu.Framework.Allocation;
 using osu.Framework.Bindables;
 using osu.Framework.Graphics;
@@ -13,7 +12,6 @@ using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Shapes;
 using osu.Framework.Graphics.Sprites;
 using osu.Framework.Graphics.Textures;
-using osu.Framework.Graphics.Video;
 using osu.Framework.IO.Stores;
 using osu.Framework.Logging;
 using osu.Framework.Platform;
@@ -24,11 +22,11 @@ using osuTK.Graphics;
 namespace JukeBox.Game.Screens;
 
 /// <summary>
-/// The full visual stack for one beatmap set — dimmed background, storyboard video (if any), the
-/// storyboard itself, a configurable background-dim scrim, and (optionally) the gameplay chart and
-/// hitsounds of the selected difficulty — all driven off a single shared
-/// <see cref="IFrameBasedClock"/> so they stay in lockstep with music playback (pause/seek/rate
-/// changes included).
+/// The full visual stack for one beatmap set — dimmed background, osu!lazer's real storyboard
+/// renderer (which itself carries storyboard video and Sample audio events), a configurable
+/// background-dim scrim, and (optionally) lazer's real gameplay chart and hitsounds of the
+/// selected difficulty — all driven off a single shared <see cref="IFrameBasedClock"/> so they
+/// stay in lockstep with music playback (pause/seek/rate changes included).
 /// </summary>
 public partial class BeatmapVisuals : CompositeDrawable
 {
@@ -38,7 +36,7 @@ public partial class BeatmapVisuals : CompositeDrawable
 
     private TextureStore? backgroundTextures;
     private Sprite? backgroundSprite;
-    private TransformStoryboardLayer storyboardLayer = null!;
+    private LazerStoryboardLayer storyboardLayer = null!;
 
     private Box dimScrim = null!;
     private Container chartContainer = null!;
@@ -57,84 +55,26 @@ public partial class BeatmapVisuals : CompositeDrawable
     [Resolved(canBeNull: true)]
     private JukeBoxConfigManager? config { get; set; }
 
-    // Held so Update() can watch for an async decode fault (Video.IsFaulted only becomes true
-    // after construction has already succeeded, on the decoder's own thread) and drop the layer.
-    private Container? videoContainer;
-    private Video? video;
-
-    // Video's own per-frame out-of-sync check (osu.Framework.Graphics.Video.Video.Update) issues
-    // a fresh decoder seek every time PlaybackPosition has drifted from the newest decoded frame
-    // by more than ~2.5s. When a set is (re)built with playbackClock already well past 0 — the
-    // normal case here: radio songs start mid-track and diff switches land mid-song — the very
-    // first frames the decoder produces are near its own 0, so that first out-of-sync check fires
-    // immediately. If PlaybackPosition keeps climbing on every subsequent Update() while the
-    // decoder is still mid-catch-up (decoding forward through the GOP to reach the seek target),
-    // each new frame re-seeks to a slightly-later target before the previous seek ever converges —
-    // a moving target the decoder can never land on, observed in production as a permanent black
-    // video stuck re-seeking every frame.
-    //
-    // Video.IsPlaying=false holds PlaybackPosition at a fixed value, giving the decoder a stable
-    // target instead of a moving one — once it's confirmed caught up (FramesProcessed > 0: a
-    // decoded frame actually passed Video.checkNextFrameValid, i.e. landed at-or-before that fixed
-    // target), it's safe to resume live tracking: the decoder is warm and any further drift is
-    // ordinary steady-state playback, which osu.Framework's own per-frame check already handles
-    // fine (confirmed empirically across several real cached maps — never storms once already
-    // caught up, only during that first cold catch-up). But two more things go wrong if the freeze
-    // is otherwise left exactly as simple as "hold it, wait for a frame, unpause":
-    //
-    //  1. AnimationClockComposite.Update() still calls consumeClockTime() every frame while paused
-    //     (updating its internal lastConsumedTime bookkeeping) — it just doesn't *apply* the
-    //     elapsed delta to PlaybackPosition. So real time keeps passing while frozen, and blindly
-    //     flipping IsPlaying back on resumes tracking from the STALE frozen value with zero
-    //     catch-up: the entire freeze duration becomes a permanent lag baked into PlaybackPosition
-    //     forever (Video's own out-of-sync check only ever compares against its own
-    //     PlaybackPosition, never against the true clock, so a lag under lenience_before_seek never
-    //     self-corrects). Fix: snap PlaybackPosition to video.Time.Current (the real target — the
-    //     same clock startAtCurrentTime:false's LoadComplete seed reads from) right before
-    //     unpausing, cancelling the lag out in one shot.
-    //
-    //  2. Video.checkNextFrameValid requires frame.Time <= PlaybackPosition to display a decoded
-    //     frame. With PlaybackPosition held perfectly still at its initial seed, a landed frame
-    //     whose timestamp overshoots that exact value by even a few ms (unavoidable — decode lands
-    //     on frame boundaries, not our arbitrary seeded millisecond) never satisfies that check, so
-    //     FramesProcessed never increments and "wait for a frame" never fires — even though the
-    //     decoder is sitting there ready. Confirmed empirically: a real cached .avi map sat at
-    //     FramesProcessed=0 for the entire 5s timeout despite its own out-of-sync log showing the
-    //     decoder had reached the target within a fraction of a second. Fix: nudge PlaybackPosition
-    //     forward by a small fixed margin (video_warm_up_nudge_ms, roughly a frame's worth) every
-    //     video_warm_up_nudge_interval_ms while still waiting — enough to clear a boundary-hair
-    //     overshoot on an already-decoded frame, nowhere near the lenience_before_seek(2500ms)
-    //     needed to provoke a fresh decoder seek, and utterly unlike the ~16ms-cadence, unbounded
-    //     climb that produced the original storm.
-    //
-    // Bounded by videoWarmUpDeadline regardless, so a genuinely stuck decoder (as opposed to one
-    // merely catching up or clearing the boundary hair above) still starts tracking eventually
-    // instead of being held back forever.
-    private bool videoWarmedUp = true;
-    private double videoWarmUpDeadline;
-    private double videoNextWarmUpNudge;
-
-    private const double video_warm_up_timeout_ms = 5000;
-    private const double video_warm_up_nudge_interval_ms = 150;
-    private const double video_warm_up_nudge_ms = 100;
-
     /// <summary>
     /// Test-only access to disposal state (JukeBox.Game.Tests has InternalsVisibleTo) —
     /// <see cref="Drawable.IsDisposed"/> itself is protected.
     /// </summary>
     internal bool Disposed => IsDisposed;
 
-    /// <summary>Test-only: frames actually rendered by the video layer, or null with no video.
-    /// Only increments once a decoded frame within sync of the playback position is displayed
-    /// (see <see cref="Video.FramesProcessed"/>) — the definitive signal that the video isn't
-    /// stuck re-seeking. Used to regression-test the mid-song seek-storm fix.</summary>
-    internal int? VideoFramesProcessed => video?.FramesProcessed;
+    /// <summary>Test-only: frames actually rendered by the storyboard's video, or null with no
+    /// video. Only increments once a decoded frame within sync of the playback position is
+    /// displayed — the definitive signal the video isn't stuck re-seeking after a mid-song
+    /// start.</summary>
+    internal int? VideoFramesProcessed => storyboardLayer.VideoFramesProcessed;
 
     /// <summary>
-    /// Test-only access to whether the video layer is currently present (JukeBox.Game.Tests has
-    /// InternalsVisibleTo), to assert it gets torn down after a decoder fault.
+    /// Test-only: whether a WORKING video is present (a storyboard Video event whose decoder
+    /// hasn't faulted). Faulted videos render nothing and stop counting for background auto-hide.
     /// </summary>
-    internal bool HasVideoLayer => videoContainer != null;
+    internal bool HasVideoLayer => storyboardLayer.HasVideo && !storyboardLayer.VideoFaulted;
+
+    /// <summary>Test-only: the lazer storyboard layer.</summary>
+    internal LazerStoryboardLayer StoryboardLayer => storyboardLayer;
 
     /// <summary>Test-only: whether a VISIBLE chart layer is currently present. The lazer layer
     /// also exists invisibly when only hitsounds are enabled (lazer's DrawableRuleset is the
@@ -168,10 +108,9 @@ public partial class BeatmapVisuals : CompositeDrawable
 
     /// <summary>
     /// Test-only: whether our own background <see cref="Sprite"/> is currently visible. Auto-hidden
-    /// whenever a video or non-empty storyboard is present (matching osu! stable/lazer behaviour),
-    /// so video/storyboard render as the top visual layer instead of fighting the flat background
-    /// for prominence. Storyboards that intentionally draw the background image as one of their own
-    /// sprites are unaffected — that dedup already happens inside <see cref="TransformStoryboardLayer"/>.
+    /// when the storyboard explicitly replaces the background (draws it as one of its own sprites —
+    /// lazer's <c>Storyboard.ReplacesBackground</c>) or a working video plays behind it, matching
+    /// real osu! behaviour. Plain sprite storyboards leave the background visible underneath.
     /// </summary>
     internal bool BackgroundVisible => backgroundSprite is { Alpha: > 0 };
 
@@ -233,62 +172,18 @@ public partial class BeatmapVisuals : CompositeDrawable
             }
         }
 
-        if (set.VideoFile != null)
-        {
-            try
-            {
-                double offsetMs = osuFile != null
-                    ? OsuFileScanner.Scan(osuFile).VideoOffsetMs
-                    : 0;
+        // Lazer's storyboard renderer carries the whole stack the old hand-rolled path split up:
+        // sprites/animations, TRIGGER commands, storyboard Sample audio events (keysounds), and
+        // the storyboard Video event (with its start-time offset) — video is just another element
+        // inside DrawableStoryboard, so the separate hand-synced video layer (and its warm-up
+        // machinery) is gone. Sizing is lazer's own: the storyboard scales itself off our height.
+        AddInternal(storyboardLayer = new LazerStoryboardLayer(set, osuFile));
 
-                video = new Video(set.VideoFile, startAtCurrentTime: false)
-                {
-                    RelativeSizeAxes = Axes.Both,
-                    FillMode = FillMode.Fit,
-                    Anchor = Anchor.Centre,
-                    Origin = Anchor.Centre,
-                    // See videoWarmedUp: held paused until the decoder proves it has caught up to
-                    // the seeded start position, so the sync-seek target doesn't move out from
-                    // under it while it's still decoding forward to reach that position.
-                    IsPlaying = false,
-                };
-                videoWarmedUp = false;
-                videoWarmUpDeadline = Clock.CurrentTime + video_warm_up_timeout_ms;
-                videoNextWarmUpNudge = Clock.CurrentTime + video_warm_up_nudge_interval_ms;
-
-                videoContainer = new Container
-                {
-                    RelativeSizeAxes = Axes.Both,
-                    // The .osu Video event's offset is the song time at which the video's own
-                    // frame 0 should appear — i.e. the video's local clock lags playbackClock by
-                    // that many ms, hence the negative offset (FramedOffsetClock.CurrentTime ==
-                    // Source.CurrentTime + Offset). processSource: false for the same reason as
-                    // above — playbackClock is already pumped by PlaybackController.
-                    Clock = new FramedOffsetClock(playbackClock, false) { Offset = -offsetMs },
-                    Child = video,
-                };
-
-                AddInternal(videoContainer);
-            }
-            catch (Exception e)
-            {
-                // Decode failure (corrupt/unsupported video) — drop the layer, keep bg + storyboard.
-                video = null;
-                videoContainer = null;
-                Logger.Error(e, $"Failed to load storyboard video '{set.VideoFile}'");
-            }
-        }
-
-        AddInternal(storyboardLayer = new TransformStoryboardLayer(set, osuFile)
-        {
-            Anchor = Anchor.Centre,
-            Origin = Anchor.Centre,
-        });
-
-        // Real osu! behaviour: a video or a non-empty storyboard renders as the top visual layer,
-        // and the flat background image auto-hides behind it (the black Box above still backs the
-        // letterboxing). AddInternal above runs the storyboard's own BackgroundDependencyLoader
-        // synchronously, so HasObjects already reflects the compiled result here.
+        // Real osu! behaviour: the flat background auto-hides only when the storyboard REPLACES
+        // it (draws it as one of its own sprites) or when a working video plays behind the
+        // storyboard. AddInternal above runs the layer's BackgroundDependencyLoader synchronously,
+        // so the decode result is already available here. Re-checked every Update — a video
+        // decoder fault surfaces asynchronously and must bring the background back.
         updateBackgroundVisibility();
 
         // Background-dim scrim: sits between the storyboard/video/background stack and the chart
@@ -367,17 +262,18 @@ public partial class BeatmapVisuals : CompositeDrawable
     }
 
     /// <summary>
-    /// Hides our own background sprite whenever a video layer or a non-empty storyboard is
-    /// present, so they render as the top visual layer instead of the flat background competing
-    /// with them — matching real osu! behaviour. Re-run after the video layer's presence changes
-    /// (initial load, and torn down on decoder fault) so a fault with no storyboard restores it.
+    /// Hides our own background sprite when the storyboard replaces it or a working video plays,
+    /// matching real osu! behaviour (see <see cref="LazerStoryboardLayer.ShouldHideBackground"/>).
+    /// Re-evaluated every <see cref="Update"/>: a video decoder fault surfaces asynchronously on
+    /// the decoder's own thread, and the background must come back rather than leaving the user
+    /// staring at pure black.
     /// </summary>
     private void updateBackgroundVisibility()
     {
         if (backgroundSprite == null)
             return;
 
-        backgroundSprite.Alpha = videoContainer != null || storyboardLayer.HasObjects ? 0 : 1;
+        backgroundSprite.Alpha = storyboardLayer.ShouldHideBackground ? 0 : 1;
     }
 
     /// <summary>
@@ -408,50 +304,13 @@ public partial class BeatmapVisuals : CompositeDrawable
     {
         base.Update();
 
-        // Video decoding happens on its own thread; construction can succeed and the fault only
-        // shows up later via IsFaulted. Catch that here and drop the (now-frozen) layer.
-        if (video?.IsFaulted == true && videoContainer != null)
-        {
-            RemoveInternal(videoContainer, true);
-            Logger.Log($"Storyboard video decoder faulted for '{set.VideoFile}', removing layer",
-                LoggingTarget.Runtime, LogLevel.Error);
-            videoContainer = null;
-            video = null;
+        // A storyboard video's decoder fault only surfaces asynchronously — keep the background
+        // rule live so a faulted (black) video brings the background back.
+        updateBackgroundVisibility();
 
-            // No video anymore — if there's no storyboard either, the background must come back
-            // rather than leaving the user staring at pure black.
-            updateBackgroundVisibility();
-        }
-
-        // See videoWarmedUp: FramesProcessed > 0 is the real confirmation the decoder has caught
-        // up to the frozen target (a frame genuinely passed Video's frame.Time <= PlaybackPosition
-        // check) — accept it, cancel the freeze-duration lag with one snap to the live target, and
-        // resume real-time tracking. Otherwise nudge the frozen target forward a little so a
-        // boundary-hair overshoot on an already-decoded frame doesn't deadlock the wait, or give up
-        // waiting once the bounded deadline passes regardless.
-        if (!videoWarmedUp && video != null)
-        {
-            bool timedOut = Clock.CurrentTime >= videoWarmUpDeadline;
-
-            if (video.FramesProcessed > 0 || timedOut)
-            {
-                video.PlaybackPosition = video.Time.Current;
-                video.IsPlaying = true;
-                videoWarmedUp = true;
-            }
-            else if (Clock.CurrentTime >= videoNextWarmUpNudge)
-            {
-                video.PlaybackPosition += video_warm_up_nudge_ms;
-                videoNextWarmUpNudge = Clock.CurrentTime + video_warm_up_nudge_interval_ms;
-            }
-        }
-
-        // Storyboard space is always 480 units tall (640 or 854 wide); scale it uniformly to fit
-        // this drawable's height and centre it, same as osu!'s own storyboard letterboxing.
-        storyboardLayer.Scale = new Vector2(DrawHeight / 480f);
-
-        // The 512×384 playfield lives in the same 480-tall space, centred — osu!'s standard
-        // placement (512×384 within 640×480) scaled to fit with margins.
+        // The 512×384 playfield lives in the storyboard's 480-tall space, centred — osu!'s
+        // standard placement (512×384 within 640×480) scaled to fit with margins. (The lazer
+        // storyboard layer performs the equivalent scaling internally via its own DrawScale.)
         chartContainer.Scale = new Vector2(DrawHeight / 480f);
     }
 

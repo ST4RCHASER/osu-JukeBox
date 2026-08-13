@@ -13,7 +13,6 @@ public class CachedBeatmapSet
     public List<string> OsuFiles = new();  // absolute paths
     public string? VideoFile;              // from Video event, if file exists
     public string? BackgroundFile;         // from background event, if file exists
-    public bool Widescreen;
     public string? PreferredOsuFile;       // first Mode:0 diff, else first diff
 
     /// <summary>One entry per .osu file, in <see cref="OsuFiles"/> order. Only Mode 0 (osu!std)

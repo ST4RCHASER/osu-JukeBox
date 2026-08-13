@@ -190,7 +190,7 @@ namespace JukeBox.Game
         /// A second failure (a genuinely broken environment) propagates.
         /// Internal for testing (JukeBox.Game.Tests has InternalsVisibleTo).
         /// </summary>
-        internal static RealmAccess CreateLazerRealmWithRecovery(osu.Framework.Platform.Storage storage, osu.Framework.Threading.GameThread? updateThread)
+        internal static RealmAccess CreateLazerRealmWithRecovery(osu.Framework.Platform.Storage storage, osu.Framework.Threading.GameThread updateThread)
         {
             try
             {
@@ -222,7 +222,7 @@ namespace JukeBox.Game
             }
         }
 
-        private static RealmAccess openAndProbeRealm(osu.Framework.Platform.Storage storage, osu.Framework.Threading.GameThread? updateThread)
+        private static RealmAccess openAndProbeRealm(osu.Framework.Platform.Storage storage, osu.Framework.Threading.GameThread updateThread)
         {
             var realm = new RealmAccess(storage, "client.realm", updateThread);
 
