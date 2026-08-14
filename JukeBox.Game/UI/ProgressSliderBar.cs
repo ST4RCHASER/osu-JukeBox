@@ -29,6 +29,10 @@ internal partial class ProgressSliderBar : SliderBar<double>
     // and thin.
     private const float hit_area_height = 16;
 
+    /// <summary>Exposed so <see cref="NowPlayingBar"/> can vertically align its flanking elapsed/
+    /// total time labels with this bar's own centreline without duplicating the magic number.</summary>
+    internal const float HitAreaHeight = hit_area_height;
+
     private Container barContainer = null!;
     private Container fillContainer = null!;
     private Circle handle = null!;
@@ -36,6 +40,12 @@ internal partial class ProgressSliderBar : SliderBar<double>
     // Transforms (ResizeHeightTo/FadeTo) must only run after LoadComplete — see IconButton's
     // `ready` field for the same guard and reasoning.
     private bool ready;
+
+    /// <summary>Test-only access to the visual track (JukeBox.Game.Tests has
+    /// InternalsVisibleTo), to assert its rendered quad stays within the containing card's
+    /// bounds (rather than this whole hit-area Drawable's own quad, which is intentionally wider
+    /// than the visual line to keep a comfortable drag target).</summary>
+    internal Drawable VisualBar => barContainer;
 
     [BackgroundDependencyLoader]
     private void load()

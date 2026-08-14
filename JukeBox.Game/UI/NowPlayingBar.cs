@@ -7,7 +7,6 @@ using JukeBox.Game.Online;
 using JukeBox.Game.Playback;
 using osu.Framework.Allocation;
 using osu.Framework.Bindables;
-using osu.Framework.Extensions.Color4Extensions;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Shapes;
@@ -27,14 +26,24 @@ namespace JukeBox.Game.UI;
 /// accent underline) / artist (from <see cref="Playback.Jukebox.NowPlaying"/>), a status line
 /// (<see cref="Playback.Jukebox.Status"/>, styled in soft red when
 /// <see cref="Playback.Jukebox.LastError"/> is set), a seekable <see cref="ProgressSliderBar"/>
-/// spanning the bar's top edge, play/pause + skip buttons and a volume slider bound to the
-/// framework's master volume (the settings panel's "Master" slider — one shared knob).
+/// spanning the bar's top edge (flanked by live elapsed/total time labels), a difficulty
+/// <see cref="DifficultySwitcher"/> dropdown and an "open in browser" button. Playback transport
+/// (play/pause/skip) and the volume slider live in Settings → Playback/Audio instead — see
+/// <see cref="SettingsOverlay"/>'s <c>TransportRow</c> and its master/effect/music volume rows,
+/// which this bar deliberately no longer duplicates.
 /// </summary>
 public partial class NowPlayingBar : CompositeDrawable
 {
     private const float bar_height = 88;
     private const float cover_size = 64;
-    private const float play_pause_size = 44;
+    private const float browser_button_size = 36;
+
+    // Small downward nudge off the card's true top edge, and horizontal room reserved on each
+    // side of the progress bar for its flanking mm:ss label — together these are what keep the
+    // fill (and its hover glow) inset within the card's rounded surface rather than poking past
+    // the corner curve (Theme.CornerRadius) the way it used to when the bar sat flush edge-to-edge.
+    private const float progress_bar_top_offset = 3;
+    private const float progress_bar_side_reserve = Theme.PanelPadding + 40;
 
     [Resolved]
     private PlaybackController playback { get; set; } = null!;
@@ -43,7 +52,7 @@ public partial class NowPlayingBar : CompositeDrawable
     private Jukebox jukebox { get; set; } = null!;
 
     [Resolved]
-    private osu.Framework.Configuration.FrameworkConfigManager frameworkConfig { get; set; } = null!;
+    private osu.Framework.Platform.GameHost host { get; set; } = null!;
 
     // [Resolved(canBeNull: true)] rather than a hard [Resolved]: only JukeBoxGame's own
     // [BackgroundDependencyLoader] (not JukeBoxGameBase's, shared with every test scene) caches
@@ -51,6 +60,12 @@ public partial class NowPlayingBar : CompositeDrawable
     // must keep constructing/resolving this bar fine with no store present at all.
     [Resolved(canBeNull: true)]
     private OnlineThumbnailStore? thumbnailStore { get; set; }
+
+    /// <summary>Test seam (JukeBox.Game.Tests has InternalsVisibleTo): replaces
+    /// <see cref="osu.Framework.Platform.GameHost.OpenUrlExternally"/>, mirroring
+    /// <see cref="FullscreenListingOverlay"/>'s own seam, so tests can assert the browsed URL
+    /// without actually opening a browser.</summary>
+    internal Action<string>? OpenUrl;
 
     // Bumped every time NowPlaying changes; an in-flight thumbnail load whose generation has
     // fallen behind by the time it completes is stale (NowPlaying has since changed again, or
@@ -73,19 +88,21 @@ public partial class NowPlayingBar : CompositeDrawable
     private bool settingProgress;
 
     private ProgressSliderBar progressBar = null!;
+    private SpriteText elapsedText = null!;
+    private SpriteText totalText = null!;
     private DifficultySwitcher difficultySwitcher = null!;
-    private IconButton playPauseButton = null!;
+    private IconButton browserButton = null!;
     private SpriteText statusText = null!;
     private FillFlowContainer songInfo = null!;
     private SpriteText titleText = null!;
     private Box titleUnderline = null!;
     private SpriteText artistText = null!;
 
-    /// <summary>
-    /// Test-only access to the play/pause button (JukeBox.Game.Tests has InternalsVisibleTo), to
-    /// drive it via <see cref="Drawable.TriggerClick"/> without depending on its exact position.
-    /// </summary>
-    internal IconButton PlayPauseButton => playPauseButton;
+    // Last text actually written to elapsedText/totalText, as whole seconds — SpriteText.Text
+    // re-lays-out glyphs on every write, so Update() (which runs every frame) only touches these
+    // when the displayed second actually changes rather than on every sub-second tick.
+    private int lastElapsedSeconds = -1;
+    private int lastTotalSeconds = -1;
 
     /// <summary>
     /// Test-only access to the progress bar (JukeBox.Game.Tests has InternalsVisibleTo), to drive
@@ -97,6 +114,18 @@ public partial class NowPlayingBar : CompositeDrawable
     /// Test-only access to the difficulty switcher (JukeBox.Game.Tests has InternalsVisibleTo).
     /// </summary>
     internal DifficultySwitcher DifficultySwitcher => difficultySwitcher;
+
+    /// <summary>
+    /// Test-only access to the "open in browser" button (JukeBox.Game.Tests has
+    /// InternalsVisibleTo), to drive it via <see cref="Drawable.TriggerClick"/>.
+    /// </summary>
+    internal IconButton BrowserButton => browserButton;
+
+    /// <summary>Test-only access to the elapsed/total time labels (JukeBox.Game.Tests has
+    /// InternalsVisibleTo).</summary>
+    internal SpriteText ElapsedText => elapsedText;
+
+    internal SpriteText TotalText => totalText;
 
     [BackgroundDependencyLoader]
     private void load()
@@ -117,14 +146,37 @@ public partial class NowPlayingBar : CompositeDrawable
                 RelativeSizeAxes = Axes.Both,
                 Colour = Theme.PanelSurface,
             },
-            // The signature element: spans the bar's full top edge, above everything else below.
+            // The signature element: spans the bar's top edge (above everything else below), inset
+            // from the rounded card's edges by progress_bar_side_reserve — both to keep the fill
+            // itself (and its hover glow) within the card's visible rounded surface, and to leave
+            // room for the flanking elapsed/total labels below.
             progressBar = new ProgressSliderBar
             {
                 RelativeSizeAxes = Axes.X,
                 Anchor = Anchor.TopLeft,
                 Origin = Anchor.TopLeft,
+                Y = progress_bar_top_offset,
+                Padding = new MarginPadding { Horizontal = progress_bar_side_reserve },
                 Current = progress,
                 TransferValueOnCommit = true,
+            },
+            elapsedText = new SpriteText
+            {
+                Anchor = Anchor.TopLeft,
+                Origin = Anchor.CentreLeft,
+                Position = new Vector2(Theme.PanelPadding, progress_bar_top_offset + ProgressSliderBar.HitAreaHeight / 2f),
+                Font = FontUsage.Default.With(size: Theme.CaptionTextSize),
+                Colour = Theme.TextTertiary,
+                Text = "0:00",
+            },
+            totalText = new SpriteText
+            {
+                Anchor = Anchor.TopRight,
+                Origin = Anchor.CentreRight,
+                Position = new Vector2(-Theme.PanelPadding, progress_bar_top_offset + ProgressSliderBar.HitAreaHeight / 2f),
+                Font = FontUsage.Default.With(size: Theme.CaptionTextSize),
+                Colour = Theme.TextTertiary,
+                Text = "0:00",
             },
             // Everything else sits below the progress bar's hit area so it never overlaps it.
             new Container
@@ -211,69 +263,15 @@ public partial class NowPlayingBar : CompositeDrawable
                             difficultySwitcher = new DifficultySwitcher(),
                         }
                     },
-                    new FillFlowContainer
-                    {
-                        Anchor = Anchor.Centre,
-                        Origin = Anchor.Centre,
-                        AutoSizeAxes = Axes.Both,
-                        Direction = FillDirection.Horizontal,
-                        Spacing = new Vector2(12, 0),
-                        Children = new Drawable[]
-                        {
-                            playPauseButton = new IconButton
-                            {
-                                Anchor = Anchor.CentreLeft,
-                                Origin = Anchor.CentreLeft,
-                                Size = new Vector2(play_pause_size),
-                                CornerRadius = play_pause_size / 2,
-                                Icon = FontAwesome.Solid.Play,
-                                IconColour = Theme.Background,
-                                IdleColour = Theme.Accent,
-                                HoverColour = Theme.Accent.Lighten(0.15f),
-                                Action = () => playback.TogglePause(),
-                            },
-                            new IconButton
-                            {
-                                Anchor = Anchor.CentreLeft,
-                                Origin = Anchor.CentreLeft,
-                                Size = new Vector2(36),
-                                Icon = FontAwesome.Solid.StepForward,
-                                Action = () => jukebox.SkipCurrent(),
-                            },
-                        }
-                    },
-                    new FillFlowContainer
+                    // Opens the playing set's osu.ppy.sh page — the space transport/volume used to
+                    // occupy here now sits free (both moved to Settings → Playback/Audio).
+                    browserButton = new IconButton
                     {
                         Anchor = Anchor.CentreRight,
                         Origin = Anchor.CentreRight,
-                        AutoSizeAxes = Axes.Both,
-                        Direction = FillDirection.Horizontal,
-                        Spacing = new Vector2(8, 0),
-                        Children = new Drawable[]
-                        {
-                            new SpriteIcon
-                            {
-                                Anchor = Anchor.CentreLeft,
-                                Origin = Anchor.CentreLeft,
-                                Icon = FontAwesome.Solid.VolumeUp,
-                                Size = new Vector2(14),
-                                Colour = Theme.TextTertiary,
-                            },
-                            new BasicSliderBar<double>
-                            {
-                                Anchor = Anchor.CentreLeft,
-                                Origin = Anchor.CentreLeft,
-                                Size = new Vector2(90, 6),
-                                CornerRadius = 3,
-                                // The framework master volume — same source of truth as the
-                                // settings panel's "Master" slider (see JukeBoxGameBase's
-                                // JukeBoxSetting.Volume migration note).
-                                Current = frameworkConfig.GetBindable<double>(osu.Framework.Configuration.FrameworkSetting.VolumeUniversal),
-                                BackgroundColour = Theme.ElevatedSurface,
-                                SelectionColour = Theme.Accent,
-                                FocusColour = Theme.Accent,
-                            },
-                        }
+                        Size = new Vector2(browser_button_size),
+                        Icon = FontAwesome.Solid.ExternalLinkAlt,
+                        Action = openInBrowser,
                     },
                 }
             },
@@ -312,7 +310,44 @@ public partial class NowPlayingBar : CompositeDrawable
             settingProgress = false;
         }
 
-        playPauseButton.Icon = playback.IsPlaying ? FontAwesome.Solid.Pause : FontAwesome.Solid.Play;
+        int elapsedSeconds = (int)(playback.CurrentTimeMs / 1000);
+        if (elapsedSeconds != lastElapsedSeconds)
+        {
+            lastElapsedSeconds = elapsedSeconds;
+            elapsedText.Text = formatTime(playback.CurrentTimeMs);
+        }
+
+        int totalSeconds = (int)(playback.LengthMs / 1000);
+        if (totalSeconds != lastTotalSeconds)
+        {
+            lastTotalSeconds = totalSeconds;
+            totalText.Text = formatTime(playback.LengthMs);
+        }
+    }
+
+    private void openInBrowser()
+    {
+        var set = jukebox.NowPlaying.Value;
+        if (set == null)
+            return;
+
+        string url = $"https://osu.ppy.sh/beatmapsets/{set.Id}";
+
+        if (OpenUrl != null)
+            OpenUrl(url);
+        else
+            host.OpenUrlExternally(url);
+    }
+
+    /// <summary>Formats a millisecond duration as "m:ss" (no leading zero on minutes, matching the
+    /// standard music-player convention — e.g. "3:07", not "03:07").</summary>
+    private static string formatTime(double ms)
+    {
+        if (double.IsNaN(ms) || ms < 0)
+            ms = 0;
+
+        int totalSeconds = (int)(ms / 1000);
+        return $"{totalSeconds / 60}:{totalSeconds % 60:D2}";
     }
 
     private void refreshStatus()
