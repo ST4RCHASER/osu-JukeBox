@@ -1,6 +1,7 @@
 #nullable enable
 
 using System.IO;
+using osu.Framework.Bindables;
 using osu.Framework.IO.Stores;
 using osu.Framework.Platform;
 using osu.Game.IO;
@@ -31,5 +32,29 @@ internal class BeatmapFolderSkin : LegacySkin
         // Known deviation from LegacyBeatmapSkin: its AllowDefaultComboColoursFallback=false
         // is internal to osu.Game, so a beatmap with no [Colours] section uses the classic
         // default combo colours here instead of the active skin's own palette.
+    }
+
+    /// <summary>
+    /// Mirrors <c>LegacyBeatmapSkin.GetConfig</c>'s exact override for
+    /// <see cref="SkinConfiguration.LegacySetting.Version"/>: always returns null, "ignoring
+    /// beatmap-level versioning completely". Without this, the .osu-file-as-skin-config parse this
+    /// class relies on (see the constructor doc) always reports the legacy decoder's DEFAULT
+    /// version (1.0 — beatmaps essentially never declare a real one), never null — and, unlike a
+    /// genuinely-versionless lookup, a concrete (if defaulted) value here means the beatmap skin's
+    /// own answer wins outright rather than falling through to the user's actual selected skin.
+    /// Ruleset code that branches on this (e.g. TaikoLegacySkinTransformer's LegacyHalfDrum, whose
+    /// "&gt;=2.1" check picks between two different position calibrations for the drum hit flash)
+    /// then always takes the old, sub-2.1 branch for anything resolved through a beatmap skin —
+    /// regardless of what the user's actual skin (or the beatmap's own real skin.ini, which this
+    /// class doesn't separately parse at all — see the constructor doc, it's the .osu file itself)
+    /// would have reported — producing wrong, version-1.0-calibrated positioning even under an
+    /// otherwise-modern skin.
+    /// </summary>
+    public override IBindable<TValue>? GetConfig<TLookup, TValue>(TLookup lookup)
+    {
+        if (lookup is SkinConfiguration.LegacySetting s && s == SkinConfiguration.LegacySetting.Version)
+            return null;
+
+        return base.GetConfig<TLookup, TValue>(lookup);
     }
 }
