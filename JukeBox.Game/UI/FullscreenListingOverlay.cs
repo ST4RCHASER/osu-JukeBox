@@ -20,11 +20,14 @@ namespace JukeBox.Game.UI;
 
 /// <summary>
 /// The <see cref="Configuration.SearchStyle.Fullscreen"/> presentation: an osu-web-style "beatmap
-/// listing" page presented as a large overlay covering the player-box area (hosted there by
-/// <see cref="Screens.MainScreen"/> — the side columns and bottom bar stay visible around it).
-/// Opened whenever search opens under that style (type-anywhere via
-/// <see cref="ShowWithInitialChar"/>, or the docked search box gaining focus); Escape and the
-/// Enter-queue flow close it back to the player.
+/// listing" page presented as a TRUE fullscreen modal — hosted at <see cref="Screens.MainScreen"/>'s
+/// top level so it covers the ENTIRE window (side columns and bottom bar included), a centred
+/// listing panel above a dim <see cref="Theme.ModalScrim"/> with nothing else interactive while
+/// open. Opening (type-anywhere via <see cref="ShowWithInitialChar"/>, the docked search box
+/// gaining focus, or the left column's search icon button — all via <see cref="ShowSearch"/>)
+/// slides the panel UP from past the window's bottom edge while the scrim fades in (see
+/// <see cref="PopIn"/>); Escape and the Enter-queue flow reverse it (slide down + fade) back to
+/// the normal layout.
 ///
 /// A pure VIEW over the shared <see cref="BeatmapSearchEngine"/> (the same instance driving the
 /// docked <see cref="BeatmapListingOverlay"/>): the big keyword box binds the same
@@ -55,6 +58,8 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
     private BasicScrollContainer scroll = null!;
     private SpriteText statusText = null!;
     private PreviewPlayer previewPlayer = null!;
+    private Box scrim = null!;
+    private Container panel = null!;
 
     private int selectedIndex = -1;
     private int settleFrames;
@@ -71,6 +76,11 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
     /// player, so tests can stub its track loading and assert its state.</summary>
     internal PreviewPlayer Preview => previewPlayer;
 
+    /// <summary>Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the sliding
+    /// listing panel, to assert the slide-up entrance / slide-down exit (its Y is offscreen-bottom
+    /// while closed and 0 once the entrance settles).</summary>
+    internal Container SlidePanel => panel;
+
     public FullscreenListingOverlay(BeatmapSearchEngine engine)
     {
         this.engine = engine;
@@ -79,43 +89,67 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
     [BackgroundDependencyLoader]
     private void load()
     {
-        Masking = true;
-        CornerRadius = Theme.CornerRadius;
-
         InternalChildren = new Drawable[]
         {
             previewPlayer = new PreviewPlayer(),
-            new Box
+            // Dims the whole window (columns and bottom bar included — this overlay sits at
+            // MainScreen's top level) so only the listing panel reads as interactive while open.
+            scrim = new Box
             {
                 RelativeSizeAxes = Axes.Both,
-                Colour = Theme.Background.Opacity(0.98f),
+                Colour = Theme.ModalScrim,
+                Alpha = 0,
             },
-            new Container
+            // The sliding host: full-window with an even inset, so the card inside reads as one
+            // large centred panel. The slide-up entrance / slide-down exit animate this host's Y
+            // (see PopIn/PopOut) rather than the overlay root, whose Alpha must flip instantly for
+            // focus to land (see PopIn).
+            panel = new Container
             {
                 RelativeSizeAxes = Axes.Both,
                 Padding = new MarginPadding(Theme.PanelPadding * 1.5f),
-                Child = new GridContainer
+                Child = new Container
                 {
                     RelativeSizeAxes = Axes.Both,
-                    RowDimensions = new[]
+                    Masking = true,
+                    CornerRadius = Theme.CornerRadius,
+                    EdgeEffect = Theme.PanelShadow,
+                    Children = new Drawable[]
                     {
-                        new Dimension(GridSizeMode.AutoSize),
-                        new Dimension(),
-                    },
-                    Content = new[]
-                    {
-                        new Drawable[] { createHeader() },
-                        new Drawable[]
+                        new Box
                         {
-                            scroll = new BasicScrollContainer
+                            RelativeSizeAxes = Axes.Both,
+                            Colour = Theme.Background.Opacity(0.98f),
+                        },
+                        new Container
+                        {
+                            RelativeSizeAxes = Axes.Both,
+                            Padding = new MarginPadding(Theme.PanelPadding * 1.5f),
+                            Child = new GridContainer
                             {
                                 RelativeSizeAxes = Axes.Both,
-                                Padding = new MarginPadding { Top = Theme.SectionSpacing },
-                                Child = cardsFlow = new CardFlow
+                                RowDimensions = new[]
                                 {
-                                    RelativeSizeAxes = Axes.X,
-                                    AutoSizeAxes = Axes.Y,
-                                    Direction = FillDirection.Full,
+                                    new Dimension(GridSizeMode.AutoSize),
+                                    new Dimension(),
+                                },
+                                Content = new[]
+                                {
+                                    new Drawable[] { createHeader() },
+                                    new Drawable[]
+                                    {
+                                        scroll = new BasicScrollContainer
+                                        {
+                                            RelativeSizeAxes = Axes.Both,
+                                            Padding = new MarginPadding { Top = Theme.SectionSpacing },
+                                            Child = cardsFlow = new CardFlow
+                                            {
+                                                RelativeSizeAxes = Axes.X,
+                                                AutoSizeAxes = Axes.Y,
+                                                Direction = FillDirection.Full,
+                                            },
+                                        },
+                                    },
                                 },
                             },
                         },
@@ -364,13 +398,33 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
         });
     }
 
-    // Deliberately instant (no fade animation): PopIn() must leave every descendant (searchBox in
-    // particular) IsPresent synchronously, since focus can only land on a present drawable.
-    protected override void PopIn() => Alpha = 1;
+    /// <summary>The panel's parked Y while closed — just past the window's bottom edge, so the
+    /// entrance reads as sliding up from offscreen. Falls back to a safely-large offset for a
+    /// pre-layout first show (DrawHeight not yet computed).</summary>
+    private float offscreenPanelY() => DrawHeight > 0 ? DrawHeight : 1000;
+
+    // The overlay ROOT flips to Alpha 1 instantly — focus can only land on a present drawable
+    // (same reasoning as the docked listing's PopIn), and ShowSearch's scheduled focus grab needs
+    // the keyword box present this frame. The visible entrance is carried entirely by the scrim
+    // fading in and the panel sliding up from past the bottom edge (position never affects
+    // presence, so the box is focusable even mid-slide).
+    protected override void PopIn()
+    {
+        Alpha = 1;
+
+        scrim.FadeIn(Theme.DurationNormal, Theme.EaseEnter);
+
+        panel.MoveToY(offscreenPanelY());
+        panel.MoveToY(0, Theme.DurationNormal, Theme.EaseEnter);
+    }
 
     protected override void PopOut()
     {
-        this.FadeOut(Theme.DurationFast, Theme.EaseExit);
+        // The reverse of the entrance: panel slides back down past the bottom edge while the
+        // scrim (and the whole overlay with it) fade away.
+        scrim.FadeOut(Theme.DurationNormal, Theme.EaseExit);
+        panel.MoveToY(offscreenPanelY(), Theme.DurationNormal, Theme.EaseExit);
+        this.FadeOut(Theme.DurationNormal, Theme.EaseExit);
 
         // The preview must never outlive the overlay (and the main track must resume) — the
         // "preview can never wedge the jukebox" contract.
