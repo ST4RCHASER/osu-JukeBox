@@ -105,12 +105,14 @@ public partial class MainScreen : Screen
 
     private Bindable<UiLayout> uiLayout = null!;
     private Bindable<double> playfieldZoom = null!;
+    private Bindable<bool> detachPlayer = null!;
 
     private const float tab_slide_offset = 20;
 
     private Container visualsHost = null!;
     private Container playerBox = null!;
     private Container sceneContainer = null!;
+    private FillFlowContainer detachedPlaceholder = null!;
     private ScreenStack visualsStack = null!;
     private NowPlayingBar bottomBar = null!;
 
@@ -267,6 +269,37 @@ public partial class MainScreen : Screen
                             Origin = Anchor.Centre,
                             Size = new Vector2(scene_width, scene_height),
                             Child = visualsStack = new ScreenStack { RelativeSizeAxes = Axes.Both },
+                        },
+                        // Shown instead of the scene while DetachPlayer has the visuals living
+                        // in their own window (see Detach.DetachedViewerManager). The scene
+                        // itself stays loaded underneath at Alpha 0 — draw cost is skipped, but
+                        // re-attaching is instant with no reload gap.
+                        detachedPlaceholder = new FillFlowContainer
+                        {
+                            Anchor = Anchor.Centre,
+                            Origin = Anchor.Centre,
+                            AutoSizeAxes = Axes.Both,
+                            Direction = FillDirection.Vertical,
+                            Spacing = new Vector2(0, 12),
+                            Alpha = 0,
+                            Children = new Drawable[]
+                            {
+                                new SpriteIcon
+                                {
+                                    Anchor = Anchor.TopCentre,
+                                    Origin = Anchor.TopCentre,
+                                    Icon = FontAwesome.Solid.ExternalLinkAlt,
+                                    Size = new Vector2(28),
+                                    Colour = Colour4.White.Opacity(0.4f),
+                                },
+                                new SpriteText
+                                {
+                                    Anchor = Anchor.TopCentre,
+                                    Origin = Anchor.TopCentre,
+                                    Text = "Playing in detached window",
+                                    Colour = Colour4.White.Opacity(0.6f),
+                                },
+                            },
                         },
                     },
                 },
@@ -454,6 +487,16 @@ public partial class MainScreen : Screen
         // own remarks on why it's driven off playerBox.OnUpdate rather than a one-shot), so a
         // config change here is picked up on the very next frame for free.
         playfieldZoom = config.GetBindable<double>(JukeBoxSetting.PlayfieldZoom);
+
+        // Alpha (not unloading) on both sides of the swap — see detachedPlaceholder's remarks.
+        // (searchStyle wiring lives above via applySearchStyle — the branch's older duplicate
+        // handler was dropped in this merge resolution.)
+        detachPlayer = config.GetBindable<bool>(JukeBoxSetting.DetachPlayer);
+        detachPlayer.BindValueChanged(e =>
+        {
+            sceneContainer.Alpha = e.NewValue ? 0 : 1;
+            detachedPlaceholder.Alpha = e.NewValue ? 1 : 0;
+        }, true);
 
         jukebox.Start();
         jukebox.LastError.BindValueChanged(e =>
