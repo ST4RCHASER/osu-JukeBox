@@ -10,17 +10,24 @@ using osuTK;
 namespace JukeBox.Game.UI;
 
 /// <summary>
-/// The playback transport strip: restart, −5s, play/pause, +5s, skip-next — all routed through the
-/// existing controller/jukebox methods (no playback machinery of its own). The play/pause icon
-/// tracks <see cref="PlaybackController.IsPlaying"/> (a plain property, hence the per-frame
-/// refresh), and skip-next only exists when a <see cref="Jukebox"/> is present to skip within.
+/// The playback transport strip: restart, −5s, play/pause, +5s, skip-next, and (when the host
+/// supplies an action for it) open-in-browser — all routed through the existing controller/jukebox
+/// methods (no playback machinery of its own). The play/pause icon tracks
+/// <see cref="PlaybackController.IsPlaying"/> (a plain property, hence the per-frame refresh), and
+/// skip-next only exists when a <see cref="Jukebox"/> is present to skip within.
 ///
 /// <para>
 /// Previously a nested control inside <see cref="SettingsOverlay"/>'s "Playback" section, coloured
-/// from lazer's <c>OverlayColourProvider</c> to blend with the settings rows around it. It now
-/// lives in the right column's "Playback" tab (see <see cref="PlaybackPanel"/>) alongside the rest
-/// of the transport-adjacent controls, so it is coloured from <see cref="Theme"/> instead — the
-/// play/pause button accent-filled, the seek/skip buttons on the shared elevated surface.
+/// from lazer's <c>OverlayColourProvider</c> to blend with the settings rows around it. It now sits
+/// inside <see cref="NowPlayingPanel"/> in the right column's "Playback" tab, so it is coloured
+/// from <see cref="Theme"/> instead — the play/pause button accent-filled, every other button on
+/// the shared elevated surface.
+/// </para>
+///
+/// <para>
+/// Auto-sized on both axes (rather than filling its host's width) so the host can simply centre it:
+/// the strip is a cluster of buttons, and a left-aligned cluster under a full-width progress bar
+/// read as adrift.
 /// </para>
 /// </summary>
 internal partial class TransportRow : FillFlowContainer
@@ -31,12 +38,15 @@ internal partial class TransportRow : FillFlowContainer
     private readonly PlaybackController playback;
     private readonly IconButton playPause;
 
-    public TransportRow(PlaybackController playback, Jukebox? jukebox)
+    /// <summary>The trailing open-in-browser button, when <c>openInBrowser</c> was supplied — see
+    /// <see cref="NowPlayingPanel.BrowserButton"/>, which forwards to it.</summary>
+    internal IconButton? BrowserButton { get; }
+
+    public TransportRow(PlaybackController playback, Jukebox? jukebox, Action? openInBrowser = null)
     {
         this.playback = playback;
 
-        RelativeSizeAxes = Axes.X;
-        AutoSizeAxes = Axes.Y;
+        AutoSizeAxes = Axes.Both;
         Direction = FillDirection.Horizontal;
         Spacing = new Vector2(Theme.RowSpacing, 0);
 
@@ -75,6 +85,21 @@ internal partial class TransportRow : FillFlowContainer
                 Size = new Vector2(button_size),
                 Action = jukebox.SkipCurrent,
             });
+        }
+
+        // Trailing the skip button rather than sitting up beside the title: it's a per-song action
+        // like the rest of the strip, and moving it here gives the title/artist block the whole
+        // width of its own row.
+        if (openInBrowser != null)
+        {
+            IconButton browser;
+            Add(browser = new IconButton
+            {
+                Icon = FontAwesome.Solid.ExternalLinkAlt,
+                Size = new Vector2(button_size),
+                Action = openInBrowser,
+            });
+            BrowserButton = browser;
         }
     }
 

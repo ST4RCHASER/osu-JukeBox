@@ -1,7 +1,6 @@
 #nullable enable
 
 using System;
-using System.Collections.Generic;
 using JukeBox.Game.Playback;
 using osu.Framework.Allocation;
 using osu.Framework.Graphics;
@@ -20,9 +19,9 @@ namespace JukeBox.Game.UI;
 /// scrollable column, in two <see cref="Theme"/>-headed sections:
 ///
 /// <list type="bullet">
-/// <item><b>Playback</b> — <see cref="NowPlayingPanel"/> (cover, title/artist, status, seekable
-/// progress, difficulty dropdown, open-in-browser), the <see cref="TransportRow"/> transport strip,
-/// the playback-speed slider and the per-beatmap audio offset row.</item>
+/// <item><b>Playback</b> — <see cref="NowPlayingPanel"/> (cover, title/artist, status, the
+/// transport strip with its open-in-browser button, seekable progress, difficulty dropdown) and
+/// the playback-speed slider.</item>
 /// <item><b>Queue</b> — the existing <see cref="QueuePanel"/> (list, per-row download status,
 /// removal), filling whatever height is left below the playback section.</item>
 /// </list>
@@ -30,9 +29,11 @@ namespace JukeBox.Game.UI;
 /// <para>
 /// This replaces the old bottom playback bar (which spanned the window under the columns) and the
 /// old "Queue" tab: the bar's content moved here, as did Settings' former "Playback" section (speed
-/// slider + transport) and its per-beatmap offset row. The GLOBAL audio offset deliberately stayed
-/// in Settings → Audio: it calibrates the output path (device, drivers, headphones) alongside the
-/// device picker and volumes, rather than describing the song being played.
+/// slider + transport). The GLOBAL audio offset deliberately stayed in Settings → Audio: it
+/// calibrates the output path (device, drivers, headphones) alongside the device picker and
+/// volumes, rather than describing the song being played. The PER-BEATMAP offset has no row at
+/// all any more (user request): <see cref="BeatmapOffsetStore"/> and its persistence are untouched
+/// and still applied to playback — only the slider is gone.
 /// </para>
 ///
 /// <para>
@@ -58,20 +59,11 @@ public partial class PlaybackPanel : CompositeDrawable
     [Resolved]
     private PlaybackController playback { get; set; } = null!;
 
-    [Resolved]
-    private Jukebox jukebox { get; set; } = null!;
-
-    // canBeNull: the offset store is only cached by the real game (see JukeBoxGame), not by every
-    // test scene — its row is simply omitted rather than rendered dead.
-    [Resolved(canBeNull: true)]
-    private BeatmapOffsetStore? offsetStore { get; set; }
-
     private NowPlayingPanel nowPlaying = null!;
     private QueuePanel queuePanel = null!;
     private QueueSection queueSection = null!;
     private OsuScrollContainer scroll = null!;
     private SettingsSlider<double> playbackRateRow = null!;
-    private SettingsSlider<double>? beatmapOffsetRow;
 
     /// <summary>Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the tab's pieces,
     /// so tests can assert what this section contains without depending on its internal layout.</summary>
@@ -81,20 +73,12 @@ public partial class PlaybackPanel : CompositeDrawable
 
     internal SettingsSlider<double> PlaybackRateSlider => playbackRateRow;
 
-    /// <summary>Null when no <see cref="BeatmapOffsetStore"/> is cached (see the field).</summary>
-    internal SettingsSlider<double>? BeatmapOffsetSlider => beatmapOffsetRow;
-
     [BackgroundDependencyLoader]
     private void load()
     {
         RelativeSizeAxes = Axes.Both;
 
         playbackRateRow = new SettingsSlider<double> { LabelText = "Playback speed", KeyboardStep = 0.05f };
-
-        var playbackRows = new List<Drawable> { playbackRateRow };
-
-        if (offsetStore != null)
-            playbackRows.Add(beatmapOffsetRow = new SettingsSlider<double> { LabelText = "Audio offset (this beatmap)", KeyboardStep = 1 });
 
         InternalChild = new OsuTooltipContainer(null!)
         {
@@ -116,18 +100,16 @@ public partial class PlaybackPanel : CompositeDrawable
                     {
                         sectionHeader("Playback"),
                         nowPlaying = new NowPlayingPanel(),
-                        new TransportRow(playback, jukebox),
-                        new FillFlowContainer
+                        new Container
                         {
                             RelativeSizeAxes = Axes.X,
                             AutoSizeAxes = Axes.Y,
-                            Direction = FillDirection.Vertical,
                             // Lazer's settings rows inset their own content by CONTENT_MARGINS on
                             // both sides (they're built for a panel that pads its header the same
-                            // way). Pulling that back out here is what keeps their labels/sliders
-                            // flush with the Theme-styled content stacked above them.
+                            // way). Pulling that back out here is what keeps the label/slider flush
+                            // with the Theme-styled content stacked above them.
                             Padding = new MarginPadding { Horizontal = -SettingsPanel.CONTENT_MARGINS },
-                            Children = playbackRows,
+                            Child = playbackRateRow,
                         },
                         // The queue keeps its own "Queue (N)" header — that count IS this section's
                         // header, so there is no second one here.
@@ -151,10 +133,6 @@ public partial class PlaybackPanel : CompositeDrawable
 
         // Session-only, like lazer's replay playback control (deliberately not persisted).
         playbackRateRow.Current = playback.PlaybackRate;
-
-        // Per-set offset: the store retargets this bindable on every song change and persists edits.
-        if (beatmapOffsetRow != null)
-            beatmapOffsetRow.Current = offsetStore!.CurrentOffset;
     }
 
     private static SpriteText sectionHeader(string text) => new SpriteText

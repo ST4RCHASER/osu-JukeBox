@@ -44,11 +44,15 @@ public partial class DifficultySwitcher : CompositeDrawable
     [BackgroundDependencyLoader]
     private void load()
     {
-        AutoSizeAxes = Axes.Both;
+        // Full width of whatever hosts this (the Playback tab's column), rather than the fixed
+        // 220px it carried while it sat in the old wide bottom bar: a dropdown stopping short of
+        // the column's right edge read as misaligned against the full-width rows around it.
+        RelativeSizeAxes = Axes.X;
+        AutoSizeAxes = Axes.Y;
 
         InternalChild = dropdown = new DifficultyDropdown
         {
-            Width = 220,
+            RelativeSizeAxes = Axes.X,
         };
     }
 
