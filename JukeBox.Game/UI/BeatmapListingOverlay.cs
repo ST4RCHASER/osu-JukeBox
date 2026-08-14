@@ -314,37 +314,54 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
                 {
                     RelativeSizeAxes = Axes.X,
                     Height = 44,
-                    Children = new Drawable[]
+                    // A grid — NOT the old "full-width textbox with Right padding + overlaid
+                    // buttons" pattern: Padding on a TextBox only shrinks its internal content
+                    // (background included), while its BOUNDS — and therefore its own text mask —
+                    // still spanned the button area, so long text drew straight across/under the
+                    // buttons. With the textbox's bounds ending before the buttons, its masking
+                    // clips the text exactly at the visible input edge.
+                    Child = new GridContainer
                     {
-                        searchBox = new ListingSearchBox
+                        RelativeSizeAxes = Axes.Both,
+                        ColumnDimensions = new[]
                         {
-                            RelativeSizeAxes = Axes.Both,
-                            // Leaves room for the two docked buttons below (search opener + map-ID),
-                            // matching the same textbox+docked-button pattern MapIdOverlay's own
-                            // idBox/addButton use.
-                            Padding = new MarginPadding { Right = 92 },
-                            PlaceholderText = "type in keywords…",
-                            Exit = docked ? unfocusSearch : Hide,
-                            Focused = () => SearchBoxFocused?.Invoke(),
+                            new Dimension(),
+                            new Dimension(GridSizeMode.AutoSize),
+                            new Dimension(GridSizeMode.AutoSize),
                         },
-                        // Dedicated search opener (see SearchOpenRequested) — under the fullscreen
-                        // style this is the mouse-driven way to present the big listing.
-                        new IconButton
+                        Content = new[]
                         {
-                            Anchor = Anchor.CentreRight,
-                            Origin = Anchor.CentreRight,
-                            X = -44,
-                            Size = new Vector2(40),
-                            Icon = FontAwesome.Solid.Search,
-                            Action = () => SearchOpenRequested?.Invoke(),
-                        },
-                        new IconButton
-                        {
-                            Anchor = Anchor.CentreRight,
-                            Origin = Anchor.CentreRight,
-                            Size = new Vector2(40),
-                            Icon = FontAwesome.Solid.Hashtag,
-                            Action = () => MapIdRequested?.Invoke(),
+                            new Drawable[]
+                            {
+                                searchBox = new ListingSearchBox
+                                {
+                                    RelativeSizeAxes = Axes.Both,
+                                    PlaceholderText = "type in keywords…",
+                                    Exit = docked ? unfocusSearch : Hide,
+                                    Focused = () => SearchBoxFocused?.Invoke(),
+                                },
+                                // Dedicated search opener (see SearchOpenRequested) — under the
+                                // fullscreen style this is the mouse-driven way to present the
+                                // big listing.
+                                new IconButton
+                                {
+                                    Anchor = Anchor.CentreLeft,
+                                    Origin = Anchor.CentreLeft,
+                                    Margin = new MarginPadding { Left = 4 },
+                                    Size = new Vector2(40),
+                                    Icon = FontAwesome.Solid.Search,
+                                    Action = () => SearchOpenRequested?.Invoke(),
+                                },
+                                new IconButton
+                                {
+                                    Anchor = Anchor.CentreLeft,
+                                    Origin = Anchor.CentreLeft,
+                                    Margin = new MarginPadding { Left = 4 },
+                                    Size = new Vector2(40),
+                                    Icon = FontAwesome.Solid.Hashtag,
+                                    Action = () => MapIdRequested?.Invoke(),
+                                },
+                            },
                         },
                     },
                 },
