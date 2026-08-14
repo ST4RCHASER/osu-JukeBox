@@ -157,6 +157,39 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("engine min stars follows", () => Math.Abs(docked.Engine.MinStars.Value - 3) < 0.001);
         }
 
+        // The lazer-style hover icon rail: sliding in on card hover with a plus button (existing
+        // enqueue path — listing stays open) and a browser button (opens the set's osu.ppy.sh
+        // page externally, via a test seam here).
+        [Test]
+        public void HoverIconRailQueuesAndOpensBrowser()
+        {
+            AddStep("open seeded with 'a'", () => fullscreen.ShowWithInitialChar('a'));
+            AddUntilStep("cards shown", () => fullscreen.ChildrenOfType<FullscreenBeatmapCard>().Count() == 3);
+            AddUntilStep("entrance settled", () => fullscreen.SlidePanel.Y == 0);
+
+            var browsedUrls = new List<string>();
+            AddStep("stub the browser opener", () => fullscreen.OpenUrl = browsedUrls.Add);
+
+            FullscreenBeatmapCard card = null!;
+            AddStep("grab a card", () => card = fullscreen.ChildrenOfType<FullscreenBeatmapCard>().Single(c => c.Set.Id == 1));
+
+            AddAssert("icon rail hidden before hover", () => card.IconRail.Alpha == 0);
+
+            AddStep("hover the card", () => InputManager.MoveMouseTo(card));
+            AddUntilStep("icon rail slid in", () => card.IconRail.Alpha == 1 && card.IconRail.X == 0);
+
+            AddStep("click the plus button", () => card.PlusButton.TriggerClick());
+            AddUntilStep("set queued via the existing enqueue path", () => picked?.Id == 1);
+            AddAssert("listing stayed open", () => fullscreen.State.Value == Visibility.Visible);
+
+            AddStep("click the browser button", () => card.BrowseButton.TriggerClick());
+            AddAssert("set page opened externally with the right URL",
+                () => browsedUrls.SequenceEqual(new[] { "https://osu.ppy.sh/beatmapsets/1" }));
+
+            AddStep("unhover", () => InputManager.MoveMouseTo(fullscreen.SearchBox));
+            AddUntilStep("icon rail slid back out", () => card.IconRail.Alpha == 0);
+        }
+
         [Test]
         public void TypingShowsThreeColumnCardsAndSyncsQueryToDockedBox()
         {
@@ -196,7 +229,13 @@ namespace JukeBox.Game.Tests.Visual
 
             AddAssert("nothing expanded before hover", () => fullscreen.Expansion == null && fullscreen.ExpandedCard == null);
 
-            AddStep("hover the 3-difficulty card", () => InputManager.MoveMouseTo(card1));
+            // Lazer behaviour: hovering the card BODY shows details (stats/icon rail) but does
+            // NOT expand — only the difficulty strip triggers the expansion.
+            AddStep("hover the card body", () => InputManager.MoveMouseTo(card1));
+            AddWaitStep("give any (wrong) expansion time to trigger", 5);
+            AddAssert("no expansion from body hover", () => fullscreen.Expansion == null);
+
+            AddStep("hover the difficulty strip", () => InputManager.MoveMouseTo(card1.DifficultyStrip));
             AddUntilStep("its floating expansion is fully visible", () => fullscreen.Expansion?.Alpha == 1);
             AddAssert("that card owns the expansion (accent border state)", () => fullscreen.ExpandedCard == card1 && card1.Expanded.Value);
 
@@ -214,8 +253,8 @@ namespace JukeBox.Game.Tests.Visual
                 fullscreen.ChildrenOfType<FullscreenBeatmapCard>().All(c =>
                     osuTK.Vector2.Distance(c.ScreenSpaceDrawQuad.TopLeft, positionsBefore[c.Set.Id]) < 0.5f));
 
-            // Exactly one expansion at a time: hovering another card MOVES it, never adds one.
-            AddStep("hover the neighbouring card", () => InputManager.MoveMouseTo(card2));
+            // Exactly one expansion at a time: hovering another card's strip MOVES it.
+            AddStep("hover the neighbouring card's difficulty strip", () => InputManager.MoveMouseTo(card2.DifficultyStrip));
             AddUntilStep("expansion moved to the neighbour", () => fullscreen.ExpandedCard == card2 && card2.Expanded.Value);
             AddAssert("previous card released its expanded state", () => !card1.Expanded.Value);
             AddUntilStep("only one expansion panel alive", () =>
