@@ -6,6 +6,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using JukeBox.Game.Beatmaps;
@@ -17,6 +18,8 @@ using NUnit.Framework;
 using osu.Framework.Allocation;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
+using osu.Framework.Graphics.Sprites;
+using osu.Framework.Graphics.UserInterface;
 using osu.Framework.Testing;
 using osuTK;
 using osuTK.Input;
@@ -119,18 +122,72 @@ namespace JukeBox.Game.Tests.Visual
             });
         }
 
+        // Transport (play/pause/skip) and volume moved to Settings → Playback/Audio (TransportRow
+        // and the master/effect/music volume rows in SettingsOverlay) — the bar itself no longer
+        // carries any drawable that would drive them.
         [Test]
-        public void PlayPauseButtonFlipsIsPlaying()
+        public void NoTransportOrVolumeControlsRemainInBar()
         {
-            AddStep("play fixture", () => playback.PlayAsync(fixtureSet));
-            AddUntilStep("track active", () => playback.Current.Value?.SetId == fixtureSet.SetId);
-            AddAssert("playing", () => playback.IsPlaying);
+            AddAssert("no play/pause/skip icon button", () => bar.ChildrenOfType<IconButton>()
+                .All(b => !b.Icon.Equals(FontAwesome.Solid.Play)
+                          && !b.Icon.Equals(FontAwesome.Solid.Pause)
+                          && !b.Icon.Equals(FontAwesome.Solid.StepForward)));
 
-            AddStep("click play/pause button", () => bar.PlayPauseButton.TriggerClick());
-            AddAssert("no longer playing", () => !playback.IsPlaying);
+            AddAssert("no volume slider", () => !bar.ChildrenOfType<BasicSliderBar<double>>().Any());
+            AddAssert("no volume icon", () => !bar.ChildrenOfType<SpriteIcon>()
+                .Any(i => i.Icon.Equals(FontAwesome.Solid.VolumeUp)));
+        }
 
-            AddStep("click play/pause button again", () => bar.PlayPauseButton.TriggerClick());
-            AddAssert("playing again", () => playback.IsPlaying);
+        // Regression coverage for the progress bar overflowing the card: the fill's visual track
+        // (ProgressSliderBar.VisualBar) must render inset within the bar's own rounded card, not
+        // flush with (or past) its edges.
+        [Test]
+        public void ProgressBarVisualTrackStaysWithinCardBounds()
+        {
+            AddAssert("track's left edge is inside the card, past the corner radius",
+                () => bar.ProgressBar.VisualBar.ScreenSpaceDrawQuad.TopLeft.X
+                      >= bar.ScreenSpaceDrawQuad.TopLeft.X + Theme.CornerRadius);
+
+            AddAssert("track's right edge is inside the card, past the corner radius",
+                () => bar.ProgressBar.VisualBar.ScreenSpaceDrawQuad.TopRight.X
+                      <= bar.ScreenSpaceDrawQuad.TopRight.X - Theme.CornerRadius);
+        }
+
+        [Test]
+        public void BrowserButtonOpensNowPlayingSetPage()
+        {
+            string? openedUrl = null;
+            AddStep("wire OpenUrl seam", () => bar.OpenUrl = url => openedUrl = url);
+            AddStep("set NowPlaying", () => jukebox.NowPlaying.Value = fixtureInfo);
+
+            AddStep("click browser button", () => bar.BrowserButton.TriggerClick());
+            AddAssert("opened the set's osu.ppy.sh page",
+                () => openedUrl == $"https://osu.ppy.sh/beatmapsets/{fixtureInfo.Id}");
+        }
+
+        [Test]
+        public void BrowserButtonDoesNothingWithNoNowPlaying()
+        {
+            bool called = false;
+            AddStep("wire OpenUrl seam", () => bar.OpenUrl = _ => called = true);
+            AddStep("clear NowPlaying", () => jukebox.NowPlaying.Value = null);
+
+            AddStep("click browser button", () => bar.BrowserButton.TriggerClick());
+            AddAssert("seam was not invoked", () => !called);
+        }
+
+        [Test]
+        public void TimeLabelsFormatAndUpdateLive()
+        {
+            AddStep("play long fixture", () => playback.PlayAsync(fixtureSetLong));
+            AddUntilStep("track active", () => playback.Current.Value?.SetId == fixtureSetLong.SetId);
+
+            AddAssert("elapsed starts at 0:00", () => bar.ElapsedText.Text.ToString() == "0:00");
+            AddAssert("total label is mm:ss formatted",
+                () => Regex.IsMatch(bar.TotalText.Text.ToString(), @"^\d+:\d{2}$"));
+
+            AddUntilStep("elapsed label advances as playback progresses",
+                () => bar.ElapsedText.Text.ToString() != "0:00");
         }
 
         // Regression test for the periodic Update() write fighting a live drag: SliderBar<T>'s
@@ -181,17 +238,17 @@ namespace JukeBox.Game.Tests.Visual
                 () => Math.Abs(playback.CurrentTimeMs / playback.LengthMs - 0.5) < 0.2);
         }
 
-        // Regression coverage for the difficulty switcher hiding entirely on single-difficulty
+        // Regression coverage for the difficulty dropdown hiding entirely on single-difficulty
         // sets: it should only disappear when there are zero difficulties (an edge case that
         // shouldn't occur in practice, but the switcher must degrade gracefully) — a lone
-        // difficulty still shows its name as a non-interactive, always-selected chip.
+        // difficulty still shows its name as a non-interactive, always-selected entry.
         //
         // Each of these builds its own CachedBeatmapSet (distinct SetId, sharing fixtureSet's
         // audio file) rather than mutating the shared fixtureSet — PlaybackController.Current is a
         // Bindable, so reassigning the very same object another test already played would be a
         // same-reference no-op and never fire DifficultySwitcher's rebuild.
         [Test]
-        public void DifficultySwitcherShowsNonInteractiveChipForSingleDifficultySet()
+        public void DifficultySwitcherShowsNonInteractiveEntryForSingleDifficultySet()
         {
             var soloSet = new CachedBeatmapSet { SetId = 101, Directory = tmp, AudioFile = fixtureSet.AudioFile, PreferredOsuFile = "solo.osu" };
             soloSet.Difficulties.Add(new DifficultyInfo { Path = "solo.osu", Version = "Solo", Mode = 0 });
@@ -199,10 +256,9 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("play set with one difficulty", () => playback.PlayAsync(soloSet));
             AddUntilStep("track active", () => playback.Current.Value?.SetId == soloSet.SetId);
 
-            AddAssert("one chip shown", () => bar.DifficultySwitcher.Chips.Count == 1);
-            AddAssert("chip shows the version name", () => bar.DifficultySwitcher.Chips[0].Difficulty.Version == "Solo");
-            AddAssert("chip is selected", () => bar.DifficultySwitcher.Chips[0].Selected);
-            AddAssert("chip is non-interactive", () => !bar.DifficultySwitcher.Chips[0].Enabled.Value);
+            AddAssert("one item shown", () => bar.DifficultySwitcher.Dropdown.Items.Count() == 1);
+            AddAssert("item is selected and shows the version", () => bar.DifficultySwitcher.Dropdown.Current.Value?.Version == "Solo");
+            AddAssert("dropdown is non-interactive", () => bar.DifficultySwitcher.Dropdown.Current.Disabled);
         }
 
         [Test]
@@ -213,11 +269,11 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("play set with no difficulties", () => playback.PlayAsync(emptySet));
             AddUntilStep("track active", () => playback.Current.Value?.SetId == emptySet.SetId);
 
-            AddAssert("no chips shown", () => bar.DifficultySwitcher.Chips.Count == 0);
+            AddAssert("dropdown hidden", () => bar.DifficultySwitcher.Dropdown.Alpha == 0);
         }
 
         [Test]
-        public void DifficultySwitcherShowsInteractiveChipsForMultiDifficultySet()
+        public void DifficultySwitcherShowsInteractiveDropdownForMultiDifficultySet()
         {
             var multiSet = new CachedBeatmapSet { SetId = 103, Directory = tmp, AudioFile = fixtureSet.AudioFile, PreferredOsuFile = "easy.osu" };
             multiSet.Difficulties.Add(new DifficultyInfo { Path = "easy.osu", Version = "Easy", Mode = 0 });
@@ -226,8 +282,43 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("play set with two difficulties", () => playback.PlayAsync(multiSet));
             AddUntilStep("track active", () => playback.Current.Value?.SetId == multiSet.SetId);
 
-            AddAssert("two chips shown", () => bar.DifficultySwitcher.Chips.Count == 2);
-            AddAssert("both chips interactive", () => bar.DifficultySwitcher.Chips.All(c => c.Enabled.Value));
+            AddAssert("two items shown", () => bar.DifficultySwitcher.Dropdown.Items.Count() == 2);
+            AddAssert("dropdown interactive", () => !bar.DifficultySwitcher.Dropdown.Current.Disabled);
+            AddAssert("easy selected initially (matches PreferredOsuFile)",
+                () => bar.DifficultySwitcher.Dropdown.Current.Value?.Version == "Easy");
+        }
+
+        // Regression coverage for actually switching diffs mid-song via the dropdown (not just
+        // that it's interactive) — same selection semantics the old clickable chips provided.
+        [Test]
+        public void SelectingDropdownItemSwitchesDifficulty()
+        {
+            var multiSet = new CachedBeatmapSet { SetId = 104, Directory = tmp, AudioFile = fixtureSet.AudioFile, PreferredOsuFile = "easy.osu" };
+            multiSet.OsuFiles.AddRange(new[] { "easy.osu", "hard.osu" }); // SwitchDifficultyAsync requires the path to be a known OsuFile
+            multiSet.Difficulties.Add(new DifficultyInfo { Path = "easy.osu", Version = "Easy", Mode = 0 });
+            multiSet.Difficulties.Add(new DifficultyInfo { Path = "hard.osu", Version = "Hard", Mode = 0 });
+
+            AddStep("play set with two difficulties", () => playback.PlayAsync(multiSet));
+            AddUntilStep("track active", () => playback.Current.Value?.SetId == multiSet.SetId);
+
+            AddStep("select Hard via the dropdown", () => bar.DifficultySwitcher.Dropdown.Current.Value =
+                multiSet.Difficulties.Single(d => d.Version == "Hard"));
+
+            AddUntilStep("playback switched to hard.osu", () => playback.SelectedOsuFile.Value == "hard.osu");
+        }
+
+        [Test]
+        public void DifficultyDropdownItemLabelIncludesMode()
+        {
+            var mixedSet = new CachedBeatmapSet { SetId = 105, Directory = tmp, AudioFile = fixtureSet.AudioFile, PreferredOsuFile = "std.osu" };
+            mixedSet.Difficulties.Add(new DifficultyInfo { Path = "std.osu", Version = "Normal", Mode = 0 });
+            mixedSet.Difficulties.Add(new DifficultyInfo { Path = "taiko.osu", Version = "Oni", Mode = 1 });
+
+            AddStep("play mixed-mode set", () => playback.PlayAsync(mixedSet));
+            AddUntilStep("track active", () => playback.Current.Value?.SetId == mixedSet.SetId);
+
+            AddAssert("taiko item labelled with its mode", () => bar.ChildrenOfType<DifficultySwitcher.DifficultyDropdown>()
+                .Single().GenerateItemTextForTest(mixedSet.Difficulties[1]).ToString() == "[taiko] Oni");
         }
 
         [Test]
