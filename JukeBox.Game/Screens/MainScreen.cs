@@ -23,7 +23,9 @@ namespace JukeBox.Game.Screens;
 /// the <see cref="NowPlayingScreen"/> visuals as a BOXED player panel in the centre (same rounded/
 /// shadowed card language as the columns, gutters on all sides — not a full-bleed underlay), a
 /// permanently-docked right column
-/// (tabbed Queue/Settings) and the full-width <see cref="NowPlayingBar"/> along the bottom — driven
+/// (tabbed Queue/Settings) and the <see cref="NowPlayingBar"/> along the bottom of the CENTRE
+/// strip (inset to the same left/right bounds as the player box — the columns own their full
+/// height, the bar never runs underneath them) — driven
 /// by <see cref="JukeBoxSetting.UiLayout"/>. Replaces the old Fullscreen/Split layout-toggle pair;
 /// see <see cref="UiLayout"/> for the config migration story.
 ///
@@ -228,13 +230,12 @@ public partial class MainScreen : Screen
             },
             LeftColumn = new Container
             {
+                // Full window height — the bottom bar no longer runs underneath the columns (it
+                // sits only in the centre strip between them, see the bar's host below).
                 RelativeSizeAxes = Axes.Y,
                 Width = left_column_width,
                 Anchor = Anchor.TopLeft,
                 Origin = Anchor.TopLeft,
-                // Stops above the bottom bar rather than running full height underneath it — the
-                // bar is the one element allowed to span the full width/overlay the visuals.
-                Margin = new MarginPadding { Bottom = bottom_bar_height },
                 Masking = true,
                 CornerRadius = Theme.CornerRadius,
                 EdgeEffect = Theme.PanelShadow,
@@ -255,11 +256,11 @@ public partial class MainScreen : Screen
             },
             RightColumn = new Container
             {
+                // Full window height, same as LeftColumn.
                 RelativeSizeAxes = Axes.Y,
                 Width = right_column_width,
                 Anchor = Anchor.TopRight,
                 Origin = Anchor.TopRight,
-                Margin = new MarginPadding { Bottom = bottom_bar_height },
                 Masking = true,
                 CornerRadius = Theme.CornerRadius,
                 EdgeEffect = Theme.PanelShadow,
@@ -304,7 +305,23 @@ public partial class MainScreen : Screen
                     },
                 },
             },
-            bottomBar = new NowPlayingBar(),
+            // The bar sits only in the CENTRE strip between the (now full-height) columns — the
+            // same left/right insets as the player box above it, so the three centre cells (box,
+            // gutter, bar) read as one column of cards framed by the side panels. The padded host
+            // (rather than margins on the bar itself) is what actually narrows it: the bar is
+            // RelativeSizeAxes.X, and relative sizing resolves against the host's padded content
+            // area, not its own margins. applyLayout keeps animating the BAR (not the host), so
+            // the focus-mode slide/fade behaviour is unchanged (the bar is hidden there anyway).
+            new Container
+            {
+                RelativeSizeAxes = Axes.Both,
+                Padding = new MarginPadding
+                {
+                    Left = left_column_width + Theme.SectionSpacing,
+                    Right = right_column_width + Theme.SectionSpacing,
+                },
+                Child = bottomBar = new NowPlayingBar(),
+            },
             // Top level, ABOVE the columns and the bottom bar: the fullscreen search style's big
             // listing is a true whole-window modal (dim scrim + centred sliding panel — see
             // FullscreenListingOverlay), not a player-box-area overlay. The map-ID modal stays
