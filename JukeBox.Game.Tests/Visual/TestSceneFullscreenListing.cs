@@ -124,6 +124,7 @@ namespace JukeBox.Game.Tests.Visual
         {
             AddStep("open seeded with 'a'", () => fullscreen.ShowWithInitialChar('a'));
             AddUntilStep("cards shown", () => fullscreen.ChildrenOfType<FullscreenBeatmapCard>().Count() == 3);
+            AddUntilStep("entrance settled", () => fullscreen.SlidePanel.Y == 0);
 
             AddAssert("query synced into the docked view (one shared engine)", () => docked.SearchBox.Text == "a");
             AddAssert("docked view rendered the same results", () => docked.ChildrenOfType<BeatmapCard>().Count() == 3);
@@ -142,6 +143,7 @@ namespace JukeBox.Game.Tests.Visual
         {
             AddStep("open seeded with 'a'", () => fullscreen.ShowWithInitialChar('a'));
             AddUntilStep("cards shown", () => fullscreen.ChildrenOfType<FullscreenBeatmapCard>().Count() == 3);
+            AddUntilStep("entrance settled", () => fullscreen.SlidePanel.Y == 0);
 
             FullscreenBeatmapCard card = null!;
             AddStep("grab the 3-difficulty card", () => card = fullscreen.ChildrenOfType<FullscreenBeatmapCard>().Single(c => c.Set.Id == 1));
@@ -169,6 +171,7 @@ namespace JukeBox.Game.Tests.Visual
         {
             AddStep("open seeded with 'a'", () => fullscreen.ShowWithInitialChar('a'));
             AddUntilStep("cards shown", () => fullscreen.ChildrenOfType<FullscreenBeatmapCard>().Count() == 3);
+            AddUntilStep("entrance settled", () => fullscreen.SlidePanel.Y == 0);
 
             // The decoupled clock runs source-less, so the controller reads as playing without
             // needing a real audio file — enough to exercise the pause/resume contract.
@@ -206,6 +209,7 @@ namespace JukeBox.Game.Tests.Visual
         {
             AddStep("open seeded with 'a'", () => fullscreen.ShowWithInitialChar('a'));
             AddUntilStep("cards shown", () => fullscreen.ChildrenOfType<FullscreenBeatmapCard>().Count() == 3);
+            AddUntilStep("entrance settled", () => fullscreen.SlidePanel.Y == 0);
 
             AddStep("start main playback (decoupled clock)", () => playback.TogglePause());
 
@@ -226,6 +230,7 @@ namespace JukeBox.Game.Tests.Visual
         {
             AddStep("open seeded with 'a'", () => fullscreen.ShowWithInitialChar('a'));
             AddUntilStep("cards shown", () => fullscreen.ChildrenOfType<FullscreenBeatmapCard>().Count() == 3);
+            AddUntilStep("entrance settled", () => fullscreen.SlidePanel.Y == 0);
 
             AddStep("press enter", () => InputManager.Key(Key.Enter));
 
@@ -238,6 +243,7 @@ namespace JukeBox.Game.Tests.Visual
         {
             AddStep("open seeded with 'a'", () => fullscreen.ShowWithInitialChar('a'));
             AddUntilStep("cards shown", () => fullscreen.ChildrenOfType<FullscreenBeatmapCard>().Count() == 3);
+            AddUntilStep("entrance settled", () => fullscreen.SlidePanel.Y == 0);
 
             AddStep("click the first card", () =>
             {

@@ -124,6 +124,14 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
     /// </summary>
     public event Action? SearchBoxFocused;
 
+    /// <summary>
+    /// Fired by the dedicated search-opener icon button docked in the keyword box (next to the
+    /// "#" button) — <see cref="Screens.MainScreen"/> presents <see cref="FullscreenListingOverlay"/>
+    /// under the fullscreen style, or focuses this keyword box (<see cref="FocusSearch"/>) under
+    /// compact.
+    /// </summary>
+    public event Action? SearchOpenRequested;
+
     [Resolved(canBeNull: true)]
     private JukeBoxConfigManager? config { get; set; }
 
@@ -299,12 +307,24 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
                         searchBox = new ListingSearchBox
                         {
                             RelativeSizeAxes = Axes.Both,
-                            // Leaves room for the docked map-ID button below, matching the same
-                            // textbox+docked-button pattern MapIdOverlay's own idBox/addButton use.
-                            Padding = new MarginPadding { Right = 48 },
+                            // Leaves room for the two docked buttons below (search opener + map-ID),
+                            // matching the same textbox+docked-button pattern MapIdOverlay's own
+                            // idBox/addButton use.
+                            Padding = new MarginPadding { Right = 92 },
                             PlaceholderText = "type in keywords…",
                             Exit = docked ? unfocusSearch : Hide,
                             Focused = () => SearchBoxFocused?.Invoke(),
+                        },
+                        // Dedicated search opener (see SearchOpenRequested) — under the fullscreen
+                        // style this is the mouse-driven way to present the big listing.
+                        new IconButton
+                        {
+                            Anchor = Anchor.CentreRight,
+                            Origin = Anchor.CentreRight,
+                            X = -44,
+                            Size = new Vector2(40),
+                            Icon = FontAwesome.Solid.Search,
+                            Action = () => SearchOpenRequested?.Invoke(),
                         },
                         new IconButton
                         {
@@ -504,6 +524,14 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
     {
         Show();
         searchBox.Text = c.ToString();
+        scheduleFocus();
+    }
+
+    /// <summary>Focuses the keyword box without seeding it — the compact-style response to the
+    /// search-opener icon (<see cref="SearchOpenRequested"/>).</summary>
+    public void FocusSearch()
+    {
+        Show();
         scheduleFocus();
     }
 
