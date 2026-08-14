@@ -35,7 +35,7 @@ public partial class Jukebox : Component
     /// Human-readable progress feedback for whatever the current advance round is doing that
     /// isn't instant — currently just "Downloading {title}…" while a cache-miss download is in
     /// flight. Null the rest of the time (including while the round is otherwise busy but nothing
-    /// needs to download). UI (e.g. <see cref="UI.NowPlayingBar"/>) shows this so a first-run
+    /// needs to download). UI (e.g. <see cref="UI.NowPlayingPanel"/>) shows this so a first-run
     /// download doesn't look like the app hung with no feedback at all.
     /// </summary>
     public readonly Bindable<string?> Status = new();

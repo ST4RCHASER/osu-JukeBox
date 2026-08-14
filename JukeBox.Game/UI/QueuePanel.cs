@@ -22,8 +22,9 @@ namespace JukeBox.Game.UI;
 /// <list type="bullet">
 /// <item>Floating (default, <c>docked: false</c>) — a right-anchored drawer, off-screen (past its
 /// own right edge) until <see cref="ToggleVisibility"/>/<see cref="SetShown"/> slides it in.</item>
-/// <item>Docked (<c>docked: true</c>) — the three-column layout's right panel embeds this as its
-/// "Queue" tab body: fully-relative geometry filling whatever parent it's given, parked at X = 0
+/// <item>Docked (<c>docked: true</c>) — the right column's "Playback" tab embeds this as its Queue
+/// section (see <see cref="PlaybackPanel"/>): fully-relative geometry filling whatever parent it's
+/// given (chrome-less — the surrounding tab already owns the card), parked at X = 0
 /// from the start (no slide-in — the owning tab strip toggles Alpha instead). Configured entirely
 /// here rather than by an external post-construction override, since the parent composite's own
 /// child-loading order isn't guaranteed relative to a caller's LoadComplete (e.g. inside a
@@ -39,6 +40,9 @@ public partial class QueuePanel : CompositeDrawable
     /// <summary>See the class summary.</summary>
     private readonly bool docked;
 
+    /// <summary>The floating drawer pads its own card; a docked instance is already inside one.</summary>
+    private float contentPadding => docked ? 0 : Theme.PanelPadding;
+
     [Resolved]
     private MusicQueue queue { get; set; } = null!;
 
@@ -48,6 +52,7 @@ public partial class QueuePanel : CompositeDrawable
     private BeatmapCache? cache { get; set; }
 
     private SpriteText headerText = null!;
+    private FillFlowContainer contentFlow = null!;
     private FillFlowContainer rowsFlow = null!;
 
     private bool shown;
@@ -71,6 +76,15 @@ public partial class QueuePanel : CompositeDrawable
     internal int RowCount => rowsFlow.Count;
 
     internal string HeaderText => headerText.Text.ToString();
+
+    /// <summary>
+    /// The height this panel's content (header + however many rows are currently listed) actually
+    /// occupies, including its own padding — the panel itself always fills whatever slot it's given,
+    /// so a host that has to SIZE that slot (see <see cref="PlaybackPanel"/>, which stacks the queue
+    /// under the playback controls in one scrolling column) needs this to know how tall the slot has
+    /// to be for nothing to get clipped.
+    /// </summary>
+    internal float ContentHeight => contentFlow.DrawHeight + contentPadding * 2;
 
     /// <summary>
     /// Test-only: the row at <paramref name="index"/>'s current status text ("ready",
@@ -105,20 +119,29 @@ public partial class QueuePanel : CompositeDrawable
 
         Masking = true;
         CornerRadius = Theme.CornerRadius;
-        EdgeEffect = Theme.PanelShadow;
 
-        InternalChildren = new Drawable[]
+        // The floating drawer is a card in its own right — surface, shadow, inner padding. A docked
+        // instance is a section INSIDE an already-padded panel card (see PlaybackPanel), so it draws
+        // none of that: a second PanelSurface over the identical column surface only adds a stray
+        // shadow halo, and a second ring of padding would push its header out of line with the
+        // content stacked above it.
+        if (!docked)
         {
-            new Box
+            EdgeEffect = Theme.PanelShadow;
+
+            AddInternal(new Box
             {
                 RelativeSizeAxes = Axes.Both,
                 Colour = Theme.PanelSurface,
-            },
+            });
+        }
+
+        AddInternal(
             new Container
             {
                 RelativeSizeAxes = Axes.Both,
-                Padding = new MarginPadding(Theme.PanelPadding),
-                Child = new FillFlowContainer
+                Padding = new MarginPadding(contentPadding),
+                Child = contentFlow = new FillFlowContainer
                 {
                     RelativeSizeAxes = Axes.X,
                     AutoSizeAxes = Axes.Y,
@@ -146,7 +169,7 @@ public partial class QueuePanel : CompositeDrawable
                     }
                 }
             }
-        };
+        );
     }
 
     protected override void LoadComplete()

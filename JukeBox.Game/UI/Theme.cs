@@ -19,7 +19,7 @@ internal static class Theme
     /// <summary>Outermost background scrim, sitting behind the storyboard/video visuals.</summary>
     public static readonly Color4 Background = new Color4(0x14, 0x14, 0x1B, 0xFF);
 
-    /// <summary>Panel surface (left column, bottom bar) — ~0.92 alpha so it reads as a
+    /// <summary>Panel surface (the side columns) — ~0.92 alpha so it reads as a
     /// translucent layer over the visuals rather than a fully opaque backdrop.</summary>
     public static readonly Color4 PanelSurface = new Color4(0x1E, 0x1E, 0x28, 235);
 
@@ -128,7 +128,7 @@ internal static class Theme
     /// button micro-interaction, even though the two happen to share a value.</summary>
     public const float PopScale = 0.95f;
 
-    /// <summary>Subtle drop shadow used behind the left panel and the bottom playback bar.</summary>
+    /// <summary>Subtle drop shadow used behind the side columns and the boxed player panel.</summary>
     public static EdgeEffectParameters PanelShadow => new EdgeEffectParameters
     {
         Type = EdgeEffectType.Shadow,

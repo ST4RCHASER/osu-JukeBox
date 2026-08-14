@@ -23,19 +23,22 @@ namespace JukeBox.Game.Screens;
 /// <summary>
 /// Top-level screen: a single fixed three-column layout — a permanently-docked left search column,
 /// the <see cref="NowPlayingScreen"/> visuals as a BOXED player panel in the centre (same rounded/
-/// shadowed card language as the columns, gutters on all sides — not a full-bleed underlay), a
-/// permanently-docked right column
-/// (tabbed Queue/Settings) and the <see cref="NowPlayingBar"/> along the bottom of the CENTRE
-/// strip (inset to the same left/right bounds as the player box — the columns own their full
-/// height, the bar never runs underneath them) — driven
+/// shadowed card language as the columns, gutters on all sides — not a full-bleed underlay) and a
+/// permanently-docked right column (tabbed Playback/Settings) — driven
 /// by <see cref="JukeBoxSetting.UiLayout"/>. Replaces the old Fullscreen/Split layout-toggle pair;
 /// see <see cref="UiLayout"/> for the config migration story.
+///
+/// <para>
+/// There is no bottom bar: the playback strip that used to span the window's bottom edge is gone,
+/// its content folded into the right column's Playback tab (see <see cref="PlaybackPanel"/>). The
+/// player box and both columns therefore run all the way to the window's bottom edge.
+/// </para>
 ///
 /// <para>
 /// The left column embeds <see cref="BeatmapListingOverlay"/> in its <c>docked</c> mode (permanently
 /// visible — no more show/hide overlay semantics; see that class). Typing a printable character
 /// (with no modifiers held) focuses+seeds it via <see cref="BeatmapListingOverlay.ShowWithInitialChar"/>,
-/// same entry point as before, just without a pop-in. The right column embeds <see cref="QueuePanel"/>
+/// same entry point as before, just without a pop-in. The right column embeds <see cref="PlaybackPanel"/>
 /// and <see cref="SettingsOverlay"/> (also docked) side by side behind two tab buttons — both stay
 /// permanently loaded and alive, so switching tabs is a simple Alpha toggle (instant, and every
 /// component's own state — scroll position, filter selections, checkbox values — just sits there
@@ -44,9 +47,9 @@ namespace JukeBox.Game.Screens;
 ///
 /// <para>
 /// Tab is repurposed from "toggle layout" to "focus mode": it hides both side columns (letting the
-/// visuals go full-bleed; the bottom bar stays) and pressing it again restores the three-column
-/// layout. Ctrl+Q switches the right column to its Queue tab (kept, despite the drawer no longer
-/// being independently hideable, as a quick "jump to queue" shortcut). There is no separate
+/// visuals go full-bleed) and pressing it again restores the three-column
+/// layout. Ctrl+Q switches the right column to its Playback tab (kept, despite the drawer no longer
+/// being independently hideable, as a quick "jump to the queue/transport" shortcut). There is no separate
 /// settings shortcut/corner button any more — the Settings tab header in the right column is
 /// always reachable directly (see <see cref="createTabHeader"/>). The map-ID lookup
 /// (<see cref="MapIdOverlay"/>) is opened from an icon button docked inline at the right edge of
@@ -85,11 +88,6 @@ public partial class MainScreen : Screen
 
     private const float tab_header_height = 36;
 
-    // Mirrors NowPlayingBar's own (private) bar_height constant — kept in sync manually since the
-    // columns need to know how much room to leave above the bar without depending on that class's
-    // internals.
-    private const float bottom_bar_height = 88;
-
     // The design canvas the visuals render into before being scaled to fit the box. 854 covers
     // lazer's own widescreen storyboard width (16:9 at height 480 ≈ 853.3, rounded up); the lazer
     // storyboard renderer centres itself within its parent's width regardless of whether the
@@ -116,7 +114,6 @@ public partial class MainScreen : Screen
     private Container sceneContainer = null!;
     private FillFlowContainer detachedPlaceholder = null!;
     private ScreenStack visualsStack = null!;
-    private NowPlayingBar bottomBar = null!;
 
     // playerBox's own live pixel DrawSize, cached for any descendant (see BeatmapVisuals'
     // resolved use of this) that needs the box's REAL current aspect rather than the fixed
@@ -128,7 +125,7 @@ public partial class MainScreen : Screen
 
     private BeatmapListingOverlay listing = null!;
     private FullscreenListingOverlay fullscreenListing = null!;
-    private QueuePanel queuePanel = null!;
+    private PlaybackPanel playbackPanel = null!;
     private SettingsOverlay settingsBody = null!;
     private MapIdOverlay mapIdOverlay = null!;
 
@@ -146,16 +143,12 @@ public partial class MainScreen : Screen
     /// <summary>The left column's fullscreen-style body — only the search-opener icon.</summary>
     private Container searchRail = null!;
 
-    /// <summary>Hosts <see cref="bottomBar"/>, its padding keeping the bar tiled between the
-    /// columns — animated alongside the column width on style switches.</summary>
-    private Container barHost = null!;
-
     private Bindable<SearchStyle> searchStyle = null!;
 
-    private RightPanelTabButton queueTabButton = null!;
+    private RightPanelTabButton playbackTabButton = null!;
     private RightPanelTabButton settingsTabButton = null!;
 
-    private RightPanelTab currentTab = RightPanelTab.Queue;
+    private RightPanelTab currentTab = RightPanelTab.Playback;
 
     /// <summary>
     /// Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the left column, to assert
@@ -192,8 +185,8 @@ public partial class MainScreen : Screen
 
     /// <summary>
     /// Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the padding that insets
-    /// <see cref="PlayerBox"/> away from the columns/bottom bar — non-zero on every side in
-    /// ThreeColumn mode is what makes it a gutter-framed box rather than a full-bleed underlay.
+    /// <see cref="PlayerBox"/> away from the columns and the window edges — non-zero on every side
+    /// in ThreeColumn mode is what makes it a gutter-framed box rather than a full-bleed underlay.
     /// </summary>
     internal MarginPadding VisualsHostPadding => visualsHost.Padding;
 
@@ -214,7 +207,7 @@ public partial class MainScreen : Screen
 
     private enum RightPanelTab
     {
-        Queue,
+        Playback,
         Settings,
     }
 
@@ -230,15 +223,15 @@ public partial class MainScreen : Screen
         searchEngine = new BeatmapSearchEngine();
         listing = new BeatmapListingOverlay(docked: true, engine: searchEngine) { RelativeSizeAxes = Axes.Both };
         fullscreenListing = new FullscreenListingOverlay(searchEngine) { RelativeSizeAxes = Axes.Both };
-        queuePanel = new QueuePanel(docked: true);
+        playbackPanel = new PlaybackPanel();
         settingsBody = new SettingsOverlay(docked: true) { RelativeSizeAxes = Axes.Both };
         mapIdOverlay = new MapIdOverlay();
 
         InternalChildren = new Drawable[]
         {
             searchEngine,
-            // The app's own background, sitting behind absolutely everything — the columns and
-            // bottom bar each paint their own opaque PanelSurface, and playerBox is masked to its
+            // The app's own background, sitting behind absolutely everything — the columns each
+            // paint their own opaque PanelSurface, and playerBox is masked to its
             // own gutter-inset bounds (see below), so this is only ever actually visible in the
             // thin SectionSpacing gutters between them. Without it those gutters fell through to
             // the raw GL clear colour instead of the intended Theme background.
@@ -315,8 +308,7 @@ public partial class MainScreen : Screen
             },
             LeftColumn = new Container
             {
-                // Full window height — the bottom bar no longer runs underneath the columns (it
-                // sits only in the centre strip between them, see the bar's host below).
+                // Full window height, edge to edge — nothing sits underneath the columns.
                 RelativeSizeAxes = Axes.Y,
                 Width = left_column_width,
                 Anchor = Anchor.TopLeft,
@@ -402,7 +394,7 @@ public partial class MainScreen : Screen
                                         // own state (queue rows, filter/dropdown selections, scroll
                                         // position) just persists untouched while its tab isn't
                                         // showing, and switching back is instant.
-                                        Children = new Drawable[] { queuePanel, settingsBody },
+                                        Children = new Drawable[] { playbackPanel, settingsBody },
                                     },
                                 },
                             },
@@ -410,24 +402,7 @@ public partial class MainScreen : Screen
                     },
                 },
             },
-            // The bar sits only in the CENTRE strip between the (now full-height) columns — the
-            // same left/right insets as the player box above it, so the three centre cells (box,
-            // gutter, bar) read as one column of cards framed by the side panels. The padded host
-            // (rather than margins on the bar itself) is what actually narrows it: the bar is
-            // RelativeSizeAxes.X, and relative sizing resolves against the host's padded content
-            // area, not its own margins. applyLayout keeps animating the BAR (not the host), so
-            // the focus-mode slide/fade behaviour is unchanged (the bar is hidden there anyway).
-            barHost = new Container
-            {
-                RelativeSizeAxes = Axes.Both,
-                Padding = new MarginPadding
-                {
-                    Left = left_column_width + Theme.SectionSpacing,
-                    Right = right_column_width + Theme.SectionSpacing,
-                },
-                Child = bottomBar = new NowPlayingBar(),
-            },
-            // Top level, ABOVE the columns and the bottom bar: the fullscreen search style's big
+            // Top level, ABOVE the columns: the fullscreen search style's big
             // listing is a true whole-window modal (dim scrim + centred sliding panel — see
             // FullscreenListingOverlay), not a player-box-area overlay. The map-ID modal stays
             // above it so "#" lookup keeps working from either presentation.
@@ -477,7 +452,7 @@ public partial class MainScreen : Screen
 
         visualsStack.Push(new NowPlayingScreen());
 
-        selectTab(RightPanelTab.Queue, animate: false);
+        selectTab(RightPanelTab.Playback, animate: false);
 
         // Both bindables are assigned BEFORE either apply runs: applyLayout's insets read the
         // current style (rail vs full column width), and applySearchStyle's guard reads the
@@ -586,7 +561,7 @@ public partial class MainScreen : Screen
 
         if (e.ControlPressed && e.Key == Key.Q && !e.AltPressed && !e.SuperPressed)
         {
-            selectTab(RightPanelTab.Queue);
+            selectTab(RightPanelTab.Playback);
             return true;
         }
 
@@ -617,14 +592,14 @@ public partial class MainScreen : Screen
 
     /// <summary>
     /// One orchestrated transition, reversed for either direction: both side columns slide out
-    /// past their own edge (+ fade), the bottom bar slides down off-screen (+ fade) and the
-    /// player box simultaneously expands to full-bleed (padding + rounding both animate away) —
-    /// so focus mode reads as pure fullscreen visuals with nothing left overlaying them, not just
-    /// the side columns disappearing. Restoring plays every part of that back in reverse.
+    /// past their own edge (+ fade) and the player box simultaneously expands to full-bleed
+    /// (padding + rounding both animate away) — so focus mode reads as pure fullscreen visuals
+    /// with nothing left overlaying them, not just the side columns disappearing. Restoring plays
+    /// every part of that back in reverse.
     /// </summary>
     /// <summary>The left column's width under the CURRENT search style: the slim icon rail while
     /// the fullscreen style is active, the full listing column otherwise. Every left inset (player
-    /// box, bar host, focus-mode slide distance) derives from this rather than the raw constant.</summary>
+    /// box, focus-mode slide distance) derives from this rather than the raw constant.</summary>
     private float currentLeftColumnWidth => searchStyle.Value == SearchStyle.Fullscreen ? search_rail_width : left_column_width;
 
     /// <summary>The centre cell's insets in ThreeColumn mode — shared by <see cref="applyLayout"/>
@@ -634,13 +609,7 @@ public partial class MainScreen : Screen
         Left = currentLeftColumnWidth + Theme.SectionSpacing,
         Right = right_column_width + Theme.SectionSpacing,
         Top = Theme.SectionSpacing,
-        Bottom = bottom_bar_height + Theme.SectionSpacing,
-    };
-
-    private MarginPadding barHostPadding() => new MarginPadding
-    {
-        Left = currentLeftColumnWidth + Theme.SectionSpacing,
-        Right = right_column_width + Theme.SectionSpacing,
+        Bottom = Theme.SectionSpacing,
     };
 
     private void applyLayout(UiLayout layout, bool animate)
@@ -658,15 +627,9 @@ public partial class MainScreen : Screen
         RightColumn.MoveToX(focus ? right_column_width + Theme.SectionSpacing : 0, duration, easing);
         RightColumn.FadeTo(focus ? 0 : 1, duration, easing);
 
-        // Anchored BottomLeft: a positive Y pushes it straight down past the bottom edge.
-        bottomBar.MoveToY(focus ? bottom_bar_height + Theme.SectionSpacing : 0, duration, easing);
-        bottomBar.FadeTo(focus ? 0 : 1, duration, easing);
-
-        // ThreeColumn: the player sits in its own box between the columns and above the bottom
-        // bar, with a visible gutter on every side that leaves room for the bar without ever
-        // being covered by it. Focus: the box dissolves to full-bleed (padding + rounding
-        // animate to zero; the bottom bar is sliding away in parallel above, not just sitting
-        // over the top of it).
+        // ThreeColumn: the player sits in its own box between the columns, with a visible gutter
+        // on every side. Focus: the box dissolves to full-bleed (padding + rounding animate to
+        // zero) while the columns slide away in parallel.
         var targetPadding = focus ? new MarginPadding() : threeColumnPadding();
 
         visualsHost.TransformTo(nameof(visualsHost.Padding), targetPadding, duration, easing);
@@ -685,7 +648,7 @@ public partial class MainScreen : Screen
     /// <summary>
     /// Applies the search style's left-column presentation: the fullscreen style collapses the
     /// column to the slim icon rail (crossfading the docked listing out and the search-opener
-    /// icon in) and slides the player box's/bar's left insets along with it; compact restores the
+    /// icon in) and slides the player box's left inset along with it; compact restores the
     /// full listing column. One orchestrated animation on live switches (Theme timing), instant
     /// for the initial call at load.
     /// </summary>
@@ -705,14 +668,11 @@ public partial class MainScreen : Screen
         listingBody.FadeTo(fullscreen ? 0 : 1, duration, easing);
         searchRail.FadeTo(fullscreen ? 1 : 0, duration, easing);
 
-        // The centre cells (player box + bar) follow the column's new width so the tiling holds
-        // through the transition. Focus mode's zero padding must not be disturbed — its own
-        // restore recomputes from the then-current style (applyLayout → threeColumnPadding).
+        // The player box follows the column's new width so the tiling holds through the
+        // transition. Focus mode's zero padding must not be disturbed — its own restore recomputes
+        // from the then-current style (applyLayout → threeColumnPadding).
         if (uiLayout.Value == UiLayout.ThreeColumn)
-        {
             visualsHost.TransformTo(nameof(visualsHost.Padding), threeColumnPadding(), duration, Theme.EaseEnter);
-            barHost.TransformTo(nameof(barHost.Padding), barHostPadding(), duration, Theme.EaseEnter);
-        }
     }
 
     /// <summary>
@@ -723,7 +683,7 @@ public partial class MainScreen : Screen
     private void selectTab(RightPanelTab tab, bool animate = true)
     {
         // No-op re-selection (e.g. clicking an already-active tab, or Ctrl+Q while already on
-        // Queue) shouldn't restart the crossfade — but the one-time initial call must still apply
+        // Playback) shouldn't restart the crossfade — but the one-time initial call must still apply
         // regardless, since both bodies start at their construction-time default Alpha (1).
         if (animate && tab == currentTab)
             return;
@@ -732,10 +692,10 @@ public partial class MainScreen : Screen
 
         double duration = animate ? Theme.DurationNormal : 0;
 
-        showTabBody(queuePanel, tab == RightPanelTab.Queue, duration);
+        showTabBody(playbackPanel, tab == RightPanelTab.Playback, duration);
         showTabBody(settingsBody, tab == RightPanelTab.Settings, duration);
 
-        queueTabButton.Active.Value = tab == RightPanelTab.Queue;
+        playbackTabButton.Active.Value = tab == RightPanelTab.Playback;
         settingsTabButton.Active.Value = tab == RightPanelTab.Settings;
     }
 
@@ -771,11 +731,11 @@ public partial class MainScreen : Screen
             {
                 new Drawable[]
                 {
-                    queueTabButton = new RightPanelTabButton("Queue")
+                    playbackTabButton = new RightPanelTabButton("Playback")
                     {
                         RelativeSizeAxes = Axes.Both,
                         Margin = new MarginPadding { Right = 3 },
-                        Action = () => selectTab(RightPanelTab.Queue),
+                        Action = () => selectTab(RightPanelTab.Playback),
                     },
                     settingsTabButton = new RightPanelTabButton("Settings")
                     {
@@ -832,7 +792,7 @@ public partial class MainScreen : Screen
     }
 
     /// <summary>
-    /// One tab button in the right column's Queue/Settings strip — a rounded, flat button that
+    /// One tab button in the right column's Playback/Settings strip — a rounded, flat button that
     /// fills accent-adjacent while <see cref="Active"/> with a thin accent underline, matching the
     /// design system's chip/button language elsewhere (<see cref="FilterChip"/>, <see cref="IconButton"/>)
     /// without pulling in the framework's generic (unthemed) TabControl.
