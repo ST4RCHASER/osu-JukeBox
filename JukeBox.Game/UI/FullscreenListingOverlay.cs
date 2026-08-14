@@ -43,7 +43,7 @@ namespace JukeBox.Game.UI;
 ///
 /// Hovering a card expands it osu-web style: the card's grid footprint NEVER changes — a single
 /// floating <see cref="CardExpansion"/> (never more than one, see
-/// <see cref="onCardHoverChanged"/>) renders the difficulty list ABOVE the grid at the card's
+/// <see cref="onCardExpansionHoverChanged"/>) renders the difficulty list ABOVE the grid at the card's
 /// position, growing downward over the neighbours with its own shadow, and collapses on hover-out
 /// (short grace delay) or moves when another card is hovered. The ▶ preview button routes to the
 /// owned <see cref="PreviewPlayer"/>, which pauses the main jukebox track for the preview's
@@ -117,11 +117,14 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
 
     private readonly BeatmapSearchEngine engine;
 
+    [Resolved]
+    private osu.Framework.Platform.GameHost host { get; set; } = null!;
+
     public event Action<BeatmapSetInfo>? SetPicked;
 
-    /// <summary>Grace period after hover leaves a card/expansion before the expansion collapses —
-    /// long enough for the pointer to travel between the two, short enough to feel immediate.</summary>
-    private const double collapse_grace_ms = 120;
+    /// <summary>Debounce for the difficulty-strip expansion, both directions — lazer's
+    /// <c>BeatmapCardContent</c> queues its expanded-state changes with this same 100ms.</summary>
+    private const double expand_delay_ms = 100;
 
     private ListingSearchBox searchBox = null!;
     private FillFlowContainer<FullscreenBeatmapCard> cardsFlow = null!;
@@ -159,6 +162,7 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
 
     private FullscreenBeatmapCard? expandedCard;
     private CardExpansion? expansion;
+    private osu.Framework.Threading.ScheduledDelegate? pendingExpand;
     private osu.Framework.Threading.ScheduledDelegate? pendingCollapse;
 
     /// <summary>Sets already rendered as of the last rebuild — cards for these don't re-animate
@@ -790,8 +794,9 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
             // Same disabled-set contract as the docked listing: no Action means framework-level
             // disabled (dimmed by the card itself, absorbs no clicks).
             card.Action = set.DownloadDisabled ? null : () => pick(card);
-            card.HoverChanged += onCardHoverChanged;
+            card.ExpansionHoverChanged += onCardExpansionHoverChanged;
             card.PreviewRequested += onPreviewRequested;
+            card.BrowseRequested += onBrowseRequested;
             card.PreviewingSetId.Value = previewPlayer.PlayingSetId.Value;
             cardsFlow.Add(card);
 
@@ -819,16 +824,29 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
     // ---- Hover expansion (single floating overlay above the grid) ----------------------------
 
     /// <summary>
-    /// Moves the SINGLE floating expansion between cards: hovering a card expands it (instantly
-    /// replacing whichever card was expanded before — never two at once), and losing hover
-    /// schedules a short grace-delayed collapse that is cancelled if the cursor lands on the
-    /// expansion panel itself (so mousing from the card down into its difficulty list keeps it
-    /// open) or on another card (which just takes the expansion over).
+    /// Moves the SINGLE floating expansion between cards. Lazer behaviour and timing: the trigger
+    /// is the card's DIFFICULTY STRIP (not the whole card), and both directions are debounced by
+    /// <see cref="expand_delay_ms"/> (lazer's <c>BeatmapCardContent.queueExpandedStateChange</c>
+    /// 100ms) — hovering the strip expands after the delay (instantly replacing whichever card
+    /// was expanded — never two at once), leaving it schedules a collapse that is cancelled while
+    /// the cursor is on the strip or the expansion panel itself (so mousing from the strip down
+    /// into the difficulty list keeps it open).
     /// </summary>
-    private void onCardHoverChanged(FullscreenBeatmapCard card, bool hovered)
+    private void onCardExpansionHoverChanged(FullscreenBeatmapCard card, bool hovered)
     {
         if (hovered)
-            expandCard(card);
+        {
+            pendingCollapse?.Cancel();
+            pendingExpand?.Cancel();
+            // Re-checked at fire time: a strip the cursor merely passed through (or one whose
+            // hover-lost arrived after another strip's hover — event ordering isn't guaranteed)
+            // must not expand.
+            pendingExpand = Scheduler.AddDelayed(() =>
+            {
+                if (card.DifficultyStrip.IsHovered)
+                    expandCard(card);
+            }, expand_delay_ms);
+        }
         else
             scheduleCollapse();
     }
@@ -850,21 +868,26 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
         expansionLayer.Add(expansion);
     }
 
-    /// <summary>See <see cref="onCardHoverChanged"/> — a short grace period before collapsing, so
-    /// the pointer can travel from the card onto the expansion panel (or vice versa) without the
-    /// expansion flickering away in between.</summary>
+    /// <summary>See <see cref="onCardExpansionHoverChanged"/> — the collapse side of the same
+    /// debounce, so the pointer can travel from the strip onto the expansion panel (or vice
+    /// versa) without the expansion flickering away in between.</summary>
     private void scheduleCollapse()
     {
+        // Deliberately does NOT cancel a pending expand: hover-lost on the previous card's strip
+        // can arrive AFTER hover on the next card's strip within the same input pass, and
+        // cancelling here would eat that handover. The pending expand self-guards on the strip
+        // still being hovered, and expandCard cancels this collapse when it wins.
         pendingCollapse?.Cancel();
         pendingCollapse = Scheduler.AddDelayed(() =>
         {
-            if (expandedCard?.IsHovered != true && expansion?.IsHovered != true)
+            if (expandedCard?.DifficultyStrip.IsHovered != true && expansion?.IsHovered != true)
                 collapseExpansion();
-        }, collapse_grace_ms);
+        }, expand_delay_ms);
     }
 
     private void collapseExpansion()
     {
+        pendingExpand?.Cancel();
         pendingCollapse?.Cancel();
 
         if (expandedCard != null)
@@ -874,6 +897,23 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
         expansion?.Collapse();
         expansion = null;
     }
+
+    /// <summary>Browser icon on a card's hover rail: opens the set's osu.ppy.sh page in the
+    /// system browser. <see cref="OpenUrl"/> is the network-less test seam.</summary>
+    private void onBrowseRequested(FullscreenBeatmapCard card)
+    {
+        string url = $"https://osu.ppy.sh/beatmapsets/{card.Set.Id}";
+
+        if (OpenUrl != null)
+            OpenUrl(url);
+        else
+            host.OpenUrlExternally(url);
+    }
+
+    /// <summary>Test seam (JukeBox.Game.Tests has InternalsVisibleTo): replaces
+    /// <see cref="osu.Framework.Platform.GameHost.OpenUrlExternally"/> so tests can assert the
+    /// browsed URL without actually opening a browser.</summary>
+    internal Action<string>? OpenUrl;
 
     /// <summary>▶ on a card: toggle if this set is already previewing, else start its preview
     /// (implicitly replacing any other set's).</summary>
@@ -949,14 +989,16 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
         protected override void LoadComplete()
         {
             base.LoadComplete();
-            this.FadeIn(Theme.DurationFast, Theme.EaseEnter);
+            // Lazer's dropdownContent fade-in (BeatmapCardContent.updateState).
+            this.FadeIn(FullscreenBeatmapCard.TRANSITION_DURATION, Easing.OutQuint);
         }
 
-        /// <summary>Fades out and expires — called by the overlay; never self-triggered.</summary>
+        /// <summary>Fades out and expires — called by the overlay; never self-triggered. A third
+        /// of the entrance duration, matching lazer's collapse.</summary>
         public void Collapse()
         {
             HoverLost = null;
-            this.FadeOut(Theme.DurationFast, Theme.EaseExit).Expire();
+            this.FadeOut(FullscreenBeatmapCard.TRANSITION_DURATION / 3f, Easing.OutQuint).Expire();
         }
 
         protected override void Update()
