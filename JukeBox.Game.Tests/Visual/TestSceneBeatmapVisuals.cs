@@ -31,6 +31,13 @@ namespace JukeBox.Game.Tests.Visual
         [Cached]
         private readonly PlaybackController controller = new PlaybackController();
 
+        // Mirrors MainScreen's own [Cached] playerBoxSize (see BeatmapVisuals' resolved use of
+        // it) — left at its default (0,0) for every other test in this fixture, which falls back
+        // to BeatmapVisuals' own DrawSize exactly as before; only
+        // TaikoLaneReachesTheLiveBoxEdgesWhenTheBoxIsWiderThan16By9 below assigns it.
+        [Cached]
+        private readonly osu.Framework.Bindables.Bindable<osuTK.Vector2> playerBoxSize = new();
+
         [Resolved]
         private JukeBoxConfigManager config { get; set; } = null!;
 
@@ -1160,7 +1167,7 @@ namespace JukeBox.Game.Tests.Visual
                 visuals.ChartRenderer!.DrawableRuleset!.Playfield.AllHitObjects
                        .OfType<osu.Game.Rulesets.Taiko.Objects.Drawables.DrawableHit>().Any());
 
-            AddAssert("taiko lane background spans >=99% of the scene's own width", () =>
+            AddAssert("taiko lane background spans >=99.5% of the scene's own width", () =>
             {
                 var playfield = visuals.ChartRenderer!.DrawableRuleset!.Playfield;
                 var laneBg = laneBackground(playfield);
@@ -1171,13 +1178,133 @@ namespace JukeBox.Game.Tests.Visual
                 var laneQuad = laneBg.ScreenSpaceDrawQuad;
                 float laneWidth = laneQuad.TopRight.X - laneQuad.TopLeft.X;
 
-                return laneWidth >= sceneWidth * 0.99f;
+                return laneWidth >= sceneWidth * 0.995f;
             });
 
             AddStep("remove visuals", () =>
             {
                 config.SetValue(JukeBoxSetting.RenderChart, false);
                 Remove(wrapper, true);
+            });
+        }
+
+        // Regression coverage for reopen #8: the box (854x480, see MainScreen.scene_width/height)
+        // that TaikoLaneSpansFullSceneWidthIn16By9Box above hosts BeatmapVisuals directly inside
+        // is itself the actual bug's SOURCE, not a neutral test rig — MainScreen never hands
+        // visualsStack a box that shape; it hands it a LIVE playerBox (whatever the actual window
+        // gives it) that sceneContainer's fixed 854x480 canvas is then uniformly CONTAIN-fit
+        // scaled into, letterboxing on whichever axis has slack. Once that live box is wider than
+        // 854/480 (~1.779:1) — the common case on anything 16:9 or wider, or in focus mode where
+        // the box goes full-bleed — sceneContainer's own contain-fit left dead margins down both
+        // sides of EVERYTHING inside it, taiko lane included, even though taiko's own
+        // TaikoPlayfieldAdjustmentContainer never even saw an aspect requiring ITS OWN [5:4,16:9]
+        // clamp to fire (confirmed with a real windowed screenshot harness: the storyboard, a
+        // chartContainer sibling, showed the exact same margin, proving it wasn't taiko-specific
+        // at all). The fix threads the box's REAL live size down via MainScreen's [Cached]
+        // playerBoxSize (mirrored here) so chartContainer's aspect matches the box's real aspect
+        // instead of the fixed canvas' — this test hosts BeatmapVisuals inside the SAME 854x480
+        // scene canvas as above, but with playerBoxSize cached to a box noticeably WIDER than
+        // 16:9, and asserts the lane still spans the box's own edges, not just the canvas'.
+        [Test]
+        public void TaikoLaneReachesTheLiveBoxEdgesWhenTheBoxIsWiderThan16By9()
+        {
+            BeatmapVisuals visuals = null!;
+            Drawable liveBox = null!;
+            Drawable sceneContainer = null!;
+            var manual = new osu.Framework.Timing.ManualClock();
+            osu.Framework.Timing.FramedClock? clock = null;
+            const float scene_width = 854;
+            const float scene_height = 480;
+            var wideBox = new osuTK.Vector2(1900, 1047); // ~1.815:1 — clearly wider than 16:9
+
+            AddStep("enable chart", () => config.SetValue(JukeBoxSetting.RenderChart, true));
+            AddStep("cache a live playerBoxSize wider than 16:9", () => playerBoxSize.Value = wideBox);
+
+            AddStep("create visuals inside a live-box -> scene-canvas hierarchy matching MainScreen's real playerBox -> sceneContainer contain-fit", () =>
+            {
+                string osuFile = Path.Combine(tmp, "taiko-wide-box.osu");
+                File.WriteAllText(osuFile, """
+                    osu file format v14
+
+                    [General]
+                    AudioFilename: audio.mp3
+                    Mode: 1
+
+                    [Difficulty]
+                    HPDrainRate:5
+                    CircleSize:4
+                    OverallDifficulty:5
+                    ApproachRate:5
+                    SliderMultiplier:1.4
+                    SliderTickRate:1
+
+                    [TimingPoints]
+                    0,500,4,1,0,100,1,0
+
+                    [HitObjects]
+                    64,192,5000,1,0
+                    """);
+
+                var set = new CachedBeatmapSet
+                {
+                    SetId = 17,
+                    Directory = tmp,
+                    BackgroundFile = fixtureSetA.BackgroundFile,
+                    OsuFiles = { osuFile },
+                    PreferredOsuFile = osuFile,
+                };
+
+                clock = new osu.Framework.Timing.FramedClock(manual);
+
+                float baseScale = Math.Min(wideBox.X / scene_width, wideBox.Y / scene_height);
+
+                Add(liveBox = new osu.Framework.Graphics.Containers.Container
+                {
+                    Anchor = Anchor.Centre,
+                    Origin = Anchor.Centre,
+                    Size = wideBox,
+                    Child = sceneContainer = new osu.Framework.Graphics.Containers.Container
+                    {
+                        Anchor = Anchor.Centre,
+                        Origin = Anchor.Centre,
+                        Size = new osuTK.Vector2(scene_width, scene_height),
+                        Scale = new osuTK.Vector2(baseScale),
+                        Child = visuals = new BeatmapVisuals(set, clock) { RelativeSizeAxes = Axes.Both },
+                    },
+                });
+            });
+
+            AddUntilStep("chart loaded", () => visuals.IsLoaded && visuals.HasChartLayer && visuals.ChartRenderer?.DrawableRuleset != null);
+
+            AddStep("advance to just before the hit", () =>
+            {
+                manual.CurrentTime = 4990;
+                clock!.ProcessFrame();
+            });
+
+            AddUntilStep("note visible", () =>
+                visuals.ChartRenderer!.DrawableRuleset!.Playfield.AllHitObjects
+                       .OfType<osu.Game.Rulesets.Taiko.Objects.Drawables.DrawableHit>().Any());
+
+            AddAssert("taiko lane background spans >=99.5% of the LIVE (wider-than-canvas) box width", () =>
+            {
+                var playfield = visuals.ChartRenderer!.DrawableRuleset!.Playfield;
+                var laneBg = laneBackground(playfield);
+                if (laneBg == null)
+                    return false;
+
+                float liveBoxWidth = liveBox.ScreenSpaceDrawQuad.TopRight.X - liveBox.ScreenSpaceDrawQuad.TopLeft.X;
+                var laneQuad = laneBg.ScreenSpaceDrawQuad;
+                float laneWidth = laneQuad.TopRight.X - laneQuad.TopLeft.X;
+
+                return laneWidth >= liveBoxWidth * 0.995f;
+            });
+
+            AddStep("remove visuals", () =>
+            {
+                config.SetValue(JukeBoxSetting.RenderChart, false);
+                playerBoxSize.Value = default;
+                Remove(liveBox, true);
             });
         }
 

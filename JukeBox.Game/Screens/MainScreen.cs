@@ -108,6 +108,14 @@ public partial class MainScreen : Screen
     private ScreenStack visualsStack = null!;
     private NowPlayingBar bottomBar = null!;
 
+    // playerBox's own live pixel DrawSize, cached for any descendant (see BeatmapVisuals'
+    // resolved use of this) that needs the box's REAL current aspect rather than the fixed
+    // scene_width×scene_height design canvas sceneContainer contains itself within — kept up
+    // to date every frame in updateSceneScale (see its own remarks on why that's driven off
+    // playerBox.OnUpdate rather than this screen's Update()).
+    [Cached]
+    private readonly Bindable<Vector2> playerBoxSize = new();
+
     private BeatmapListingOverlay listing = null!;
     private FullscreenListingOverlay fullscreenListing = null!;
     private QueuePanel queuePanel = null!;
@@ -431,6 +439,8 @@ public partial class MainScreen : Screen
     /// </summary>
     private void updateSceneScale()
     {
+        playerBoxSize.Value = playerBox.DrawSize;
+
         if (playerBox.DrawWidth <= 0 || playerBox.DrawHeight <= 0)
             return;
 
