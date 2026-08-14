@@ -1,4 +1,5 @@
-﻿using JukeBox.Game.Online;
+﻿using JukeBox.Game.Detach;
+using JukeBox.Game.Online;
 using JukeBox.Game.Screens;
 using osu.Framework.Allocation;
 using osu.Framework.Graphics;
@@ -20,6 +21,10 @@ namespace JukeBox.Game
             // silently kills playback: their Schedule callbacks never run, so PlayAsync never
             // completes and the jukebox wedges with nothing playing.
             Add(screenStack = new ScreenStack { RelativeSizeAxes = Axes.Both });
+
+            // Wired here rather than in JukeBoxGameBase.load() so no test host ever tries to
+            // spawn a real OS process off the DetachPlayer setting.
+            Add(new DetachedViewerManager());
 
             // Single online TextureStore for beatmap set cover thumbnails
             // (https://b.ppy.sh/thumb/{setId}l.jpg), shared by every BeatmapCard/NowPlayingBar

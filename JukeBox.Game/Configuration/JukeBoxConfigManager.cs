@@ -73,6 +73,14 @@ public enum JukeBoxSetting
     PlayfieldZoom,
     /// <summary>How beatmap search results are presented — see <see cref="Configuration.SearchStyle"/>.</summary>
     SearchStyle,
+    /// <summary>
+    /// Presents the player visuals in their own OS window (a second process of the same binary —
+    /// see Detach.DetachedViewerManager) instead of the main window's player box, which shows a
+    /// placeholder while detached. Persisted like any other setting, so a user who parks the
+    /// player on a second monitor gets it back on the next launch; closing the detached window
+    /// flips this back off.
+    /// </summary>
+    DetachPlayer,
 }
 
 /// <summary>
@@ -198,5 +206,6 @@ public class JukeBoxConfigManager : IniConfigManager<JukeBoxSetting>
         SetDefault(JukeBoxSetting.GlobalAudioOffset, 0.0, -250.0, 250.0);
         SetDefault(JukeBoxSetting.PlayfieldZoom, 1.0, 0.01, 2.0);
         SetDefault(JukeBoxSetting.SearchStyle, SearchStyle.Compact);
+        SetDefault(JukeBoxSetting.DetachPlayer, false);
     }
 }
