@@ -19,6 +19,7 @@ using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Sprites;
 using osu.Framework.Screens;
 using osu.Framework.Testing;
+using osu.Game.Overlays.Settings;
 using osuTK.Input;
 
 namespace JukeBox.Game.Tests.Visual
@@ -39,9 +40,9 @@ namespace JukeBox.Game.Tests.Visual
         private MainScreen screen = null!;
 
         // Own full local dependency graph (mirror/queue/radio/cache/playback/jukebox/config), same
-        // approach as TestSceneNowPlayingBar: MainScreen resolves these via [Resolved], and giving
+        // approach as TestSceneNowPlayingPanel: MainScreen resolves these via [Resolved], and giving
         // it a StubMirror here (rather than the real network MirrorChain JukeBoxGameBase wires up)
-        // keeps this test off the network. See CreateChildDependencies note in TestSceneNowPlayingBar
+        // keeps this test off the network. See CreateChildDependencies note in TestSceneNowPlayingPanel
         // for why this runs once per fixture rather than per-test.
         protected override IReadOnlyDependencyContainer CreateChildDependencies(IReadOnlyDependencyContainer parent)
         {
@@ -66,7 +67,7 @@ namespace JukeBox.Game.Tests.Visual
         }
 
         // playback/jukebox added exactly once, here — NOT inside SetUpSteps, which rebuilds
-        // uiContainer's content on every [Test]. See TestSceneNowPlayingBar's LoadComplete for why.
+        // uiContainer's content on every [Test]. See TestSceneNowPlayingPanel's LoadComplete for why.
         protected override void LoadComplete()
         {
             base.LoadComplete();
@@ -92,20 +93,73 @@ namespace JukeBox.Game.Tests.Visual
         }
 
         [Test]
-        public void ThreeColumnLayoutStartsWithBothColumnsShownAndQueueTabActive()
+        public void ThreeColumnLayoutStartsWithBothColumnsShownAndPlaybackTabActive()
         {
             AddAssert("left column shown", () => screen.LeftColumn.Alpha == 1);
             AddAssert("right column shown", () => screen.RightColumn.Alpha == 1);
-            AddAssert("queue tab active", () => screen.ChildrenOfType<QueuePanel>().Single().Alpha == 1);
+            AddAssert("playback tab active", () => playbackPanel().Alpha == 1);
             AddAssert("settings tab inactive", () => screen.ChildrenOfType<SettingsOverlay>().Single().Alpha == 0);
         }
 
+        // The right column's first tab is "Playback" (it was "Queue" while the queue was all it
+        // held); Settings keeps its own name and position beside it.
+        [Test]
+        public void RightColumnTabsArePlaybackAndSettings()
+        {
+            AddAssert("tab headers read Playback and Settings", () => tabButtonLabels().SequenceEqual(new[] { "Playback", "Settings" }));
+        }
+
+        // Everything the deleted bottom bar carried, plus the controls that used to sit in
+        // Settings → Playback, now lives in this one tab — with the queue underneath it.
+        [Test]
+        public void PlaybackTabHoldsTheNowPlayingPanelTransportSpeedAndQueue()
+        {
+            AddAssert("now-playing panel (cover/title/progress/difficulty/browser) is in the tab",
+                () => playbackPanel().ChildrenOfType<NowPlayingPanel>().Any());
+            AddAssert("transport strip moved in from settings",
+                () => playbackPanel().ChildrenOfType<TransportRow>().Any());
+            AddAssert("playback speed slider moved in from settings",
+                () => playbackPanel().PlaybackRateSlider.LabelText.ToString() == "Playback speed");
+            AddAssert("per-beatmap offset row moved in from settings",
+                () => playbackPanel().BeatmapOffsetSlider?.LabelText.ToString() == "Audio offset (this beatmap)");
+            AddAssert("queue is in the tab too", () => playbackPanel().ChildrenOfType<QueuePanel>().Any());
+
+            AddAssert("queue sits BELOW the playback section", () =>
+                playbackPanel().Queue.ScreenSpaceDrawQuad.TopLeft.Y
+                >= playbackPanel().NowPlaying.ScreenSpaceDrawQuad.BottomLeft.Y);
+        }
+
+        // The moved rows must be gone from Settings, not duplicated into both tabs. The GLOBAL
+        // offset deliberately stays in Settings → Audio (it calibrates the output path, not the
+        // song) — so it's still findable there.
+        [Test]
+        public void SettingsTabNoLongerCarriesTheMovedPlaybackRows()
+        {
+            SettingsOverlay settings = null!;
+            AddStep("grab settings body", () => settings = screen.ChildrenOfType<SettingsOverlay>().Single());
+
+            AddAssert("no transport strip left in settings", () => !settings.ChildrenOfType<TransportRow>().Any());
+            AddAssert("no playback speed row left in settings", () => !settingsLabels(settings).Contains("Playback speed"));
+            AddAssert("no per-beatmap offset row left in settings", () => !settingsLabels(settings).Contains("Audio offset (this beatmap)"));
+            AddAssert("global offset row stayed in settings", () => settingsLabels(settings).Contains("Audio offset (global)"));
+        }
+
+        private PlaybackPanel playbackPanel() => screen.ChildrenOfType<PlaybackPanel>().Single();
+
+        private static List<string> settingsLabels(SettingsOverlay settings)
+            => settings.ChildrenOfType<SettingsItem<double>>().Select(i => i.LabelText.ToString()).ToList();
+
+        private List<string> tabButtonLabels()
+            => screen.ChildrenOfType<ClickableContainer>()
+                     .Where(c => c.GetType().Name == "RightPanelTabButton")
+                     .Select(c => c.ChildrenOfType<SpriteText>().First().Text.ToString())
+                     .ToList();
+
         // Regression coverage for a true contained player: the video/storyboard/background
-        // visuals must never render outside the boxed centre panel — not behind the side columns,
-        // not behind the bottom bar. Masking on the box is what actually enforces this (it clips
-        // everything inside, however far the visuals try to overflow); the geometry assertions
-        // below confirm the box itself is never positioned/sized to reach under a panel in the
-        // first place.
+        // visuals must never render outside the boxed centre panel, and never behind either side
+        // column. Masking on the box is what actually enforces this (it clips everything inside,
+        // however far the visuals try to overflow); the geometry assertions below confirm the box
+        // itself is never positioned/sized to reach under a panel in the first place.
         [Test]
         public void PlayerBoxMasksVisualsAndNeverExtendsUnderAPanel()
         {
@@ -120,36 +174,17 @@ namespace JukeBox.Game.Tests.Visual
                 screen.PlayerBox.ScreenSpaceDrawQuad.TopLeft.X >= screen.LeftColumn.ScreenSpaceDrawQuad.TopRight.X);
             AddAssert("box never reaches under the right column", () =>
                 screen.PlayerBox.ScreenSpaceDrawQuad.TopRight.X <= screen.RightColumn.ScreenSpaceDrawQuad.TopLeft.X);
-            AddAssert("box never reaches under the bottom bar", () =>
-                screen.PlayerBox.ScreenSpaceDrawQuad.BottomLeft.Y
-                <= screen.ChildrenOfType<NowPlayingBar>().Single().ScreenSpaceDrawQuad.TopLeft.Y);
 
-            // Stronger than the check above: the bar must be TILED below the box (its own strip,
-            // with a visible gutter), not merely touching/abutting it — the box's own padding is
-            // what carves out that strip (visualsHost.Padding.Bottom == bottom_bar_height +
-            // Theme.SectionSpacing), so this pins that gutter rather than allowing a zero-gap
-            // regression to silently pass the "<=" check above.
-            AddAssert("box bottom edge sits a full gutter above the bar's top edge, not just touching it", () =>
+            // The bottom bar is gone: nothing is tiled below the box any more, so it runs down to
+            // one gutter above the window's own bottom edge (visualsHost.Padding.Bottom ==
+            // Theme.SectionSpacing) rather than stopping short of a bar's strip.
+            AddAssert("no playback strip lives outside the right column any more",
+                () => screen.ChildrenOfType<NowPlayingPanel>().All(p => screen.RightColumn.ChildrenOfType<NowPlayingPanel>().Contains(p)));
+            AddAssert("box bottom edge sits exactly one gutter above the window's bottom", () =>
             {
                 float boxBottom = screen.PlayerBox.ScreenSpaceDrawQuad.BottomLeft.Y;
-                float barTop = screen.ChildrenOfType<NowPlayingBar>().Single().ScreenSpaceDrawQuad.TopLeft.Y;
-                return barTop - boxBottom >= Theme.SectionSpacing - 0.5f;
-            });
-
-            // The bar sits only in the CENTRE strip: the columns own their full height, and the
-            // bar never runs underneath them — a full gutter separates it from each column, the
-            // same insets as the player box above it.
-            AddAssert("bar never reaches under the left column (full gutter between them)", () =>
-            {
-                float barLeft = screen.ChildrenOfType<NowPlayingBar>().Single().ScreenSpaceDrawQuad.TopLeft.X;
-                float leftColumnRight = screen.LeftColumn.ScreenSpaceDrawQuad.TopRight.X;
-                return barLeft - leftColumnRight >= Theme.SectionSpacing - 0.5f;
-            });
-            AddAssert("bar never reaches under the right column (full gutter between them)", () =>
-            {
-                float barRight = screen.ChildrenOfType<NowPlayingBar>().Single().ScreenSpaceDrawQuad.TopRight.X;
-                float rightColumnLeft = screen.RightColumn.ScreenSpaceDrawQuad.TopLeft.X;
-                return rightColumnLeft - barRight >= Theme.SectionSpacing - 0.5f;
+                float screenBottom = screen.ScreenSpaceDrawQuad.BottomLeft.Y;
+                return Math.Abs(screenBottom - boxBottom - Theme.SectionSpacing) < 0.5f;
             });
             AddAssert("columns run the full window height (nothing underneath them)", () =>
             {
@@ -383,26 +418,24 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("listing still present in the hierarchy", () => screen.ChildrenOfType<BeatmapListingOverlay>().Any());
         }
 
-        // Focus mode is now an animated transition (side columns + bottom bar all slide/fade out
-        // together, reversed on restore — see MainScreen.applyLayout), so the Alpha assertions
-        // need to poll (AddUntilStep) rather than land true on the very next frame.
+        // Focus mode is an animated transition (both side columns slide/fade out together while
+        // the player box expands, reversed on restore — see MainScreen.applyLayout), so the Alpha
+        // assertions need to poll (AddUntilStep) rather than land true on the very next frame.
         [Test]
         public void TabTogglesFocusMode()
         {
             AddAssert("both columns shown initially", () => screen.LeftColumn.Alpha == 1 && screen.RightColumn.Alpha == 1);
-            AddAssert("bottom bar shown initially", () => screen.ChildrenOfType<NowPlayingBar>().Single().Alpha == 1);
             AddAssert("config starts ThreeColumn", () => config.Get<UiLayout>(JukeBoxSetting.UiLayout) == UiLayout.ThreeColumn);
 
             AddStep("press tab", () => InputManager.Key(Key.Tab));
             AddAssert("config persisted Focus", () => config.Get<UiLayout>(JukeBoxSetting.UiLayout) == UiLayout.Focus);
             AddUntilStep("both columns hidden (focus mode)", () => screen.LeftColumn.Alpha == 0 && screen.RightColumn.Alpha == 0);
-            AddUntilStep("bottom bar hidden too — focus mode is pure fullscreen visuals",
-                () => screen.ChildrenOfType<NowPlayingBar>().Single().Alpha == 0);
+            AddUntilStep("player fills the window", () => screen.PlayerBox.DrawWidth >= screen.DrawWidth - 1
+                                                         && screen.PlayerBox.DrawHeight >= screen.DrawHeight - 1);
 
             AddStep("press tab again", () => InputManager.Key(Key.Tab));
             AddAssert("config back to ThreeColumn", () => config.Get<UiLayout>(JukeBoxSetting.UiLayout) == UiLayout.ThreeColumn);
             AddUntilStep("both columns shown again", () => screen.LeftColumn.Alpha == 1 && screen.RightColumn.Alpha == 1);
-            AddUntilStep("bottom bar shown again", () => screen.ChildrenOfType<NowPlayingBar>().Single().Alpha == 1);
         }
 
         // Type-anywhere-to-search only makes sense while the column hosting the search box is
@@ -459,7 +492,7 @@ namespace JukeBox.Game.Tests.Visual
         }
 
         // The fullscreen listing is a TRUE whole-window modal: its quad must cover the entire
-        // window — over the side columns and the bottom bar, not just the player-box area — and
+        // window — over both side columns, not just the player-box area — and
         // its entrance must SLIDE the panel up from past the bottom edge (sampled per engine
         // frame, same pattern as the focus-transition regressions above) rather than snapping in.
         [Test]
@@ -490,7 +523,7 @@ namespace JukeBox.Game.Tests.Visual
                 return o.Left <= s.Left + 0.5f && o.Top <= s.Top + 0.5f
                        && o.Right >= s.Right - 0.5f && o.Bottom >= s.Bottom - 0.5f;
             });
-            AddAssert("covers the side columns and the bottom bar too", () =>
+            AddAssert("covers both side columns too", () =>
             {
                 var o = fullscreen.ScreenSpaceDrawQuad.AABBFloat;
 
@@ -499,8 +532,7 @@ namespace JukeBox.Game.Tests.Visual
                        && o.Right >= r.Right - 0.5f && o.Bottom >= r.Bottom - 0.5f;
 
                 return covers(screen.LeftColumn.ScreenSpaceDrawQuad.AABBFloat)
-                       && covers(screen.RightColumn.ScreenSpaceDrawQuad.AABBFloat)
-                       && covers(screen.ChildrenOfType<NowPlayingBar>().Single().ScreenSpaceDrawQuad.AABBFloat);
+                       && covers(screen.RightColumn.ScreenSpaceDrawQuad.AABBFloat);
             });
 
             AddStep("clear samples", () => sampler.Samples.Clear());
@@ -536,7 +568,7 @@ namespace JukeBox.Game.Tests.Visual
 
         // The fullscreen style collapses the left column to a slim icon rail: the docked listing
         // crossfades away (ONLY the search icon remains), the column width animates down, and the
-        // player box + bottom bar insets follow it so the centre tiling holds. Switching back to
+        // player box's inset follows it so the centre tiling holds. Switching back to
         // compact restores the full column live.
         [Test]
         public void FullscreenStyleCollapsesLeftColumnToIconRail()
@@ -557,19 +589,13 @@ namespace JukeBox.Game.Tests.Visual
             AddUntilStep("docked listing crossfaded away", () => screen.ListingBody.Alpha == 0);
             AddUntilStep("only the search icon remains (rail shown)", () => screen.SearchRail.Alpha == 1);
 
-            // The centre insets follow the rail: the player box and the bar now sit a gutter
-            // right of the RAIL's edge, not the old full column's.
+            // The centre inset follows the rail: the player box now sits a gutter right of the
+            // RAIL's edge, not the old full column's.
             AddUntilStep("player box left inset follows the rail", () =>
             {
                 float boxLeft = screen.PlayerBox.ScreenSpaceDrawQuad.TopLeft.X;
                 float railRight = screen.LeftColumn.ScreenSpaceDrawQuad.TopRight.X;
                 return boxLeft - railRight >= Theme.SectionSpacing - 0.5f && boxLeft - railRight <= Theme.SectionSpacing + 1.5f;
-            });
-            AddUntilStep("bottom bar left inset follows the rail", () =>
-            {
-                float barLeft = screen.ChildrenOfType<NowPlayingBar>().Single().ScreenSpaceDrawQuad.TopLeft.X;
-                float railRight = screen.LeftColumn.ScreenSpaceDrawQuad.TopRight.X;
-                return barLeft - railRight >= Theme.SectionSpacing - 0.5f && barLeft - railRight <= Theme.SectionSpacing + 1.5f;
             });
 
             AddStep("click the rail icon", () => clickRailButton());
@@ -591,33 +617,33 @@ namespace JukeBox.Game.Tests.Visual
         [Test]
         public void SettingsTabButtonSwitchesRightPanelToSettingsTab()
         {
-            QueuePanel queuePanel = null!;
+            PlaybackPanel playbackBody = null!;
             SettingsOverlay settingsBody = null!;
-            AddStep("grab queue panel and settings body", () =>
+            AddStep("grab playback tab and settings body", () =>
             {
-                queuePanel = screen.ChildrenOfType<QueuePanel>().Single();
+                playbackBody = playbackPanel();
                 settingsBody = screen.ChildrenOfType<SettingsOverlay>().Single();
             });
 
-            AddAssert("queue tab active initially", () => queuePanel.Alpha == 1 && settingsBody.Alpha == 0);
+            AddAssert("playback tab active initially", () => playbackBody.Alpha == 1 && settingsBody.Alpha == 0);
 
             AddStep("click the Settings tab button", () => clickTabButton("Settings"));
 
             // The tab switch crossfades (see MainScreen.showTabBody) rather than cutting
             // instantly, so this needs to poll rather than assert on the very next frame.
-            AddUntilStep("settings tab now active", () => settingsBody.Alpha == 1 && queuePanel.Alpha == 0);
+            AddUntilStep("settings tab now active", () => settingsBody.Alpha == 1 && playbackBody.Alpha == 0);
         }
 
-        // Regression coverage for Ctrl+Q: still a "jump to queue" shortcut, now switching the tab
-        // rather than sliding a drawer into view.
+        // Regression coverage for Ctrl+Q: still a "jump to the queue" shortcut, now landing on the
+        // Playback tab that holds the queue rather than sliding a drawer into view.
         [Test]
-        public void CtrlQSwitchesRightPanelToQueueTab()
+        public void CtrlQSwitchesRightPanelToPlaybackTab()
         {
-            QueuePanel queuePanel = null!;
+            PlaybackPanel playbackBody = null!;
             SettingsOverlay settingsBody = null!;
-            AddStep("grab queue panel and settings body, switch to settings", () =>
+            AddStep("grab playback tab and settings body, switch to settings", () =>
             {
-                queuePanel = screen.ChildrenOfType<QueuePanel>().Single();
+                playbackBody = playbackPanel();
                 settingsBody = screen.ChildrenOfType<SettingsOverlay>().Single();
                 clickTabButton("Settings");
             });
@@ -630,7 +656,8 @@ namespace JukeBox.Game.Tests.Visual
                 InputManager.ReleaseKey(Key.ControlLeft);
             });
 
-            AddUntilStep("queue tab active again", () => queuePanel.Alpha == 1 && settingsBody.Alpha == 0);
+            AddUntilStep("playback tab active again", () => playbackBody.Alpha == 1 && settingsBody.Alpha == 0);
+            AddAssert("the queue itself is on that tab", () => playbackBody.ChildrenOfType<QueuePanel>().Any());
         }
 
         // Regression coverage for the map-ID button: now docked inline at the right edge of the
@@ -662,10 +689,11 @@ namespace JukeBox.Game.Tests.Visual
                      .TriggerClick();
 
         // Regression coverage for the queue drawer's old floating-drawer geometry (off-screen X,
-        // Y-only relative sizing) — MainScreen must override it to fully-relative fill-the-tab-body
-        // geometry once at load, since QueuePanel's own LoadComplete otherwise parks it off-screen.
+        // Y-only relative sizing) — the docked presentation must instead fill the queue section it
+        // is given inside the Playback tab, since QueuePanel's own LoadComplete otherwise parks it
+        // off-screen.
         [Test]
-        public void QueuePanelDockedFillsTheRightColumnTabBody()
+        public void QueuePanelDockedFillsTheQueueSection()
         {
             AddAssert("queue panel X == 0", () => screen.ChildrenOfType<QueuePanel>().Single().X == 0);
             AddAssert("queue panel anchored top-left", () => screen.ChildrenOfType<QueuePanel>().Single().Anchor == Anchor.TopLeft);

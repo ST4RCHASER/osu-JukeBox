@@ -27,20 +27,25 @@ using osuTK.Input;
 namespace JukeBox.Game.Tests.Visual
 {
     [TestFixture]
-    public partial class TestSceneNowPlayingBar : JukeBoxManualInputTestScene
+    public partial class TestSceneNowPlayingPanel : JukeBoxManualInputTestScene
     {
         private PlaybackController playback = null!;
         private MusicQueue queue = null!;
         private BeatmapCache cache = null!;
         private Jukebox jukebox = null!;
 
-        private NowPlayingBar bar = null!;
-        private QueuePanel panel = null!;
+        private NowPlayingPanel nowPlaying = null!;
+        private QueuePanel queuePanel = null!;
 
         private string tmp = null!;
         private CachedBeatmapSet fixtureSet = null!;
         private CachedBeatmapSet fixtureSetLong = null!;
         private BeatmapSetInfo fixtureInfo = null!;
+
+        // The panel is hosted at the real right-column content width (see MainScreen) rather than
+        // the full test window: it lays out for a narrow column, so anything that only breaks when
+        // space is tight breaks here too.
+        private const float column_content_width = 340 - 2 * Theme.PanelPadding;
 
         // CreateChildDependencies runs once for the whole scene (shared across every [Test] in
         // this fixture, see TestSceneBeatmapListing) — playback/jukebox/queue are created here once
@@ -116,51 +121,72 @@ namespace JukeBox.Game.Tests.Visual
 
                 uiContainer.Children = new Drawable[]
                 {
-                    bar = new NowPlayingBar(),
-                    panel = new QueuePanel(),
+                    new Container
+                    {
+                        RelativeSizeAxes = Axes.Y,
+                        Width = column_content_width,
+                        Child = nowPlaying = new NowPlayingPanel(),
+                    },
+                    queuePanel = new QueuePanel(),
                 };
             });
         }
 
-        // Transport (play/pause/skip) and volume moved to Settings → Playback/Audio (TransportRow
-        // and the master/effect/music volume rows in SettingsOverlay) — the bar itself no longer
-        // carries any drawable that would drive them.
+        // This panel is the "what's playing" presentation only: the transport strip is its own
+        // sibling drawable in the Playback tab (TransportRow, see PlaybackPanel) and the volume
+        // sliders live in Settings → Audio, so neither belongs in here.
         [Test]
-        public void NoTransportOrVolumeControlsRemainInBar()
+        public void NoTransportOrVolumeControlsInNowPlayingPanel()
         {
-            AddAssert("no play/pause/skip icon button", () => bar.ChildrenOfType<IconButton>()
+            AddAssert("no play/pause/skip icon button", () => nowPlaying.ChildrenOfType<IconButton>()
                 .All(b => !b.Icon.Equals(FontAwesome.Solid.Play)
                           && !b.Icon.Equals(FontAwesome.Solid.Pause)
                           && !b.Icon.Equals(FontAwesome.Solid.StepForward)));
 
-            AddAssert("no volume slider", () => !bar.ChildrenOfType<BasicSliderBar<double>>().Any());
-            AddAssert("no volume icon", () => !bar.ChildrenOfType<SpriteIcon>()
+            AddAssert("no volume slider", () => !nowPlaying.ChildrenOfType<BasicSliderBar<double>>().Any());
+            AddAssert("no volume icon", () => !nowPlaying.ChildrenOfType<SpriteIcon>()
                 .Any(i => i.Icon.Equals(FontAwesome.Solid.VolumeUp)));
         }
 
-        // Regression coverage for the progress bar overflowing the card: the fill's visual track
-        // (ProgressSliderBar.VisualBar) must render inset within the bar's own rounded card, not
-        // flush with (or past) its edges.
+        // Regression coverage for the progress bar overflowing its host: the fill's visual track
+        // (ProgressSliderBar.VisualBar) spans the panel's own width exactly — never past it, into
+        // the padding the owning column card reserves around this content.
         [Test]
-        public void ProgressBarVisualTrackStaysWithinCardBounds()
+        public void ProgressBarVisualTrackStaysWithinPanelBounds()
         {
-            AddAssert("track's left edge is inside the card, past the corner radius",
-                () => bar.ProgressBar.VisualBar.ScreenSpaceDrawQuad.TopLeft.X
-                      >= bar.ScreenSpaceDrawQuad.TopLeft.X + Theme.CornerRadius);
+            AddAssert("track's left edge is inside the panel",
+                () => nowPlaying.ProgressBar.VisualBar.ScreenSpaceDrawQuad.TopLeft.X
+                      >= nowPlaying.ScreenSpaceDrawQuad.TopLeft.X - 0.5f);
 
-            AddAssert("track's right edge is inside the card, past the corner radius",
-                () => bar.ProgressBar.VisualBar.ScreenSpaceDrawQuad.TopRight.X
-                      <= bar.ScreenSpaceDrawQuad.TopRight.X - Theme.CornerRadius);
+            AddAssert("track's right edge is inside the panel",
+                () => nowPlaying.ProgressBar.VisualBar.ScreenSpaceDrawQuad.TopRight.X
+                      <= nowPlaying.ScreenSpaceDrawQuad.TopRight.X + 0.5f);
+        }
+
+        // The panel stacks VERTICALLY for a narrow column (it used to be a wide bar with everything
+        // side by side): it sizes to its content within the column's width, the progress bar spans
+        // that full width, and it sits on its own row below the cover/title/button band rather than
+        // beside it.
+        [Test]
+        public void PanelStacksVerticallyWithinTheColumnWidth()
+        {
+            AddUntilStep("panel has laid out", () => nowPlaying.DrawHeight > 0);
+            AddAssert("panel is no wider than its column", () => nowPlaying.DrawWidth <= column_content_width + 0.5f);
+            AddAssert("progress bar spans the panel's full width",
+                () => nowPlaying.ProgressBar.DrawWidth >= nowPlaying.DrawWidth - 0.5f);
+            AddAssert("progress bar is below the browser button, not beside it",
+                () => nowPlaying.ProgressBar.ScreenSpaceDrawQuad.TopLeft.Y
+                      >= nowPlaying.BrowserButton.ScreenSpaceDrawQuad.BottomLeft.Y);
         }
 
         [Test]
         public void BrowserButtonOpensNowPlayingSetPage()
         {
             string? openedUrl = null;
-            AddStep("wire OpenUrl seam", () => bar.OpenUrl = url => openedUrl = url);
+            AddStep("wire OpenUrl seam", () => nowPlaying.OpenUrl = url => openedUrl = url);
             AddStep("set NowPlaying", () => jukebox.NowPlaying.Value = fixtureInfo);
 
-            AddStep("click browser button", () => bar.BrowserButton.TriggerClick());
+            AddStep("click browser button", () => nowPlaying.BrowserButton.TriggerClick());
             AddAssert("opened the set's osu.ppy.sh page",
                 () => openedUrl == $"https://osu.ppy.sh/beatmapsets/{fixtureInfo.Id}");
         }
@@ -169,10 +195,10 @@ namespace JukeBox.Game.Tests.Visual
         public void BrowserButtonDoesNothingWithNoNowPlaying()
         {
             bool called = false;
-            AddStep("wire OpenUrl seam", () => bar.OpenUrl = _ => called = true);
+            AddStep("wire OpenUrl seam", () => nowPlaying.OpenUrl = _ => called = true);
             AddStep("clear NowPlaying", () => jukebox.NowPlaying.Value = null);
 
-            AddStep("click browser button", () => bar.BrowserButton.TriggerClick());
+            AddStep("click browser button", () => nowPlaying.BrowserButton.TriggerClick());
             AddAssert("seam was not invoked", () => !called);
         }
 
@@ -182,12 +208,12 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("play long fixture", () => playback.PlayAsync(fixtureSetLong));
             AddUntilStep("track active", () => playback.Current.Value?.SetId == fixtureSetLong.SetId);
 
-            AddAssert("elapsed starts at 0:00", () => bar.ElapsedText.Text.ToString() == "0:00");
+            AddAssert("elapsed starts at 0:00", () => nowPlaying.ElapsedText.Text.ToString() == "0:00");
             AddAssert("total label is mm:ss formatted",
-                () => Regex.IsMatch(bar.TotalText.Text.ToString(), @"^\d+:\d{2}$"));
+                () => Regex.IsMatch(nowPlaying.TotalText.Text.ToString(), @"^\d+:\d{2}$"));
 
             AddUntilStep("elapsed label advances as playback progresses",
-                () => bar.ElapsedText.Text.ToString() != "0:00");
+                () => nowPlaying.ElapsedText.Text.ToString() != "0:00");
         }
 
         // Regression test for the periodic Update() write fighting a live drag: SliderBar<T>'s
@@ -206,7 +232,7 @@ namespace JukeBox.Game.Tests.Visual
 
             AddStep("press down near the left of the progress bar", () =>
             {
-                var bounds = bar.ProgressBar;
+                var bounds = nowPlaying.ProgressBar;
                 Vector2 leftLocal = new Vector2(bounds.DrawWidth * 0.05f, bounds.DrawHeight / 2);
                 InputManager.MoveMouseTo(bounds.ToScreenSpace(leftLocal));
                 InputManager.PressButton(MouseButton.Left);
@@ -214,25 +240,25 @@ namespace JukeBox.Game.Tests.Visual
 
             AddStep("drag to the centre", () =>
             {
-                var bounds = bar.ProgressBar;
+                var bounds = nowPlaying.ProgressBar;
                 Vector2 centreLocal = new Vector2(bounds.DrawWidth * 0.5f, bounds.DrawHeight / 2);
                 InputManager.MoveMouseTo(bounds.ToScreenSpace(centreLocal));
             });
 
-            AddAssert("bar reports it is being dragged", () => bar.ProgressBar.IsDragged);
+            AddAssert("progress bar reports it is being dragged", () => nowPlaying.ProgressBar.IsDragged);
 
             double valueDuringDrag = 0;
-            AddStep("capture progress value mid-drag", () => valueDuringDrag = bar.ProgressBar.Current.Value);
+            AddStep("capture progress value mid-drag", () => valueDuringDrag = nowPlaying.ProgressBar.Current.Value);
 
             // Several frames pass while the drag is still held. With the bug present, Update()'s
             // periodic write would overwrite Current.Value with playback's advancing position on
             // every one of these frames; with the fix, it's skipped entirely while IsDragged.
             AddWaitStep("hold the drag while frames pass", 10);
             AddAssert("progress value untouched by playback advancing mid-drag",
-                () => bar.ProgressBar.Current.Value == valueDuringDrag);
+                () => nowPlaying.ProgressBar.Current.Value == valueDuringDrag);
 
             AddStep("release", () => InputManager.ReleaseButton(MouseButton.Left));
-            AddAssert("no longer dragging", () => !bar.ProgressBar.IsDragged);
+            AddAssert("no longer dragging", () => !nowPlaying.ProgressBar.IsDragged);
 
             AddUntilStep("seeked to roughly the drag target (~50%)",
                 () => Math.Abs(playback.CurrentTimeMs / playback.LengthMs - 0.5) < 0.2);
@@ -256,9 +282,9 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("play set with one difficulty", () => playback.PlayAsync(soloSet));
             AddUntilStep("track active", () => playback.Current.Value?.SetId == soloSet.SetId);
 
-            AddAssert("one item shown", () => bar.DifficultySwitcher.Dropdown.Items.Count() == 1);
-            AddAssert("item is selected and shows the version", () => bar.DifficultySwitcher.Dropdown.Current.Value?.Version == "Solo");
-            AddAssert("dropdown is non-interactive", () => bar.DifficultySwitcher.Dropdown.Current.Disabled);
+            AddAssert("one item shown", () => nowPlaying.DifficultySwitcher.Dropdown.Items.Count() == 1);
+            AddAssert("item is selected and shows the version", () => nowPlaying.DifficultySwitcher.Dropdown.Current.Value?.Version == "Solo");
+            AddAssert("dropdown is non-interactive", () => nowPlaying.DifficultySwitcher.Dropdown.Current.Disabled);
         }
 
         [Test]
@@ -269,7 +295,7 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("play set with no difficulties", () => playback.PlayAsync(emptySet));
             AddUntilStep("track active", () => playback.Current.Value?.SetId == emptySet.SetId);
 
-            AddAssert("dropdown hidden", () => bar.DifficultySwitcher.Dropdown.Alpha == 0);
+            AddAssert("dropdown hidden", () => nowPlaying.DifficultySwitcher.Dropdown.Alpha == 0);
         }
 
         [Test]
@@ -282,10 +308,10 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("play set with two difficulties", () => playback.PlayAsync(multiSet));
             AddUntilStep("track active", () => playback.Current.Value?.SetId == multiSet.SetId);
 
-            AddAssert("two items shown", () => bar.DifficultySwitcher.Dropdown.Items.Count() == 2);
-            AddAssert("dropdown interactive", () => !bar.DifficultySwitcher.Dropdown.Current.Disabled);
+            AddAssert("two items shown", () => nowPlaying.DifficultySwitcher.Dropdown.Items.Count() == 2);
+            AddAssert("dropdown interactive", () => !nowPlaying.DifficultySwitcher.Dropdown.Current.Disabled);
             AddAssert("easy selected initially (matches PreferredOsuFile)",
-                () => bar.DifficultySwitcher.Dropdown.Current.Value?.Version == "Easy");
+                () => nowPlaying.DifficultySwitcher.Dropdown.Current.Value?.Version == "Easy");
         }
 
         // Regression coverage for actually switching diffs mid-song via the dropdown (not just
@@ -301,7 +327,7 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("play set with two difficulties", () => playback.PlayAsync(multiSet));
             AddUntilStep("track active", () => playback.Current.Value?.SetId == multiSet.SetId);
 
-            AddStep("select Hard via the dropdown", () => bar.DifficultySwitcher.Dropdown.Current.Value =
+            AddStep("select Hard via the dropdown", () => nowPlaying.DifficultySwitcher.Dropdown.Current.Value =
                 multiSet.Difficulties.Single(d => d.Version == "Hard"));
 
             AddUntilStep("playback switched to hard.osu", () => playback.SelectedOsuFile.Value == "hard.osu");
@@ -317,35 +343,35 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("play mixed-mode set", () => playback.PlayAsync(mixedSet));
             AddUntilStep("track active", () => playback.Current.Value?.SetId == mixedSet.SetId);
 
-            AddAssert("taiko item labelled with its mode", () => bar.ChildrenOfType<DifficultySwitcher.DifficultyDropdown>()
+            AddAssert("taiko item labelled with its mode", () => nowPlaying.ChildrenOfType<DifficultySwitcher.DifficultyDropdown>()
                 .Single().GenerateItemTextForTest(mixedSet.Difficulties[1]).ToString() == "[taiko] Oni");
         }
 
         [Test]
-        public void BarShowsNowPlayingTitleAndArtist()
+        public void PanelShowsNowPlayingTitleAndArtist()
         {
             AddStep("set NowPlaying", () => jukebox.NowPlaying.Value = fixtureInfo);
-            AddUntilStep("title shown", () => bar.ChildrenOfType<osu.Framework.Graphics.Sprites.SpriteText>()
+            AddUntilStep("title shown", () => nowPlaying.ChildrenOfType<osu.Framework.Graphics.Sprites.SpriteText>()
                 .Any(t => t.Text.ToString() == fixtureInfo.DisplayTitle));
         }
 
         [Test]
-        public void BarShowsAndClearsStatusText()
+        public void PanelShowsAndClearsStatusText()
         {
             AddStep("set Status", () => jukebox.Status.Value = "Downloading Something…");
-            AddUntilStep("status shown", () => bar.ChildrenOfType<osu.Framework.Graphics.Sprites.SpriteText>()
+            AddUntilStep("status shown", () => nowPlaying.ChildrenOfType<osu.Framework.Graphics.Sprites.SpriteText>()
                 .Any(t => t.Text.ToString() == "Downloading Something…"));
 
             AddStep("clear Status", () => jukebox.Status.Value = null);
-            AddUntilStep("status cleared", () => bar.ChildrenOfType<osu.Framework.Graphics.Sprites.SpriteText>()
+            AddUntilStep("status cleared", () => nowPlaying.ChildrenOfType<osu.Framework.Graphics.Sprites.SpriteText>()
                 .All(t => t.Text.ToString() != "Downloading Something…"));
         }
 
         [Test]
         public void QueuePanelShowsRowsAfterEnqueue()
         {
-            AddAssert("starts empty", () => panel.RowCount == 0);
-            AddAssert("header shows 0", () => panel.HeaderText == "Queue (0)");
+            AddAssert("starts empty", () => queuePanel.RowCount == 0);
+            AddAssert("header shows 0", () => queuePanel.HeaderText == "Queue (0)");
 
             AddStep("enqueue two sets", () =>
             {
@@ -353,15 +379,15 @@ namespace JukeBox.Game.Tests.Visual
                 queue.Enqueue(new BeatmapSetInfo { Id = 2, Title = "Two", Artist = "Artist Two" });
             });
 
-            AddAssert("2 rows shown", () => panel.RowCount == 2);
-            AddAssert("header shows 2", () => panel.HeaderText == "Queue (2)");
+            AddAssert("2 rows shown", () => queuePanel.RowCount == 2);
+            AddAssert("header shows 2", () => queuePanel.HeaderText == "Queue (2)");
 
-            AddStep("remove first row via its ✕ button", () => panel.TriggerRemoveAt(0));
+            AddStep("remove first row via its ✕ button", () => queuePanel.TriggerRemoveAt(0));
             AddAssert("removed set is gone from the queue itself", () => queue.Items.All(i => i.Id != 1));
 
             // The removed row fades + collapses out (QueueRow.AnimateOut) rather than vanishing
             // instantly, so RowCount only drops once that animation finishes and the row expires.
-            AddUntilStep("1 row left", () => panel.RowCount == 1);
+            AddUntilStep("1 row left", () => queuePanel.RowCount == 1);
         }
 
         // Regression test for a production crash: MusicQueue.Items is a BindableList that
@@ -383,7 +409,7 @@ namespace JukeBox.Game.Tests.Visual
                 queue.Enqueue(new BeatmapSetInfo { Id = 1, Title = "One", Artist = "Artist One" });
                 queue.Enqueue(new BeatmapSetInfo { Id = 2, Title = "Two", Artist = "Artist Two" });
             });
-            AddAssert("2 rows shown", () => panel.RowCount == 2);
+            AddAssert("2 rows shown", () => queuePanel.RowCount == 2);
 
             Exception? caught = null;
 
@@ -401,8 +427,8 @@ namespace JukeBox.Game.Tests.Visual
             });
 
             AddAssert("no exception escaped the off-thread mutation", () => caught == null);
-            AddUntilStep("panel reflects the removal", () => panel.RowCount == 1);
-            AddAssert("header reflects the removal", () => panel.HeaderText == "Queue (1)");
+            AddUntilStep("panel reflects the removal", () => queuePanel.RowCount == 1);
+            AddAssert("header reflects the removal", () => queuePanel.HeaderText == "Queue (1)");
         }
 
         // Regression coverage for per-row download status: a set with no cache entry and nothing
@@ -420,7 +446,7 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("enqueue a set with no cache activity", () =>
                 queue.Enqueue(new BeatmapSetInfo { Id = waiting_id, Title = "Waiting", Artist = "Artist" }));
 
-            AddAssert("row shows waiting", () => panel.StatusTextAt(indexOf(waiting_id)) == "waiting");
+            AddAssert("row shows waiting", () => queuePanel.StatusTextAt(indexOf(waiting_id)) == "waiting");
 
             AddStep("enqueue another set and start caching it", () =>
             {
@@ -429,7 +455,7 @@ namespace JukeBox.Game.Tests.Visual
             });
 
             AddUntilStep("row shows ready once GetAsync completes",
-                () => panel.StatusTextAt(indexOf(downloading_id)) == "ready");
+                () => queuePanel.StatusTextAt(indexOf(downloading_id)) == "ready");
         }
 
         private int indexOf(int setId)
