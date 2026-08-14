@@ -126,6 +126,7 @@ public partial class SettingsOverlay : FocusedOverlayContainer
     private SettingsSlider<double> playfieldZoomRow = null!;
     private SettingsEnumDropdown<MirrorSource> mirrorDropdown = null!;
     private SettingsEnumDropdown<SearchStyle> searchStyleDropdown = null!;
+    private SettingsCheckbox detachPlayerCheckbox = null!;
 
     // ---- framework settings ----
     private DeviceSettingsDropdown audioDeviceDropdown = null!;
@@ -447,6 +448,7 @@ public partial class SettingsOverlay : FocusedOverlayContainer
         graphicsRows.Add(frameLimiterDropdown = new SettingsEnumDropdown<FrameSync> { LabelText = "Frame limiter" });
         graphicsRows.Add(threadingDropdown = new SettingsEnumDropdown<ExecutionMode> { LabelText = "Threading mode" });
         graphicsRows.Add(fpsDisplayDropdown = new SettingsEnumDropdown<FpsDisplayMode> { LabelText = "FPS counter" });
+        graphicsRows.Add(detachPlayerCheckbox = new SettingsCheckbox { LabelText = "Detach player window" });
         graphicsRows.Add(new Subsection("Video Playback")
         {
             Children = new Drawable[]
@@ -492,6 +494,7 @@ public partial class SettingsOverlay : FocusedOverlayContainer
         globalOffsetRow.Current = config.GetBindable<double>(JukeBoxSetting.GlobalAudioOffset);
         mirrorDropdown.Current = config.GetBindable<MirrorSource>(JukeBoxSetting.PreferredMirror);
         searchStyleDropdown.Current = config.GetBindable<SearchStyle>(JukeBoxSetting.SearchStyle);
+        detachPlayerCheckbox.Current = config.GetBindable<bool>(JukeBoxSetting.DetachPlayer);
 
         // Session-only, like lazer's replay playback control (deliberately not persisted).
         if (playback != null)
