@@ -13,10 +13,10 @@ using osuTK;
 namespace JukeBox.Game.UI;
 
 /// <summary>
-/// The bottom bar's signature element: a thin accent-pink progress line with a soft glow that
+/// The playback panel's signature element: a thin accent-pink progress line with a soft glow that
 /// thickens (3px -> 6px) and reveals a seek-handle circle on hover (or while being dragged), built
 /// on <see cref="SliderBar{T}"/> so it keeps the exact same drag/commit semantics
-/// <see cref="NowPlayingBar"/> already relies on (<see cref="SliderBar{T}.Current"/>,
+/// <see cref="NowPlayingPanel"/> already relies on (<see cref="SliderBar{T}.Current"/>,
 /// <see cref="Drawable.IsDragged"/>, <see cref="SliderBar{T}.TransferValueOnCommit"/>).
 /// </summary>
 internal partial class ProgressSliderBar : SliderBar<double>
@@ -29,8 +29,8 @@ internal partial class ProgressSliderBar : SliderBar<double>
     // and thin.
     private const float hit_area_height = 16;
 
-    /// <summary>Exposed so <see cref="NowPlayingBar"/> can vertically align its flanking elapsed/
-    /// total time labels with this bar's own centreline without duplicating the magic number.</summary>
+    /// <summary>Exposed so <see cref="NowPlayingPanel"/> can size the block holding this bar and
+    /// its elapsed/total time labels without duplicating the magic number.</summary>
     internal const float HitAreaHeight = hit_area_height;
 
     private Container barContainer = null!;

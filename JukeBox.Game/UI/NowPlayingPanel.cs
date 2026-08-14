@@ -1,7 +1,6 @@
 #nullable enable
 
 using System;
-using System.Threading;
 using System.Threading.Tasks;
 using JukeBox.Game.Online;
 using JukeBox.Game.Playback;
@@ -12,7 +11,6 @@ using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Shapes;
 using osu.Framework.Graphics.Sprites;
 using osu.Framework.Graphics.Textures;
-using osu.Framework.Graphics.UserInterface;
 using osu.Framework.Logging;
 using osuTK;
 using osuTK.Graphics;
@@ -20,30 +18,31 @@ using osuTK.Graphics;
 namespace JukeBox.Game.UI;
 
 /// <summary>
-/// Bottom-anchored, full-width playback bar: cover thumb (fetched async from
+/// The "now playing" presentation: cover thumb (fetched async from
 /// <see cref="OnlineThumbnailStore"/> whenever <see cref="Playback.Jukebox.NowPlaying"/> changes;
-/// a placeholder box remains underneath until it loads or if it never does), title (with a small
-/// accent underline) / artist (from <see cref="Playback.Jukebox.NowPlaying"/>), a status line
+/// a placeholder box remains underneath until it loads or if it never does), title (with an accent
+/// underline) / artist (from <see cref="Playback.Jukebox.NowPlaying"/>), a status line
 /// (<see cref="Playback.Jukebox.Status"/>, styled in soft red when
 /// <see cref="Playback.Jukebox.LastError"/> is set), a seekable <see cref="ProgressSliderBar"/>
-/// spanning the bar's top edge (flanked by live elapsed/total time labels), a difficulty
-/// <see cref="DifficultySwitcher"/> dropdown and an "open in browser" button. Playback transport
-/// (play/pause/skip) and the volume slider live in Settings → Playback/Audio instead — see
-/// <see cref="SettingsOverlay"/>'s <c>TransportRow</c> and its master/effect/music volume rows,
-/// which this bar deliberately no longer duplicates.
+/// with elapsed/total time labels beneath it, a difficulty <see cref="DifficultySwitcher"/>
+/// dropdown and an "open in browser" button.
+///
+/// <para>
+/// Laid out VERTICALLY for a narrow (~340px) column: this used to be a full-width bar pinned along
+/// the bottom of the window, but that strip is gone — everything it carried now lives in the right
+/// column's "Playback" tab (see <see cref="PlaybackPanel"/>, which stacks this panel above the
+/// transport strip, the playback-speed slider and the per-beatmap offset row). This panel is
+/// chrome-less by design (no card of its own, no fixed height): it sizes to its content and sits
+/// directly on the owning column's surface rather than painting a second panel on top of it.
+/// </para>
 /// </summary>
-public partial class NowPlayingBar : CompositeDrawable
+public partial class NowPlayingPanel : CompositeDrawable
 {
-    private const float bar_height = 88;
     private const float cover_size = 64;
     private const float browser_button_size = 36;
 
-    // Small downward nudge off the card's true top edge, and horizontal room reserved on each
-    // side of the progress bar for its flanking mm:ss label — together these are what keep the
-    // fill (and its hover glow) inset within the card's rounded surface rather than poking past
-    // the corner curve (Theme.CornerRadius) the way it used to when the bar sat flush edge-to-edge.
-    private const float progress_bar_top_offset = 3;
-    private const float progress_bar_side_reserve = Theme.PanelPadding + 40;
+    /// <summary>Room for the progress bar's hit area plus the elapsed/total labels below it.</summary>
+    private const float progress_block_height = ProgressSliderBar.HitAreaHeight + Theme.CaptionTextSize + 4;
 
     [Resolved]
     private PlaybackController playback { get; set; } = null!;
@@ -57,7 +56,7 @@ public partial class NowPlayingBar : CompositeDrawable
     // [Resolved(canBeNull: true)] rather than a hard [Resolved]: only JukeBoxGame's own
     // [BackgroundDependencyLoader] (not JukeBoxGameBase's, shared with every test scene) caches
     // this — see the field comment on JukeBoxGameBase.dependencies — so every existing test scene
-    // must keep constructing/resolving this bar fine with no store present at all.
+    // must keep constructing/resolving this panel fine with no store present at all.
     [Resolved(canBeNull: true)]
     private OnlineThumbnailStore? thumbnailStore { get; set; }
 
@@ -131,91 +130,60 @@ public partial class NowPlayingBar : CompositeDrawable
     private void load()
     {
         RelativeSizeAxes = Axes.X;
-        Height = bar_height;
-        Anchor = Anchor.BottomLeft;
-        Origin = Anchor.BottomLeft;
+        AutoSizeAxes = Axes.Y;
 
-        Masking = true;
-        CornerRadius = Theme.CornerRadius;
-        EdgeEffect = Theme.PanelShadow;
-
-        InternalChildren = new Drawable[]
+        InternalChild = new FillFlowContainer
         {
-            new Box
+            RelativeSizeAxes = Axes.X,
+            AutoSizeAxes = Axes.Y,
+            Direction = FillDirection.Vertical,
+            Spacing = new Vector2(0, Theme.RowSpacing),
+            Children = new Drawable[]
             {
-                RelativeSizeAxes = Axes.Both,
-                Colour = Theme.PanelSurface,
-            },
-            // The signature element: spans the bar's top edge (above everything else below), inset
-            // from the rounded card's edges by progress_bar_side_reserve — both to keep the fill
-            // itself (and its hover glow) within the card's visible rounded surface, and to leave
-            // room for the flanking elapsed/total labels below.
-            progressBar = new ProgressSliderBar
-            {
-                RelativeSizeAxes = Axes.X,
-                Anchor = Anchor.TopLeft,
-                Origin = Anchor.TopLeft,
-                Y = progress_bar_top_offset,
-                Padding = new MarginPadding { Horizontal = progress_bar_side_reserve },
-                Current = progress,
-                TransferValueOnCommit = true,
-            },
-            elapsedText = new SpriteText
-            {
-                Anchor = Anchor.TopLeft,
-                Origin = Anchor.CentreLeft,
-                Position = new Vector2(Theme.PanelPadding, progress_bar_top_offset + ProgressSliderBar.HitAreaHeight / 2f),
-                Font = FontUsage.Default.With(size: Theme.CaptionTextSize),
-                Colour = Theme.TextTertiary,
-                Text = "0:00",
-            },
-            totalText = new SpriteText
-            {
-                Anchor = Anchor.TopRight,
-                Origin = Anchor.CentreRight,
-                Position = new Vector2(-Theme.PanelPadding, progress_bar_top_offset + ProgressSliderBar.HitAreaHeight / 2f),
-                Font = FontUsage.Default.With(size: Theme.CaptionTextSize),
-                Colour = Theme.TextTertiary,
-                Text = "0:00",
-            },
-            // Everything else sits below the progress bar's hit area so it never overlaps it.
-            new Container
-            {
-                RelativeSizeAxes = Axes.Both,
-                Padding = new MarginPadding { Top = 12, Horizontal = Theme.PanelPadding },
-                Children = new Drawable[]
+                // Cover beside the title/artist block, with the browser button parked at the far
+                // right of the same row — the one horizontal band in an otherwise stacked layout.
+                new Container
                 {
-                    coverContainer = new Container
+                    RelativeSizeAxes = Axes.X,
+                    Height = cover_size,
+                    Children = new Drawable[]
                     {
-                        Anchor = Anchor.CentreLeft,
-                        Origin = Anchor.CentreLeft,
-                        Size = new Vector2(cover_size),
-                        Masking = true,
-                        CornerRadius = Theme.CornerRadius,
-                        Child = new Box // placeholder; stays visible underneath until/unless the real cover loads.
+                        coverContainer = new Container
+                        {
+                            Anchor = Anchor.CentreLeft,
+                            Origin = Anchor.CentreLeft,
+                            Size = new Vector2(cover_size),
+                            Masking = true,
+                            CornerRadius = Theme.CornerRadius,
+                            Child = new Box // placeholder; stays visible underneath until/unless the real cover loads.
+                            {
+                                RelativeSizeAxes = Axes.Both,
+                                Colour = Theme.ElevatedSurface,
+                            },
+                        },
+                        // Padding (rather than a positioned child) is what reserves the cover's and
+                        // the button's columns: the text inside is relatively sized, so it needs a
+                        // parent whose width is already the space actually left for it.
+                        new Container
                         {
                             RelativeSizeAxes = Axes.Both,
-                            Colour = Theme.ElevatedSurface,
-                        },
-                    },
-                    new FillFlowContainer
-                    {
-                        Anchor = Anchor.CentreLeft,
-                        Origin = Anchor.CentreLeft,
-                        Position = new Vector2(cover_size + 16, 0),
-                        AutoSizeAxes = Axes.Both,
-                        Direction = FillDirection.Vertical,
-                        Spacing = new Vector2(0, 2),
-                        Children = new Drawable[]
-                        {
-                            // Title + artist share one wrapper so a song change can crossfade
-                            // both together (see onNowPlayingChanged) rather than each swapping
-                            // its text independently.
-                            songInfo = new FillFlowContainer
+                            Padding = new MarginPadding
                             {
-                                AutoSizeAxes = Axes.Both,
+                                Left = cover_size + Theme.SectionSpacing,
+                                Right = browser_button_size + Theme.RowSpacing,
+                            },
+                            Child = songInfo = new FillFlowContainer
+                            {
+                                Anchor = Anchor.CentreLeft,
+                                Origin = Anchor.CentreLeft,
+                                RelativeSizeAxes = Axes.X,
+                                AutoSizeAxes = Axes.Y,
                                 Direction = FillDirection.Vertical,
                                 Spacing = new Vector2(0, 2),
+                                // Title + artist share one wrapper so a song change can crossfade
+                                // both together (see onNowPlayingChanged) rather than each swapping
+                                // its text independently.
+                                //
                                 // A song change fades this to 0 then straight back to 1 (see
                                 // onNowPlayingChanged) — without AlwaysPresent, osu!framework
                                 // throttles Update()/transform ticking for a not-present (Alpha 0)
@@ -226,11 +194,14 @@ public partial class NowPlayingBar : CompositeDrawable
                                 {
                                     new Container
                                     {
-                                        AutoSizeAxes = Axes.Both,
+                                        RelativeSizeAxes = Axes.X,
+                                        AutoSizeAxes = Axes.Y,
                                         Children = new Drawable[]
                                         {
                                             titleText = new SpriteText
                                             {
+                                                RelativeSizeAxes = Axes.X,
+                                                Truncate = true,
                                                 Font = FontUsage.Default.With(size: Theme.RowTitleTextSize),
                                                 Colour = Theme.TextPrimary,
                                             },
@@ -247,33 +218,70 @@ public partial class NowPlayingBar : CompositeDrawable
                                     },
                                     artistText = new SpriteText
                                     {
+                                        RelativeSizeAxes = Axes.X,
+                                        Truncate = true,
                                         Font = FontUsage.Default.With(size: Theme.RowSecondaryTextSize),
                                         Colour = Theme.TextSecondary,
                                     },
                                 },
                             },
-                            statusText = new SpriteText
-                            {
-                                Font = FontUsage.Default.With(size: Theme.CaptionTextSize),
-                                Colour = Theme.TextTertiary,
-                                // See songInfo's AlwaysPresent comment above — refreshStatus()
-                                // fades this to 0 then immediately back to 1.
-                                AlwaysPresent = true,
-                            },
-                            difficultySwitcher = new DifficultySwitcher(),
-                        }
+                        },
+                        browserButton = new IconButton
+                        {
+                            Anchor = Anchor.CentreRight,
+                            Origin = Anchor.CentreRight,
+                            Size = new Vector2(browser_button_size),
+                            Icon = FontAwesome.Solid.ExternalLinkAlt,
+                            Action = openInBrowser,
+                        },
                     },
-                    // Opens the playing set's osu.ppy.sh page — the space transport/volume used to
-                    // occupy here now sits free (both moved to Settings → Playback/Audio).
-                    browserButton = new IconButton
+                },
+                statusText = new SpriteText
+                {
+                    RelativeSizeAxes = Axes.X,
+                    Truncate = true,
+                    Font = FontUsage.Default.With(size: Theme.CaptionTextSize),
+                    Colour = Theme.TextTertiary,
+                    // See songInfo's AlwaysPresent comment above — refreshStatus() fades this to 0
+                    // then immediately back to 1.
+                    AlwaysPresent = true,
+                },
+                // The progress bar spans the panel's full width, with its two time labels tucked
+                // underneath it (rather than flanking it, as they did while this was a wide bar —
+                // there is no horizontal room to spare in a column this narrow).
+                new Container
+                {
+                    RelativeSizeAxes = Axes.X,
+                    Height = progress_block_height,
+                    Children = new Drawable[]
                     {
-                        Anchor = Anchor.CentreRight,
-                        Origin = Anchor.CentreRight,
-                        Size = new Vector2(browser_button_size),
-                        Icon = FontAwesome.Solid.ExternalLinkAlt,
-                        Action = openInBrowser,
+                        progressBar = new ProgressSliderBar
+                        {
+                            RelativeSizeAxes = Axes.X,
+                            Anchor = Anchor.TopLeft,
+                            Origin = Anchor.TopLeft,
+                            Current = progress,
+                            TransferValueOnCommit = true,
+                        },
+                        elapsedText = new SpriteText
+                        {
+                            Anchor = Anchor.BottomLeft,
+                            Origin = Anchor.BottomLeft,
+                            Font = FontUsage.Default.With(size: Theme.CaptionTextSize),
+                            Colour = Theme.TextTertiary,
+                            Text = "0:00",
+                        },
+                        totalText = new SpriteText
+                        {
+                            Anchor = Anchor.BottomRight,
+                            Origin = Anchor.BottomRight,
+                            Font = FontUsage.Default.With(size: Theme.CaptionTextSize),
+                            Colour = Theme.TextTertiary,
+                            Text = "0:00",
+                        },
                     },
-                }
+                },
+                difficultySwitcher = new DifficultySwitcher(),
             },
         };
     }
@@ -382,6 +390,10 @@ public partial class NowPlayingBar : CompositeDrawable
             artistText.Text = artist;
             songInfo.FadeIn(Theme.DurationFast, Theme.EaseEnter);
         });
+
+        // Nothing playing means no title to underline — the accent rule would otherwise sit under
+        // an empty line as a stray divider.
+        titleUnderline.Alpha = title.Length > 0 ? 1 : 0;
 
         int myGeneration = ++thumbnailGeneration;
 

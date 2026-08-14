@@ -31,7 +31,7 @@ namespace JukeBox.Game
         // protected (not private): JukeBoxGame's own [BackgroundDependencyLoader] caches the
         // real online thumbnail store here too — kept out of THIS class's load() specifically so
         // JukeBoxTestScene's test-runner (which derives from JukeBoxGameBase, not JukeBoxGame)
-        // never wires up a real network-backed store, and BeatmapCard/NowPlayingBar's
+        // never wires up a real network-backed store, and BeatmapCard/NowPlayingPanel's
         // [Resolved(canBeNull: true)] reliably resolves null across every existing test scene.
         protected DependencyContainer dependencies = null!;
 
@@ -222,16 +222,16 @@ namespace JukeBox.Game
             // property this class overrides (the DrawSizePreservingFillContainer from the
             // constructor, subject to JukeBoxSetting.UiScale) — window-level and above everything
             // else in the draw order, deliberately kept out of the player box, exactly like the
-            // constructor's own base.Content.Add for that scaling container. Bottom-right, nudged
-            // up past NowPlayingBar's height so it clears the bottom bar; that bar lives in the
-            // OTHER (scaled) tree, so this margin is an approximation rather than an exact match.
+            // constructor's own base.Content.Add for that scaling container. Bottom-right, inset by
+            // a small margin: there is no bottom bar left to clear (its content moved into the right
+            // column's Playback tab), so the counter simply sits in the window's own corner.
             // Visibility is entirely owned by fpsDisplay's binding below (runOnceImmediately, so it
             // sets the correct initial Show()/Hide() state itself) — no explicit Hide() needed here.
             base.Content.Add(fpsCounter = new osu.Game.Graphics.UserInterface.FPSCounter
             {
                 Anchor = Anchor.BottomRight,
                 Origin = Anchor.BottomRight,
-                Margin = new MarginPadding { Right = 10, Bottom = 100 },
+                Margin = new MarginPadding { Right = 10, Bottom = 10 },
             });
 
             // The realm-backed skin store, cached exactly as OsuGameBase caches it. Nothing in our

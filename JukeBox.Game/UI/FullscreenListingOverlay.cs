@@ -31,7 +31,7 @@ namespace JukeBox.Game.UI;
 /// <summary>
 /// The <see cref="Configuration.SearchStyle.Fullscreen"/> presentation: an osu-web-style "beatmap
 /// listing" page presented as a TRUE fullscreen modal — hosted at <see cref="Screens.MainScreen"/>'s
-/// top level so it covers the ENTIRE window (side columns and bottom bar included), a centred
+/// top level so it covers the ENTIRE window (both side columns included), a centred
 /// listing panel above a dim <see cref="Theme.ModalScrim"/> with nothing else interactive while
 /// open. Opening (type-anywhere via <see cref="ShowWithInitialChar"/>, the docked search box
 /// gaining focus, or the left column's search icon button — all via <see cref="ShowSearch"/>)
@@ -173,7 +173,7 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
         InternalChildren = new Drawable[]
         {
             previewPlayer = new PreviewPlayer(),
-            // Dims the whole window (columns and bottom bar included — this overlay sits at
+            // Dims the whole window (both columns included — this overlay sits at
             // MainScreen's top level) so only the listing panel reads as interactive while open.
             scrim = new Box
             {

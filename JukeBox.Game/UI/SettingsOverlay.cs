@@ -36,7 +36,6 @@ using osu.Game.Rulesets.Osu.Configuration;
 using osu.Game.Rulesets.Taiko;
 using osu.Game.Rulesets.Taiko.Configuration;
 using osu.Game.Rulesets.UI;
-using osuTK;
 using osuTK.Input;
 
 namespace JukeBox.Game.UI;
@@ -100,15 +99,6 @@ public partial class SettingsOverlay : FocusedOverlayContainer
     [Resolved(canBeNull: true)]
     private IRulesetConfigCache? rulesetConfigs { get; set; }
 
-    [Resolved(canBeNull: true)]
-    private JukeBox.Game.Playback.PlaybackController? playback { get; set; }
-
-    [Resolved(canBeNull: true)]
-    private JukeBox.Game.Playback.Jukebox? jukebox { get; set; }
-
-    [Resolved(canBeNull: true)]
-    private JukeBox.Game.Playback.BeatmapOffsetStore? offsetStore { get; set; }
-
     // Only ever assigned (and used) in the floating branch of load() — a docked instance has no
     // card to pop, and its PopIn/PopOut are both guarded no-ops (see their own comments below).
     private Container? panelCard;
@@ -165,9 +155,9 @@ public partial class SettingsOverlay : FocusedOverlayContainer
     private SettingsSlider<double> inactiveVolumeRow = null!;
     private SettingsSlider<float> positionalHitsoundsRow = null!;
 
-    // ---- playback (controller-bound; only built when a PlaybackController is present) ----
-    private SettingsSlider<double> playbackRateRow = null!;
-    private SettingsSlider<double> beatmapOffsetRow = null!;
+    // Global (device-level) audio calibration, sitting with the output device and volume rows it
+    // belongs to. The playback-scoped rows that used to live here — speed, transport, and the
+    // per-beatmap offset — moved to the right column's Playback tab (see PlaybackPanel).
     private SettingsSlider<double> globalOffsetRow = null!;
 
     // ---- replay analysis (osu! ruleset config; only built with the ruleset config cache) ----
@@ -315,18 +305,6 @@ public partial class SettingsOverlay : FocusedOverlayContainer
             },
         };
 
-        if (playback != null)
-        {
-            sections.Add(new Section("Playback", FontAwesome.Solid.Play)
-            {
-                Children = new Drawable[]
-                {
-                    new TransportRow(playback, jukebox, colourProvider),
-                    playbackRateRow = new SettingsSlider<double> { LabelText = "Playback speed", KeyboardStep = 0.05f },
-                },
-            });
-        }
-
         // Per-ruleset settings need the ruleset config cache (realm-backed); a bare test scene
         // without it gets no dead controls. One big "Rulesets" section, lazer-style, with one
         // subsection per ruleset (same rows, same bindables as before).
@@ -419,9 +397,6 @@ public partial class SettingsOverlay : FocusedOverlayContainer
 
         audioRows.Add(effectVolumeRow = new SettingsSlider<double> { LabelText = "Effect", DisplayAsPercentage = true, KeyboardStep = 0.01f });
         audioRows.Add(musicVolumeRow = new SettingsSlider<double> { LabelText = "Music", DisplayAsPercentage = true, KeyboardStep = 0.01f });
-
-        if (offsetStore != null)
-            audioRows.Add(beatmapOffsetRow = new SettingsSlider<double> { LabelText = "Audio offset (this beatmap)", KeyboardStep = 1 });
 
         audioRows.Add(globalOffsetRow = new SettingsSlider<double> { LabelText = "Audio offset (global)", KeyboardStep = 1 });
 
@@ -531,14 +506,6 @@ public partial class SettingsOverlay : FocusedOverlayContainer
         }, true);
         playOnMainUi.BindValueChanged(e => playOnMainConfig.Value = e.NewValue);
         detachPlayerCheckbox.Current.BindValueChanged(e => playOnMainUi.Disabled = !e.NewValue, true);
-
-        // Session-only, like lazer's replay playback control (deliberately not persisted).
-        if (playback != null)
-            playbackRateRow.Current = playback.PlaybackRate;
-
-        // Per-set offset: the store retargets this bindable on every song change and persists edits.
-        if (offsetStore != null)
-            beatmapOffsetRow.Current = offsetStore.CurrentOffset;
 
         // ---- framework (all apply live; renderer takes effect on restart) ----
         audioDeviceDropdown.Current = frameworkConfig.GetBindable<string>(FrameworkSetting.AudioDevice);
@@ -825,85 +792,6 @@ public partial class SettingsOverlay : FocusedOverlayContainer
                 hash.Add(mode);
 
             return hash.ToHashCode();
-        }
-    }
-
-    /// <summary>
-    /// The lazer replay-player transport strip: restart, −5s, play/pause, +5s, skip-next — all
-    /// routed through the existing controller/jukebox methods (no new playback machinery). The
-    /// play/pause icon tracks <see cref="Playback.PlaybackController.IsPlaying"/> (a plain
-    /// property, hence the per-frame refresh). Custom control (no lazer 1:1 equivalent outside the
-    /// full replay player), coloured from the shared <see cref="OverlayColourProvider"/> and
-    /// padded like a settings item so it aligns with the lazer rows around it.
-    /// </summary>
-    internal partial class TransportRow : FillFlowContainer
-    {
-        private readonly Playback.PlaybackController playback;
-        private readonly IconButton playPause;
-
-        private const double seek_step_ms = 5000;
-
-        public TransportRow(Playback.PlaybackController playback, Playback.Jukebox? jukebox, OverlayColourProvider colourProvider)
-        {
-            this.playback = playback;
-
-            RelativeSizeAxes = Axes.X;
-            AutoSizeAxes = Axes.Y;
-            Direction = FillDirection.Horizontal;
-            Spacing = new Vector2(Theme.RowSpacing, 0);
-            Padding = new MarginPadding { Left = SettingsPanel.CONTENT_MARGINS, Right = SettingsPanel.CONTENT_MARGINS };
-
-            Add(new IconButton
-            {
-                Icon = FontAwesome.Solid.UndoAlt,
-                Size = new Vector2(32),
-                IdleColour = colourProvider.Background3,
-                HoverColour = colourProvider.Background1,
-                Action = () => playback.Seek(0),
-            });
-            Add(new IconButton
-            {
-                Icon = FontAwesome.Solid.Backward,
-                Size = new Vector2(32),
-                IdleColour = colourProvider.Background3,
-                HoverColour = colourProvider.Background1,
-                Action = () => playback.Seek(Math.Max(0, playback.CurrentTimeMs - seek_step_ms)),
-            });
-            Add(playPause = new IconButton
-            {
-                Icon = FontAwesome.Solid.Play,
-                Size = new Vector2(32),
-                IdleColour = colourProvider.Highlight1,
-                HoverColour = colourProvider.Light1,
-                IconColour = colourProvider.Background5,
-                Action = playback.TogglePause,
-            });
-            Add(new IconButton
-            {
-                Icon = FontAwesome.Solid.Forward,
-                Size = new Vector2(32),
-                IdleColour = colourProvider.Background3,
-                HoverColour = colourProvider.Background1,
-                Action = () => playback.Seek(Math.Min(playback.LengthMs, playback.CurrentTimeMs + seek_step_ms)),
-            });
-
-            if (jukebox != null)
-            {
-                Add(new IconButton
-                {
-                    Icon = FontAwesome.Solid.StepForward,
-                    Size = new Vector2(32),
-                    IdleColour = colourProvider.Background3,
-                    HoverColour = colourProvider.Background1,
-                    Action = jukebox.SkipCurrent,
-                });
-            }
-        }
-
-        protected override void Update()
-        {
-            base.Update();
-            playPause.Icon = playback.IsPlaying ? FontAwesome.Solid.Pause : FontAwesome.Solid.Play;
         }
     }
 }
