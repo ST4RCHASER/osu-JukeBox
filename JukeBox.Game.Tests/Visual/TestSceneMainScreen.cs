@@ -83,6 +83,7 @@ namespace JukeBox.Game.Tests.Visual
                 queue.Items.Clear();
                 mirror.Sets.Clear();
                 config.SetValue(JukeBoxSetting.UiLayout, UiLayout.ThreeColumn);
+                config.SetValue(JukeBoxSetting.SearchStyle, SearchStyle.Compact);
                 screen = new MainScreen { RelativeSizeAxes = Axes.Both };
                 // MainScreen is a Screen — osu!framework requires a Screen to be hosted by a
                 // ScreenStack (see JukeBoxGame's own top-level screenStack.Push(new MainScreen())).
@@ -394,6 +395,45 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("press 'a'", () => InputManager.Key(Key.A));
 
             AddAssert("search box was not seeded", () => screen.ChildrenOfType<BeatmapListingOverlay>().Single().SearchBox.Text == string.Empty);
+        }
+
+        // The SearchStyle setting picks which presentation "opening search" means, live: under
+        // Fullscreen, type-anywhere presents the big listing overlay over the player box (seeded
+        // with the char — both presentations share one search engine, so the docked box shows the
+        // same query); Escape closes it back to the player; flipping the setting to Compact while
+        // it's open retires it immediately and the next keypress goes back to the docked column.
+        [Test]
+        public void SearchStyleSettingRoutesSearchOpeningLive()
+        {
+            FullscreenListingOverlay fullscreen = null!;
+            AddStep("grab fullscreen listing", () => fullscreen = screen.ChildrenOfType<FullscreenListingOverlay>().Single());
+
+            AddAssert("fullscreen listing starts hidden", () => fullscreen.State.Value == Visibility.Hidden);
+
+            AddStep("press 'a' under compact style", () => InputManager.Key(Key.A));
+            AddAssert("fullscreen listing stays hidden (compact routes to the docked column)",
+                () => fullscreen.State.Value == Visibility.Hidden);
+            AddAssert("docked box seeded instead", () => screen.ChildrenOfType<BeatmapListingOverlay>().Single().SearchBox.Text == "a");
+
+            AddStep("unfocus and switch to fullscreen style", () =>
+            {
+                InputManager.Key(Key.Escape);
+                config.SetValue(JukeBoxSetting.SearchStyle, SearchStyle.Fullscreen);
+            });
+
+            AddStep("press 'b'", () => InputManager.Key(Key.B));
+            AddUntilStep("fullscreen listing shown", () => fullscreen.State.Value == Visibility.Visible);
+            AddAssert("fullscreen box seeded with 'b'", () => fullscreen.SearchBox.Text == "b");
+            AddAssert("docked box shows the same shared query", () => screen.ChildrenOfType<BeatmapListingOverlay>().Single().SearchBox.Text == "b");
+
+            AddStep("press escape", () => InputManager.Key(Key.Escape));
+            AddUntilStep("fullscreen listing closed back to the player", () => fullscreen.State.Value == Visibility.Hidden);
+
+            AddStep("press 'c' (reopen)", () => InputManager.Key(Key.C));
+            AddUntilStep("fullscreen listing shown again", () => fullscreen.State.Value == Visibility.Visible);
+
+            AddStep("flip the setting to Compact while open", () => config.SetValue(JukeBoxSetting.SearchStyle, SearchStyle.Compact));
+            AddUntilStep("fullscreen listing retired immediately", () => fullscreen.State.Value == Visibility.Hidden);
         }
 
         // Regression coverage for the (now-removed) corner gear: Settings is reachable purely by

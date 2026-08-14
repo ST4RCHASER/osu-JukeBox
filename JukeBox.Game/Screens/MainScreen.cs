@@ -107,9 +107,12 @@ public partial class MainScreen : Screen
     private NowPlayingBar bottomBar = null!;
 
     private BeatmapListingOverlay listing = null!;
+    private FullscreenListingOverlay fullscreenListing = null!;
     private QueuePanel queuePanel = null!;
     private SettingsOverlay settingsBody = null!;
     private MapIdOverlay mapIdOverlay = null!;
+
+    private Bindable<SearchStyle> searchStyle = null!;
 
     private RightPanelTabButton queueTabButton = null!;
     private RightPanelTabButton settingsTabButton = null!;
@@ -168,6 +171,9 @@ public partial class MainScreen : Screen
         RelativeSizeAxes = Axes.Both;
 
         listing = new BeatmapListingOverlay(docked: true) { RelativeSizeAxes = Axes.Both };
+        // The fullscreen search style's big listing — a second view over the docked listing's
+        // search engine (shared query/filters/results), presented over the player box on demand.
+        fullscreenListing = new FullscreenListingOverlay(listing.Engine) { RelativeSizeAxes = Axes.Both };
         queuePanel = new QueuePanel(docked: true);
         settingsBody = new SettingsOverlay(docked: true) { RelativeSizeAxes = Axes.Both };
         mapIdOverlay = new MapIdOverlay();
@@ -190,33 +196,40 @@ public partial class MainScreen : Screen
             visualsHost = new Container
             {
                 RelativeSizeAxes = Axes.Both,
-                Child = playerBox = new Container
+                Children = new Drawable[]
                 {
-                    RelativeSizeAxes = Axes.Both,
-                    Masking = true,
-                    CornerRadius = Theme.CornerRadius,
-                    EdgeEffect = Theme.PanelShadow,
-                    Children = new Drawable[]
+                    playerBox = new Container
                     {
-                        // Black bed: the player's letterbox ground, and the empty-state fill
-                        // while nothing is playing yet.
-                        new Box
+                        RelativeSizeAxes = Axes.Both,
+                        Masking = true,
+                        CornerRadius = Theme.CornerRadius,
+                        EdgeEffect = Theme.PanelShadow,
+                        Children = new Drawable[]
                         {
-                            RelativeSizeAxes = Axes.Both,
-                            Colour = Colour4.Black,
-                        },
-                        // Fixed design-size canvas, scaled uniformly to fit playerBox (see
-                        // updateSceneScale) instead of visualsStack stretching RelativeSizeAxes
-                        // straight to the box — that's what let the scene overflow (and get
-                        // masked/cropped) whenever the box got narrower than the design aspect.
-                        sceneContainer = new Container
-                        {
-                            Anchor = Anchor.Centre,
-                            Origin = Anchor.Centre,
-                            Size = new Vector2(scene_width, scene_height),
-                            Child = visualsStack = new ScreenStack { RelativeSizeAxes = Axes.Both },
+                            // Black bed: the player's letterbox ground, and the empty-state fill
+                            // while nothing is playing yet.
+                            new Box
+                            {
+                                RelativeSizeAxes = Axes.Both,
+                                Colour = Colour4.Black,
+                            },
+                            // Fixed design-size canvas, scaled uniformly to fit playerBox (see
+                            // updateSceneScale) instead of visualsStack stretching RelativeSizeAxes
+                            // straight to the box — that's what let the scene overflow (and get
+                            // masked/cropped) whenever the box got narrower than the design aspect.
+                            sceneContainer = new Container
+                            {
+                                Anchor = Anchor.Centre,
+                                Origin = Anchor.Centre,
+                                Size = new Vector2(scene_width, scene_height),
+                                Child = visualsStack = new ScreenStack { RelativeSizeAxes = Axes.Both },
+                            },
                         },
                     },
+                    // Sharing visualsHost (and therefore its animated padding) is what makes the
+                    // fullscreen listing cover exactly the player-box area — never the side
+                    // columns or the bottom bar.
+                    fullscreenListing,
                 },
             },
             LeftColumn = new Container
@@ -305,11 +318,20 @@ public partial class MainScreen : Screen
         // own failure paths already surface through jukebox.LastError (see the toast wiring in
         // LoadComplete) rather than through this call's returned Task.
         listing.SetPicked += set => _ = jukebox.EnqueueAndMaybePlayAsync(set);
+        fullscreenListing.SetPicked += set => _ = jukebox.EnqueueAndMaybePlayAsync(set);
         mapIdOverlay.SetResolved += set => _ = jukebox.EnqueueAndMaybePlayAsync(set);
 
         // The map-ID button now lives inline in the docked search box (see
         // BeatmapListingOverlay.MapIdRequested) rather than a corner button.
         listing.MapIdRequested += () => mapIdOverlay.ToggleVisibility();
+
+        // "Opening search" under the fullscreen style covers focusing the docked search box too
+        // (not just type-anywhere) — the big listing takes over from there.
+        listing.SearchBoxFocused += () =>
+        {
+            if (searchStyle.Value == SearchStyle.Fullscreen && uiLayout.Value == UiLayout.ThreeColumn)
+                fullscreenListing.ShowSearch();
+        };
 
         // See updateSceneScale's own doc comment for why this is hung off playerBox's OnUpdate
         // rather than this screen's Update() — it's what keeps the scale reading playerBox's
@@ -333,6 +355,16 @@ public partial class MainScreen : Screen
         // own remarks on why it's driven off playerBox.OnUpdate rather than a one-shot), so a
         // config change here is picked up on the very next frame for free.
         playfieldZoom = config.GetBindable<double>(JukeBoxSetting.PlayfieldZoom);
+
+        // Live-switchable: flipping to Compact retires the big listing immediately (search goes
+        // back to living entirely in the left column); flipping to Fullscreen simply arms it for
+        // the next search open.
+        searchStyle = config.GetBindable<SearchStyle>(JukeBoxSetting.SearchStyle);
+        searchStyle.BindValueChanged(e =>
+        {
+            if (e.NewValue == SearchStyle.Compact)
+                fullscreenListing.Hide();
+        });
 
         jukebox.Start();
         jukebox.LastError.BindValueChanged(e =>
@@ -411,7 +443,12 @@ public partial class MainScreen : Screen
 
             if (c != null)
             {
-                listing.ShowWithInitialChar(c.Value);
+                // The style setting picks which presentation "opening search" means — both views
+                // share one search engine, so the seeded query lands in both either way.
+                if (searchStyle.Value == SearchStyle.Fullscreen)
+                    fullscreenListing.ShowWithInitialChar(c.Value);
+                else
+                    listing.ShowWithInitialChar(c.Value);
                 return true;
             }
         }
@@ -467,9 +504,13 @@ public partial class MainScreen : Screen
         playerBox.TransformTo(nameof(playerBox.CornerRadius), focus ? 0f : Theme.CornerRadius, duration, easing);
 
         // Defensive: drop keyboard focus before it ends up parked on a search box (or any other
-        // input-consuming child) inside a column that just went Alpha 0 / non-present.
+        // input-consuming child) inside a column that just went Alpha 0 / non-present. The big
+        // listing also closes — focus mode is pure fullscreen visuals with nothing overlaying.
         if (focus)
+        {
+            fullscreenListing.Hide();
             GetContainingFocusManager()?.ChangeFocus(null);
+        }
     }
 
     /// <summary>

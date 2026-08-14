@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using JukeBox.Game.Configuration;
 using JukeBox.Game.Online;
 using JukeBox.Game.UI;
 using NUnit.Framework;
@@ -24,6 +25,11 @@ namespace JukeBox.Game.Tests.Visual
         private StubMirror mirror = null!;
         private BeatmapSetInfo? picked;
 
+        // Own throwaway-storage config (this fixture's runner isn't JukeBoxGameBase, so nothing
+        // caches one) — the overlay resolves it for the SearchStyle-driven density; tests flip the
+        // style through here and SetUpSteps resets it to the default for isolation.
+        private JukeBoxConfigManager gameConfig = null!;
+
         // CreateChildDependencies runs once for the whole scene (shared across every [Test] in
         // this fixture), so StubMirror's contents are reset in SetUpSteps below rather than here
         // — otherwise one test mutating it would leak into another.
@@ -31,6 +37,7 @@ namespace JukeBox.Game.Tests.Visual
         {
             var deps = new DependencyContainer(parent);
             deps.CacheAs<IBeatmapMirror>(mirror = new StubMirror());
+            deps.Cache(gameConfig = new JukeBoxConfigManager(new TemporaryNativeStorage(Path.Combine("jukebox-listing-test", Path.GetRandomFileName()))));
             return deps;
         }
 
@@ -44,6 +51,7 @@ namespace JukeBox.Game.Tests.Visual
                 mirror.Requests.Clear();
                 mirror.PageFactory = null;
                 mirror.Sets.AddRange(StubMirror.DefaultSets());
+                gameConfig.SetValue(JukeBoxSetting.SearchStyle, SearchStyle.Compact);
                 Child = overlay = new BeatmapListingOverlay { RelativeSizeAxes = Axes.Both };
                 overlay.SetPicked += set => picked = set;
             });
@@ -135,6 +143,13 @@ namespace JukeBox.Game.Tests.Visual
         [Test]
         public void GenreFilterAutoChainsToMatchOnLaterPage()
         {
+            // Regular density: these pagination tests were designed around full-height cards
+            // (30 of them decisively overflow the viewport, so paging is purely scroll-driven);
+            // compact rows in this WIDE two-column host barely overflow, which legitimately trips
+            // the near-end threshold without scrolling — a geometry the real (narrow, one-column)
+            // docked compact listing never produces.
+            AddStep("use regular density", () => gameConfig.SetValue(JukeBoxSetting.SearchStyle, SearchStyle.Fullscreen));
+
             AddStep("mirror pages: page 0 all rock, page 1 contains one anime set", () =>
             {
                 mirror.PageFactory = page =>
@@ -160,6 +175,9 @@ namespace JukeBox.Game.Tests.Visual
         [Test]
         public void AutoChainStopsAtCapWhenNothingMatches()
         {
+            // Regular density — see GenreFilterAutoChainsToMatchOnLaterPage's first step.
+            AddStep("use regular density", () => gameConfig.SetValue(JukeBoxSetting.SearchStyle, SearchStyle.Fullscreen));
+
             AddStep("mirror serves endless all-rock pages", () => mirror.PageFactory = fullRockPage);
 
             AddStep("type 'a'", () => overlay.ShowWithInitialChar('a'));
@@ -227,10 +245,10 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("stays visible (nothing to close)", () => docked.State.Value == Visibility.Visible);
         }
 
-        // The "Filters" expander: collapsing it hides the chip rows (reclaiming vertical room for
-        // the results list in the narrow docked column) without disturbing the chips' own state —
-        // reopening shows the same selections, and TriggerClick still reaches a collapsed chip
-        // (filter changes aren't gated on visibility).
+        // The "Filters" expander: under the (default) compact search style the section DEFAULTS
+        // to collapsed, reclaiming vertical room for the results list in the narrow docked
+        // column. Expanding restores the chip rows without disturbing the chips' own state, and
+        // TriggerClick still reaches a collapsed chip (filter changes aren't gated on visibility).
         [Test]
         public void FiltersExpanderCollapsesAndRestoresChipRows()
         {
@@ -239,23 +257,55 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("type 'a'", () => overlay.ShowWithInitialChar('a'));
             AddUntilStep("initial search ran", () => overlay.ChildrenOfType<BeatmapCard>().Count() == 3);
 
-            AddAssert("filters start expanded", () => overlay.FiltersExpanded);
-
-            AddStep("click the Filters toggle",
-                () => overlay.ChildrenOfType<ClickableContainer>().First(c => c.GetType().Name == "FiltersToggleButton").TriggerClick());
-            AddAssert("filters now collapsed", () => !overlay.FiltersExpanded);
+            AddAssert("filters start collapsed (compact style default)", () => !overlay.FiltersExpanded);
 
             AddStep("click a filter chip while collapsed (a change must still apply)",
                 () => overlay.ChildrenOfType<FilterChip>().Single(c => c.Text == "Loved").TriggerClick());
             AddUntilStep("new search issued with the collapsed section's chip change", () => mirror.LastRequest?.Status == "loved");
 
+            AddStep("click the Filters toggle",
+                () => overlay.ChildrenOfType<ClickableContainer>().First(c => c.GetType().Name == "FiltersToggleButton").TriggerClick());
+            AddAssert("filters now expanded", () => overlay.FiltersExpanded);
+
+            // The section fades in (see updateFiltersExpanded) rather than snapping — assert
+            // the animation itself actually reaches full opacity, not just the instant flag.
+            AddUntilStep("filters section fully visible", () => overlay.FiltersBodyAlpha == 1);
+            AddAssert("chip selection survived the collapse/expand round-trip",
+                () => overlay.ChildrenOfType<FilterChip>().Single(c => c.Text == "Loved").Active.Value);
+
             AddStep("click the Filters toggle again",
                 () => overlay.ChildrenOfType<ClickableContainer>().First(c => c.GetType().Name == "FiltersToggleButton").TriggerClick());
-            AddAssert("filters expanded again", () => overlay.FiltersExpanded);
+            AddAssert("filters collapsed again", () => !overlay.FiltersExpanded);
+        }
 
-            // The section fades back in (see updateFiltersExpanded) rather than snapping — assert
-            // the animation itself actually reaches full opacity, not just the instant flag.
-            AddUntilStep("filters section fully visible again", () => overlay.FiltersBodyAlpha == 1);
+        // The SearchStyle setting is live-switchable and drives the docked listing's density:
+        // Compact (the default) renders dense half-height rows with small chips and a collapsed
+        // filter section; Fullscreen restores the roomier original card presentation here (the
+        // big overlay itself is MainScreen's concern, covered in TestSceneMainScreen).
+        [Test]
+        public void SearchStyleSettingSwitchesDensityLive()
+        {
+            AddStep("type 'a'", () => overlay.ShowWithInitialChar('a'));
+            AddUntilStep("cards shown", () => overlay.ChildrenOfType<BeatmapCard>().Count() == 3);
+
+            AddAssert("compact style renders dense rows", () =>
+                overlay.ChildrenOfType<BeatmapCard>().All(c => c.Compact && c.Height == BeatmapCard.COMPACT_HEIGHT));
+            AddAssert("chips are dense too", () => overlay.ChildrenOfType<FilterChip>().All(c => c.Compact));
+
+            AddStep("switch the setting to Fullscreen", () => gameConfig.SetValue(JukeBoxSetting.SearchStyle, SearchStyle.Fullscreen));
+
+            AddUntilStep("cards rebuilt at regular height", () =>
+                overlay.ChildrenOfType<BeatmapCard>().Count() == 3
+                && overlay.ChildrenOfType<BeatmapCard>().All(c => !c.Compact && c.Height == BeatmapCard.HEIGHT));
+            AddAssert("chips back to regular density", () => overlay.ChildrenOfType<FilterChip>().All(c => !c.Compact));
+            AddAssert("filters default expanded under fullscreen style", () => overlay.FiltersExpanded);
+
+            AddStep("switch back to Compact", () => gameConfig.SetValue(JukeBoxSetting.SearchStyle, SearchStyle.Compact));
+
+            AddUntilStep("dense rows again", () =>
+                overlay.ChildrenOfType<BeatmapCard>().Count() == 3
+                && overlay.ChildrenOfType<BeatmapCard>().All(c => c.Compact && c.Height == BeatmapCard.COMPACT_HEIGHT));
+            AddAssert("filters collapsed again (compact default)", () => !overlay.FiltersExpanded);
         }
 
         // "grid -> 1-col in narrow width": the docked left column (~380px, minus panel padding)
@@ -338,6 +388,9 @@ namespace JukeBox.Game.Tests.Visual
         [Test]
         public void ScrollingToBottomRequestsNextPage()
         {
+            // Regular density — see GenreFilterAutoChainsToMatchOnLaterPage's first step.
+            AddStep("use regular density", () => gameConfig.SetValue(JukeBoxSetting.SearchStyle, SearchStyle.Fullscreen));
+
             AddStep("mirror serves a full page of sets", () =>
             {
                 mirror.Sets.Clear();

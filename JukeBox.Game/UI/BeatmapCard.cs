@@ -32,13 +32,22 @@ namespace JukeBox.Game.UI;
 /// dots coloured by star rating (a "+N" caption absorbs the overflow). Highlights with an accent
 /// border while <see cref="Selected"/>, and is dimmed to 40% alpha with no click action when the
 /// set can't be downloaded (the owning overlay leaves <see cref="ClickableContainer.Action"/> null).
+///
+/// The <see cref="Compact"/> variant swaps the cover-backed card for a dense half-height row —
+/// small square thumbnail, tight text, mini difficulty dots — used by the compact search style.
 /// </summary>
 public partial class BeatmapCard : ClickableContainer
 {
     public const float HEIGHT = 112;
 
+    /// <summary>Row height of the dense variant (see <see cref="Compact"/>).</summary>
+    public const float COMPACT_HEIGHT = 56;
+
     private const int max_dots = 10;
     private const float gutter = 4;
+
+    /// <summary>Thumbnail edge length in the compact row layout.</summary>
+    private const float compact_thumb_size = 48;
 
     /// <summary>
     /// Driven by <see cref="BeatmapListingOverlay"/>'s keyboard navigation to control the accent
@@ -47,6 +56,16 @@ public partial class BeatmapCard : ClickableContainer
     public readonly BindableBool Selected = new();
 
     public BeatmapSetInfo Set { get; }
+
+    /// <summary>
+    /// The dense row layout used by the compact search style
+    /// (<see cref="Configuration.SearchStyle.Compact"/>): a small square thumbnail on the left
+    /// (<see cref="compact_thumb_size"/>) with tightly-spaced title/artist text and mini
+    /// difficulty dots beside it, at half the regular card's height — instead of the full
+    /// cover-backed card. Fixed at construction; the owning listing rebuilds its cards when the
+    /// style setting changes.
+    /// </summary>
+    public bool Compact { get; }
 
     // [Resolved(canBeNull: true)] rather than a hard [Resolved]: only JukeBoxGame's own
     // [BackgroundDependencyLoader] (not JukeBoxGameBase's, shared with every test scene) caches
@@ -63,17 +82,18 @@ public partial class BeatmapCard : ClickableContainer
     // which forbids relative sizing along its flow axes — BeatmapListingOverlay keeps every
     // card's width synced to half the grid's width instead. The default only matters for
     // standalone/test construction.
-    public BeatmapCard(BeatmapSetInfo set)
+    public BeatmapCard(BeatmapSetInfo set, bool compact = false)
     {
         Set = set;
+        Compact = compact;
         Width = 400;
-        Height = HEIGHT;
+        Height = compact ? COMPACT_HEIGHT : HEIGHT;
     }
 
     [BackgroundDependencyLoader]
     private void load()
     {
-        Padding = new MarginPadding(gutter);
+        Padding = new MarginPadding(Compact ? 2 : gutter);
 
         // The listing's entrance animation (BeatmapListingOverlay.rebuildCards) fades a newly
         // added card in from Alpha 0 rather than adding it fully visible. Without AlwaysPresent,
@@ -88,73 +108,9 @@ public partial class BeatmapCard : ClickableContainer
         {
             RelativeSizeAxes = Axes.Both,
             Masking = true,
-            CornerRadius = Theme.CornerRadius,
+            CornerRadius = Compact ? 6 : Theme.CornerRadius,
             BorderColour = Theme.Accent,
-            Children = new Drawable[]
-            {
-                new Box // placeholder; stays visible underneath until/unless the cover loads.
-                {
-                    RelativeSizeAxes = Axes.Both,
-                    Colour = Theme.ElevatedSurface,
-                },
-                coverContainer = new Container { RelativeSizeAxes = Axes.Both },
-                new Box // dark gradient so the text stays legible over any cover art.
-                {
-                    RelativeSizeAxes = Axes.Both,
-                    Colour = ColourInfo.GradientVertical(Color4.Black.Opacity(0.45f), Color4.Black.Opacity(0.85f)),
-                },
-                new FillFlowContainer
-                {
-                    RelativeSizeAxes = Axes.X,
-                    AutoSizeAxes = Axes.Y,
-                    Direction = FillDirection.Vertical,
-                    Padding = new MarginPadding { Horizontal = 10, Top = 8 },
-                    Spacing = new Vector2(0, 1),
-                    Children = new Drawable[]
-                    {
-                        new SpriteText
-                        {
-                            Text = Set.DisplayTitle,
-                            Font = FontUsage.Default.With(family: "Roboto", weight: "Bold", size: Theme.RowTitleTextSize),
-                            Colour = Theme.TextPrimary,
-                            Truncate = true,
-                            RelativeSizeAxes = Axes.X,
-                        },
-                        new SpriteText
-                        {
-                            Text = $"by {Set.DisplayArtist}",
-                            Font = FontUsage.Default.With(size: Theme.RowSecondaryTextSize),
-                            Colour = Theme.TextSecondary,
-                            Truncate = true,
-                            RelativeSizeAxes = Axes.X,
-                        },
-                        new SpriteText
-                        {
-                            Text = $"mapped by {Set.Creator}",
-                            Font = FontUsage.Default.With(size: Theme.CaptionTextSize),
-                            Colour = Theme.TextTertiary,
-                            Truncate = true,
-                            RelativeSizeAxes = Axes.X,
-                        },
-                    },
-                },
-                new FillFlowContainer
-                {
-                    Anchor = Anchor.BottomLeft,
-                    Origin = Anchor.BottomLeft,
-                    AutoSizeAxes = Axes.Both,
-                    Direction = FillDirection.Horizontal,
-                    Padding = new MarginPadding { Horizontal = 10, Bottom = 8 },
-                    Spacing = new Vector2(6, 0),
-                    Children = createBottomLine(),
-                },
-                hoverOverlay = new Box
-                {
-                    RelativeSizeAxes = Axes.Both,
-                    Colour = Color4.White.Opacity(0.08f),
-                    Alpha = 0,
-                },
-            },
+            Children = Compact ? createCompactLayout() : createRegularLayout(),
         };
 
         if (Set.DownloadDisabled)
@@ -165,7 +121,148 @@ public partial class BeatmapCard : ClickableContainer
         _ = loadCoverAsync();
     }
 
-    private Drawable[] createBottomLine()
+    private Drawable[] createRegularLayout() => new Drawable[]
+    {
+        new Box // placeholder; stays visible underneath until/unless the cover loads.
+        {
+            RelativeSizeAxes = Axes.Both,
+            Colour = Theme.ElevatedSurface,
+        },
+        coverContainer = new Container { RelativeSizeAxes = Axes.Both },
+        new Box // dark gradient so the text stays legible over any cover art.
+        {
+            RelativeSizeAxes = Axes.Both,
+            Colour = ColourInfo.GradientVertical(Color4.Black.Opacity(0.45f), Color4.Black.Opacity(0.85f)),
+        },
+        new FillFlowContainer
+        {
+            RelativeSizeAxes = Axes.X,
+            AutoSizeAxes = Axes.Y,
+            Direction = FillDirection.Vertical,
+            Padding = new MarginPadding { Horizontal = 10, Top = 8 },
+            Spacing = new Vector2(0, 1),
+            Children = new Drawable[]
+            {
+                new SpriteText
+                {
+                    Text = Set.DisplayTitle,
+                    Font = FontUsage.Default.With(family: "Roboto", weight: "Bold", size: Theme.RowTitleTextSize),
+                    Colour = Theme.TextPrimary,
+                    Truncate = true,
+                    RelativeSizeAxes = Axes.X,
+                },
+                new SpriteText
+                {
+                    Text = $"by {Set.DisplayArtist}",
+                    Font = FontUsage.Default.With(size: Theme.RowSecondaryTextSize),
+                    Colour = Theme.TextSecondary,
+                    Truncate = true,
+                    RelativeSizeAxes = Axes.X,
+                },
+                new SpriteText
+                {
+                    Text = $"mapped by {Set.Creator}",
+                    Font = FontUsage.Default.With(size: Theme.CaptionTextSize),
+                    Colour = Theme.TextTertiary,
+                    Truncate = true,
+                    RelativeSizeAxes = Axes.X,
+                },
+            },
+        },
+        new FillFlowContainer
+        {
+            Anchor = Anchor.BottomLeft,
+            Origin = Anchor.BottomLeft,
+            AutoSizeAxes = Axes.Both,
+            Direction = FillDirection.Horizontal,
+            Padding = new MarginPadding { Horizontal = 10, Bottom = 8 },
+            Spacing = new Vector2(6, 0),
+            Children = createBottomLine(dotSize: 7),
+        },
+        hoverOverlay = new Box
+        {
+            RelativeSizeAxes = Axes.Both,
+            Colour = Color4.White.Opacity(0.08f),
+            Alpha = 0,
+        },
+    };
+
+    /// <summary>
+    /// The dense row (see <see cref="Compact"/>): elevated-surface row, 48px thumbnail (the same
+    /// async cover fetch, just masked small), two tight text lines and a mini status/dots line —
+    /// no full-card cover or gradient.
+    /// </summary>
+    private Drawable[] createCompactLayout() => new Drawable[]
+    {
+        new Box
+        {
+            RelativeSizeAxes = Axes.Both,
+            Colour = Theme.ElevatedSurface,
+        },
+        new Container // thumbnail frame
+        {
+            Anchor = Anchor.CentreLeft,
+            Origin = Anchor.CentreLeft,
+            Size = new Vector2(compact_thumb_size),
+            Margin = new MarginPadding { Left = 3 },
+            Masking = true,
+            CornerRadius = 5,
+            Children = new Drawable[]
+            {
+                new Box
+                {
+                    RelativeSizeAxes = Axes.Both,
+                    Colour = Theme.PanelSurface,
+                },
+                coverContainer = new Container { RelativeSizeAxes = Axes.Both },
+            },
+        },
+        new FillFlowContainer
+        {
+            RelativeSizeAxes = Axes.X,
+            AutoSizeAxes = Axes.Y,
+            Anchor = Anchor.CentreLeft,
+            Origin = Anchor.CentreLeft,
+            Direction = FillDirection.Vertical,
+            Padding = new MarginPadding { Left = compact_thumb_size + 10, Right = 6 },
+            Spacing = new Vector2(0, 1),
+            Children = new Drawable[]
+            {
+                new SpriteText
+                {
+                    Text = Set.DisplayTitle,
+                    Font = FontUsage.Default.With(family: "Roboto", weight: "Bold", size: Theme.RowSecondaryTextSize),
+                    Colour = Theme.TextPrimary,
+                    Truncate = true,
+                    RelativeSizeAxes = Axes.X,
+                },
+                new SpriteText
+                {
+                    Text = $"{Set.DisplayArtist} · {Set.Creator}",
+                    Font = FontUsage.Default.With(size: Theme.CaptionTextSize - 1),
+                    Colour = Theme.TextTertiary,
+                    Truncate = true,
+                    RelativeSizeAxes = Axes.X,
+                },
+                new FillFlowContainer
+                {
+                    AutoSizeAxes = Axes.Both,
+                    Direction = FillDirection.Horizontal,
+                    Spacing = new Vector2(4, 0),
+                    Margin = new MarginPadding { Top = 1 },
+                    Children = createBottomLine(dotSize: 5),
+                },
+            },
+        },
+        hoverOverlay = new Box
+        {
+            RelativeSizeAxes = Axes.Both,
+            Colour = Color4.White.Opacity(0.08f),
+            Alpha = 0,
+        },
+    };
+
+    private Drawable[] createBottomLine(float dotSize)
     {
         var children = new System.Collections.Generic.List<Drawable>
         {
@@ -197,7 +294,7 @@ public partial class BeatmapCard : ClickableContainer
                 {
                     Anchor = Anchor.CentreLeft,
                     Origin = Anchor.CentreLeft,
-                    Size = new Vector2(7),
+                    Size = new Vector2(dotSize),
                     Colour = Theme.DifficultyColour(rating),
                 });
             }
@@ -220,7 +317,7 @@ public partial class BeatmapCard : ClickableContainer
         return children.ToArray();
     }
 
-    private static Drawable createPill(string text, Color4 colour) => new CircularContainer
+    private Drawable createPill(string text, Color4 colour) => new CircularContainer
     {
         Anchor = Anchor.CentreLeft,
         Origin = Anchor.CentreLeft,
@@ -232,9 +329,11 @@ public partial class BeatmapCard : ClickableContainer
             new SpriteText
             {
                 Text = text,
-                Font = FontUsage.Default.With(size: Theme.CaptionTextSize),
+                Font = FontUsage.Default.With(size: Compact ? Theme.CaptionTextSize - 2 : Theme.CaptionTextSize),
                 Colour = Color4.Black.Opacity(0.85f),
-                Margin = new MarginPadding { Horizontal = 7, Vertical = 2 },
+                Margin = Compact
+                    ? new MarginPadding { Horizontal = 5, Vertical = 1 }
+                    : new MarginPadding { Horizontal = 7, Vertical = 2 },
             },
         },
     };
