@@ -190,6 +190,12 @@ namespace JukeBox.Game
             AddFont(Resources, @"Fonts/Venera/Venera-Bold");
             AddFont(Resources, @"Fonts/Venera/Venera-Black");
 
+            // Lazer's texture-backed icon "font" (OsuIcon.FONT_NAME = "Icons"): OsuIcon glyphs —
+            // including every Ruleset.CreateIcon()'s — resolve through this store over the
+            // osu-resources Textures/Icons files, exactly as OsuGameBase registers it. Without
+            // it, any SpriteIcon using an OsuIcon glyph silently renders nothing.
+            Fonts.AddStore(new osu.Game.Graphics.OsuIcon.OsuIconStore(Textures));
+
             // The minimal game-level dependency set lazer's DrawableRuleset subtree resolves
             // (mirroring what lazer's own DrawableRuleset test scenes cache): a realm instance
             // (required non-null by DatabasedKeyBindingContainer; empty database means default key
