@@ -278,6 +278,34 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("filters collapsed again", () => !overlay.FiltersExpanded);
         }
 
+        // Regression coverage for search text drawing across/under the search-icon and "#"
+        // buttons: the input's own masking is what clips its text, and masking clips at the
+        // drawable's BOUNDS — so those bounds must genuinely end before the buttons (the old
+        // layout padded a full-row textbox instead, leaving its mask spanning the button area).
+        [Test]
+        public void LongSearchTextStaysClippedInsideTheInputBounds()
+        {
+            AddStep("type 'a'", () => overlay.ShowWithInitialChar('a'));
+            AddUntilStep("search ran", () => overlay.ChildrenOfType<BeatmapCard>().Any());
+
+            AddStep("fill the box with overflowing text",
+                () => overlay.SearchBox.Text = string.Concat(Enumerable.Repeat("Okaerinasai overflow ", 20)));
+
+            AddAssert("the input masks its own text", () => overlay.SearchBox.Masking);
+            AddAssert("the input's bounds end before the search-icon button", () =>
+            {
+                var searchIcon = overlay.ChildrenOfType<IconButton>()
+                                        .Single(b => b.Icon.Equals(osu.Framework.Graphics.Sprites.FontAwesome.Solid.Search));
+                return overlay.SearchBox.ScreenSpaceDrawQuad.TopRight.X <= searchIcon.ScreenSpaceDrawQuad.TopLeft.X + 0.5f;
+            });
+            AddAssert("the input's bounds end before the '#' button too", () =>
+            {
+                var hashtag = overlay.ChildrenOfType<IconButton>()
+                                     .Single(b => b.Icon.Equals(osu.Framework.Graphics.Sprites.FontAwesome.Solid.Hashtag));
+                return overlay.SearchBox.ScreenSpaceDrawQuad.TopRight.X <= hashtag.ScreenSpaceDrawQuad.TopLeft.X + 0.5f;
+            });
+        }
+
         // The SearchStyle setting is live-switchable and drives the docked listing's density:
         // Compact (the default) renders dense half-height rows with small chips and a collapsed
         // filter section; Fullscreen restores the roomier original card presentation here (the
