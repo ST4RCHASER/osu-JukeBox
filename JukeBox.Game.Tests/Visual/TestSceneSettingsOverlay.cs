@@ -323,5 +323,32 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("host has no window in this test environment", () => host.Window == null);
             AddAssert("display dropdown was not created", () => overlay.ChildrenOfType<SettingsOverlay.DisplaySettingsDropdown>().Any() == false);
         }
+
+        // "Play on main window too" is a dependent row: enabled exactly while "Detach player
+        // window" is on, greyed (Current.Disabled — lazer's dependent-setting pattern) while off,
+        // with its remembered value untouched by the disable.
+        [Test]
+        public void PlayOnMainRowFollowsDetachRowEnabledState()
+        {
+            AddStep("show overlay", () => overlay.Show());
+
+            AddAssert("row disabled while detach off", () => overlay.PlayOnMainCheckbox.Current.Disabled);
+
+            AddStep("turn detach on", () => config.SetValue(JukeBoxSetting.DetachPlayer, true));
+            AddAssert("row enabled", () => !overlay.PlayOnMainCheckbox.Current.Disabled);
+
+            AddStep("check play-on-main", () => overlay.PlayOnMainCheckbox.Current.Value = true);
+            AddAssert("config updated", () => config.Get<bool>(JukeBoxSetting.DetachPlayOnMain));
+
+            AddStep("turn detach off", () => config.SetValue(JukeBoxSetting.DetachPlayer, false));
+            AddAssert("row disabled again", () => overlay.PlayOnMainCheckbox.Current.Disabled);
+            AddAssert("remembered value intact", () => config.Get<bool>(JukeBoxSetting.DetachPlayOnMain));
+
+            AddStep("restore defaults", () =>
+            {
+                config.SetValue(JukeBoxSetting.DetachPlayer, false);
+                config.SetValue(JukeBoxSetting.DetachPlayOnMain, false);
+            });
+        }
     }
 }

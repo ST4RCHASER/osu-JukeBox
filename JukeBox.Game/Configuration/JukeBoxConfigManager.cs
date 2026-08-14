@@ -81,6 +81,13 @@ public enum JukeBoxSetting
     /// flips this back off.
     /// </summary>
     DetachPlayer,
+    /// <summary>
+    /// Only meaningful while <see cref="DetachPlayer"/> is on: keeps the MAIN window's player
+    /// box rendering the visuals as normal alongside the detached window, instead of showing
+    /// the "playing in detached window" placeholder. Both windows run the same scene off the
+    /// same sync feed, so this is a mirror, not a second player.
+    /// </summary>
+    DetachPlayOnMain,
 }
 
 /// <summary>
@@ -207,5 +214,6 @@ public class JukeBoxConfigManager : IniConfigManager<JukeBoxSetting>
         SetDefault(JukeBoxSetting.PlayfieldZoom, 1.0, 0.01, 2.0);
         SetDefault(JukeBoxSetting.SearchStyle, SearchStyle.Compact);
         SetDefault(JukeBoxSetting.DetachPlayer, false);
+        SetDefault(JukeBoxSetting.DetachPlayOnMain, false);
     }
 }
