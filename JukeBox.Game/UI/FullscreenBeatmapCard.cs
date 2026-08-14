@@ -22,47 +22,54 @@ using osuTK.Graphics;
 namespace JukeBox.Game.UI;
 
 /// <summary>
-/// One card in <see cref="FullscreenListingOverlay"/>'s three-column grid, styled after osu-web's
-/// listing card. Collapsed it shows the cover, title / "by artist" / "mapped by creator", a stats
-/// row (▶ play count, ♥ favourite count, ✓ ranked date), the status pill and mini difficulty
-/// dots, and a ▶ preview button over the left thumb area. Card hover reveals lazer's detail
-/// state at lazer's timing: the statistics row fades in and the right-side icon rail slides in
-/// (plus = add to queue via the existing enqueue path, browser = open the set's osu.ppy.sh page).
+/// One card in <see cref="FullscreenListingOverlay"/>'s grid, replicating lazer's in-game
+/// <c>BeatmapCardNormal</c>. Collapsed it shows the cover, title / "by artist" / "mapped by
+/// creator", the status pill + per-ruleset icons + star-coloured difficulty bars, and a ▶ preview
+/// button over the left thumb area. Card hover reveals lazer's detail state at lazer's timing:
+/// the statistics row fades in and the right-side icon rail slides in (plus = add to queue via
+/// the existing enqueue path, browser = open the set's osu.ppy.sh page).
 ///
-/// The hover EXPANSION (accent border + the per-difficulty list unfolding below) is NOT this
-/// card's concern: the DIFFICULTY STRIP reports its hover via <see cref="ExpansionHoverChanged"/>
-/// (lazer behaviour — the strip, not the whole card, is the trigger) and the card shows the
-/// accent border while <see cref="Expanded"/>. The owning overlay renders the difficulty panel as
-/// a floating layer ABOVE the grid at this card's position (see
-/// <c>FullscreenListingOverlay.CardExpansion</c>) — the card's own flow footprint NEVER changes,
-/// so hovering can never reflow the grid, and the overlay enforces that exactly one card is
-/// expanded at a time.
+/// Expansion follows lazer's REAL structure (<c>BeatmapCardContent</c>): this drawable's own
+/// size — its grid footprint — is FIXED, while the inner <see cref="CardSurface"/> is an
+/// auto-sized, masked, bordered container holding the card body on top and the per-difficulty
+/// dropdown below. Expanding simply makes the dropdown present, so the ONE surface grows
+/// downward past this drawable's bounds (drawn over the neighbouring rows, never reflowing the
+/// grid) with a single continuous border and background — not a separate stacked panel. The
+/// trigger is the DIFFICULTY STRIP's hover (via <see cref="ExpansionHoverChanged"/>, debounced by
+/// the owning overlay, which also enforces exactly one expanded card and raises its depth so the
+/// grown surface draws above the neighbours).
 /// </summary>
 public partial class FullscreenBeatmapCard : ClickableContainer
 {
-    public const float HEIGHT = 116;
+    /// <summary>The card's fixed grid footprint height (scaled-down density — see the overlay's
+    /// class summary).</summary>
+    public const float HEIGHT = 92;
 
     /// <summary>Lazer's <c>BeatmapCard.TRANSITION_DURATION</c> — every hover/expand transition on
     /// the card runs at this rate with OutQuint, matching the in-game cards exactly.</summary>
     public const float TRANSITION_DURATION = 360;
 
-    private const float thumb_width = 96;
-    private const float gutter = 5;
+    private const float thumb_width = 76;
+    private const float gutter = 4;
+    private const float body_height = HEIGHT - 2 * gutter;
     private const int max_bars = 10;
 
     public BeatmapSetInfo Set { get; }
 
+    /// <summary>Layout position in the owning grid — the grid's flow order follows this (not
+    /// Depth), so the owning overlay can raise an expanded card's Depth to draw its grown
+    /// surface over the neighbouring cards without reflowing the grid.</summary>
+    public int FlowIndex { get; }
+
     /// <summary>Driven by the owning overlay's keyboard navigation (accent border highlight).</summary>
     public readonly BindableBool Selected = new();
 
-    /// <summary>Set by the owning overlay while this card owns the (single) floating expansion —
-    /// drives the accent border, so the border always matches the actually-expanded card rather
-    /// than raw hover.</summary>
+    /// <summary>Set by the owning overlay while this card is the (single) expanded one — drives
+    /// the dropdown's visibility, the accent border and keeping the detail state shown.</summary>
     public readonly BindableBool Expanded = new();
 
-    /// <summary>The DIFFICULTY STRIP's hovered state changed (lazer behaviour: the per-difficulty
-    /// expansion is triggered by the bottom strip, not the whole card) — the owning overlay uses
-    /// this to move its single floating expansion between cards.</summary>
+    /// <summary>The DIFFICULTY STRIP's (or the open dropdown's) hovered state changed — the
+    /// owning overlay debounces these into expand/collapse decisions.</summary>
     public event Action<FullscreenBeatmapCard, bool>? ExpansionHoverChanged;
 
     /// <summary>▶ preview button clicked — the owning overlay routes this to its
@@ -85,17 +92,29 @@ public partial class FullscreenBeatmapCard : ClickableContainer
     private IconButton previewButton = null!;
     private FillFlowContainer statsRow = null!;
     private Container iconRail = null!;
-    private DotsStrip dotsStrip = null!;
+    private HoverReporter dotsStrip = null!;
+    private HoverReporter dropdown = null!;
     private RailButton plusButton = null!;
     private RailButton browseButton = null!;
+
+    // Transforms must only run after LoadComplete — see IconButton's `ready` field.
+    private bool ready;
 
     /// <summary>Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the ▶ preview
     /// button, to click it without depending on internal layout.</summary>
     internal IconButton PreviewButton => previewButton;
 
     /// <summary>Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the difficulty
-    /// strip — the hover target that triggers the floating expansion.</summary>
+    /// strip — the hover target that triggers the expansion.</summary>
     internal Container DifficultyStrip => dotsStrip;
+
+    /// <summary>Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the ONE growing
+    /// card surface (masked + bordered container holding body and dropdown together).</summary>
+    internal Container CardSurface => content;
+
+    /// <summary>Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the in-surface
+    /// per-difficulty dropdown.</summary>
+    internal Container ExpansionDropdown => dropdown;
 
     /// <summary>Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the hover rail's
     /// add-to-queue button.</summary>
@@ -109,14 +128,10 @@ public partial class FullscreenBeatmapCard : ClickableContainer
     /// itself, to assert its slide-in visibility.</summary>
     internal Container IconRail => iconRail;
 
-    /// <summary>The horizontal/vertical inset between this drawable's bounds and the visible card
-    /// (the grid gutter) — the owning overlay's floating expansion aligns to the visible card,
-    /// not the padded bounds.</summary>
-    public const float GUTTER = gutter;
-
-    public FullscreenBeatmapCard(BeatmapSetInfo set)
+    public FullscreenBeatmapCard(BeatmapSetInfo set, int flowIndex)
     {
         Set = set;
+        FlowIndex = flowIndex;
         Width = 400;
         Height = HEIGHT;
     }
@@ -130,125 +145,162 @@ public partial class FullscreenBeatmapCard : ClickableContainer
         // hit-testing needs the drawable present.
         AlwaysPresent = true;
 
-        InternalChildren = new Drawable[]
+        // The ONE growing surface (lazer's BeatmapCardContent shape): auto-sized so making the
+        // dropdown present grows it past this drawable's fixed bounds; masked+rounded+bordered as
+        // a single unit, so card + difficulty list read as one continuous card with one border.
+        InternalChild = content = new Container
         {
-            content = new Container
+            RelativeSizeAxes = Axes.X,
+            AutoSizeAxes = Axes.Y,
+            Masking = true,
+            CornerRadius = Theme.CornerRadius,
+            BorderColour = Theme.Accent,
+            Children = new Drawable[]
             {
-                RelativeSizeAxes = Axes.Both,
-                Masking = true,
-                CornerRadius = Theme.CornerRadius,
-                BorderColour = Theme.Accent,
-                Children = new Drawable[]
+                new Container // card body (fixed height — the collapsed card)
                 {
-                    new Box
+                    RelativeSizeAxes = Axes.X,
+                    Height = body_height,
+                    Children = new Drawable[]
                     {
-                        RelativeSizeAxes = Axes.Both,
-                        Colour = Theme.ElevatedSurface,
-                    },
-                    coverContainer = new Container { RelativeSizeAxes = Axes.Both },
-                    new Box // dark gradient for text legibility over any cover art.
-                    {
-                        RelativeSizeAxes = Axes.Both,
-                        Colour = ColourInfo.GradientVertical(Color4.Black.Opacity(0.5f), Color4.Black.Opacity(0.85f)),
-                    },
-                    previewButton = new IconButton
-                    {
-                        Anchor = Anchor.CentreLeft,
-                        Origin = Anchor.Centre,
-                        X = thumb_width / 2,
-                        Size = new Vector2(40),
-                        Icon = FontAwesome.Solid.Play,
-                        IdleColour = Color4.Black.Opacity(0.35f),
-                        HoverColour = Theme.AccentDim,
-                        Action = () => PreviewRequested?.Invoke(this),
-                    },
-                    new FillFlowContainer
-                    {
-                        RelativeSizeAxes = Axes.X,
-                        AutoSizeAxes = Axes.Y,
-                        Direction = FillDirection.Vertical,
-                        Padding = new MarginPadding { Left = thumb_width + 10, Right = 40, Top = 8 },
-                        Spacing = new Vector2(0, 1),
-                        Children = new Drawable[]
+                        new Box
                         {
-                            new SpriteText
-                            {
-                                Text = Set.DisplayTitle,
-                                Font = FontUsage.Default.With(family: "Roboto", weight: "Bold", size: Theme.RowTitleTextSize),
-                                Colour = Theme.TextPrimary,
-                                Truncate = true,
-                                RelativeSizeAxes = Axes.X,
-                            },
-                            new SpriteText
-                            {
-                                Text = $"by {Set.DisplayArtist}",
-                                Font = FontUsage.Default.With(size: Theme.RowSecondaryTextSize),
-                                Colour = Theme.TextSecondary,
-                                Truncate = true,
-                                RelativeSizeAxes = Axes.X,
-                            },
-                            new SpriteText
-                            {
-                                Text = $"mapped by {Set.Creator}",
-                                Font = FontUsage.Default.With(size: Theme.CaptionTextSize),
-                                Colour = Theme.TextTertiary,
-                                Truncate = true,
-                                RelativeSizeAxes = Axes.X,
-                            },
-                            // Lazer shows the statistics row only while the card is hovered
-                            // (statisticsContainer fade in BeatmapCardNormal.UpdateState).
-                            statsRow = createStatsRow(),
+                            RelativeSizeAxes = Axes.Both,
+                            Colour = Theme.ElevatedSurface,
                         },
-                    },
-                    // The difficulty strip (status pill + mode icons + coloured bars) — its OWN
-                    // hover-receiving container, because in lazer's card THIS strip (not the
-                    // whole card) is what triggers the per-difficulty expansion.
-                    dotsStrip = new DotsStrip
-                    {
-                        Anchor = Anchor.BottomLeft,
-                        Origin = Anchor.BottomLeft,
-                        AutoSizeAxes = Axes.Both,
-                        Child = new FillFlowContainer
+                        coverContainer = new Container { RelativeSizeAxes = Axes.Both },
+                        new Box // dark gradient for text legibility over any cover art.
                         {
-                            AutoSizeAxes = Axes.Both,
-                            Direction = FillDirection.Horizontal,
-                            Padding = new MarginPadding { Left = thumb_width + 10, Bottom = 8, Top = 4, Right = 8 },
-                            Spacing = new Vector2(6, 0),
-                            Children = createStatusLine(),
+                            RelativeSizeAxes = Axes.Both,
+                            Colour = ColourInfo.GradientVertical(Color4.Black.Opacity(0.5f), Color4.Black.Opacity(0.85f)),
                         },
-                    },
-                    // The hover icon rail (lazer's CollapsibleButtonContainer buttons, our
-                    // actions): plus = add to queue (existing enqueue path, listing stays open),
-                    // browser = open the set's osu.ppy.sh page externally. Slides in from the
-                    // right edge while the card is hovered.
-                    iconRail = new Container
-                    {
-                        Anchor = Anchor.CentreRight,
-                        Origin = Anchor.CentreRight,
-                        RelativeSizeAxes = Axes.Y,
-                        Width = 30,
-                        Alpha = 0,
-                        X = 10,
-                        Child = new FillFlowContainer
+                        previewButton = new IconButton
                         {
-                            Anchor = Anchor.Centre,
+                            Anchor = Anchor.CentreLeft,
                             Origin = Anchor.Centre,
-                            AutoSizeAxes = Axes.Both,
+                            X = thumb_width / 2,
+                            Size = new Vector2(34),
+                            Icon = FontAwesome.Solid.Play,
+                            IdleColour = Color4.Black.Opacity(0.35f),
+                            HoverColour = Theme.AccentDim,
+                            Action = () => PreviewRequested?.Invoke(this),
+                        },
+                        new FillFlowContainer
+                        {
+                            RelativeSizeAxes = Axes.X,
+                            AutoSizeAxes = Axes.Y,
                             Direction = FillDirection.Vertical,
-                            Spacing = new Vector2(0, 14),
+                            Padding = new MarginPadding { Left = thumb_width + 8, Right = 30, Top = 6 },
                             Children = new Drawable[]
                             {
-                                plusButton = new RailButton(FontAwesome.Solid.Plus)
+                                new SpriteText
                                 {
-                                    // Same enqueue path as clicking the card (no-op while the
-                                    // set is download-disabled, since Action stays null there).
-                                    Action = () => TriggerClick(),
+                                    Text = Set.DisplayTitle,
+                                    Font = FontUsage.Default.With(family: "Roboto", weight: "Bold", size: 14),
+                                    Colour = Theme.TextPrimary,
+                                    Truncate = true,
+                                    RelativeSizeAxes = Axes.X,
                                 },
-                                browseButton = new RailButton(FontAwesome.Solid.ExternalLinkAlt)
+                                new SpriteText
                                 {
-                                    Action = () => BrowseRequested?.Invoke(this),
+                                    Text = $"by {Set.DisplayArtist}",
+                                    Font = FontUsage.Default.With(size: 12),
+                                    Colour = Theme.TextSecondary,
+                                    Truncate = true,
+                                    RelativeSizeAxes = Axes.X,
+                                },
+                                new SpriteText
+                                {
+                                    Text = $"mapped by {Set.Creator}",
+                                    Font = FontUsage.Default.With(size: 11),
+                                    Colour = Theme.TextTertiary,
+                                    Truncate = true,
+                                    RelativeSizeAxes = Axes.X,
+                                },
+                                // Lazer shows the statistics row only while the card is hovered
+                                // (statisticsContainer fade in BeatmapCardNormal.UpdateState).
+                                statsRow = createStatsRow(),
+                            },
+                        },
+                        // The difficulty strip — its OWN hover-reporting container, because in
+                        // lazer's card THIS strip (not the whole card) triggers the expansion.
+                        dotsStrip = new HoverReporter(consume: false)
+                        {
+                            Anchor = Anchor.BottomLeft,
+                            Origin = Anchor.BottomLeft,
+                            AutoSizeAxes = Axes.Both,
+                            Child = new FillFlowContainer
+                            {
+                                AutoSizeAxes = Axes.Both,
+                                Direction = FillDirection.Horizontal,
+                                Padding = new MarginPadding { Left = thumb_width + 8, Bottom = 6, Top = 3, Right = 6 },
+                                Spacing = new Vector2(5, 0),
+                                Children = createStatusLine(),
+                            },
+                        },
+                        // The hover icon rail (lazer's card buttons, our actions): plus = add to
+                        // queue (existing enqueue path, listing stays open), browser = open the
+                        // set's osu.ppy.sh page externally.
+                        iconRail = new Container
+                        {
+                            Anchor = Anchor.CentreRight,
+                            Origin = Anchor.CentreRight,
+                            RelativeSizeAxes = Axes.Y,
+                            Width = 26,
+                            Alpha = 0,
+                            X = 8,
+                            Child = new FillFlowContainer
+                            {
+                                Anchor = Anchor.Centre,
+                                Origin = Anchor.Centre,
+                                AutoSizeAxes = Axes.Both,
+                                Direction = FillDirection.Vertical,
+                                Spacing = new Vector2(0, 10),
+                                Children = new Drawable[]
+                                {
+                                    plusButton = new RailButton(FontAwesome.Solid.Plus)
+                                    {
+                                        // Same enqueue path as clicking the card (no-op while
+                                        // the set is download-disabled — Action stays null).
+                                        Action = () => TriggerClick(),
+                                    },
+                                    browseButton = new RailButton(FontAwesome.Solid.ExternalLinkAlt)
+                                    {
+                                        Action = () => BrowseRequested?.Invoke(this),
+                                    },
                                 },
                             },
+                        },
+                    },
+                },
+                // The per-difficulty dropdown INSIDE the same surface, directly below the body
+                // (lazer's dropdownContent): while collapsed it's Alpha 0 / not present, so the
+                // auto-sized surface excludes it; expanding makes it present and the ONE surface
+                // grows downward around it. Consumes hover — that keeps the expansion alive while
+                // the cursor is over it AND stops hover leaking to the card underneath.
+                dropdown = new HoverReporter(consume: true)
+                {
+                    RelativeSizeAxes = Axes.X,
+                    AutoSizeAxes = Axes.Y,
+                    Y = body_height,
+                    Alpha = 0,
+                    Children = new Drawable[]
+                    {
+                        new Box
+                        {
+                            RelativeSizeAxes = Axes.Both,
+                            // Fully opaque — the grown surface draws over neighbouring cards,
+                            // which must not show through.
+                            Colour = new Color4(0x21, 0x21, 0x2B, 0xFF),
+                        },
+                        new FillFlowContainer
+                        {
+                            RelativeSizeAxes = Axes.X,
+                            AutoSizeAxes = Axes.Y,
+                            Direction = FillDirection.Vertical,
+                            Padding = new MarginPadding { Horizontal = 8, Top = 6, Bottom = 7 },
+                            Spacing = new Vector2(0, 3),
+                            ChildrenEnumerable = Set.Beatmaps.OrderBy(b => b.DifficultyRating).Select(b => new DifficultyRow(b)),
                         },
                     },
                 },
@@ -259,12 +311,19 @@ public partial class FullscreenBeatmapCard : ClickableContainer
             Alpha = 0.4f;
 
         Selected.BindValueChanged(_ => updateBorder(), true);
-        Expanded.BindValueChanged(_ => updateBorder(), true);
+        Expanded.BindValueChanged(e => updateExpandedState(e.NewValue), true);
         PreviewingSetId.BindValueChanged(e => previewButton.Icon = e.NewValue == Set.Id ? FontAwesome.Solid.Stop : FontAwesome.Solid.Play, true);
 
         dotsStrip.HoverChanged += hovered => ExpansionHoverChanged?.Invoke(this, hovered);
+        dropdown.HoverChanged += hovered => ExpansionHoverChanged?.Invoke(this, hovered);
 
         _ = loadCoverAsync();
+    }
+
+    protected override void LoadComplete()
+    {
+        base.LoadComplete();
+        ready = true;
     }
 
     private FillFlowContainer createStatsRow()
@@ -273,8 +332,8 @@ public partial class FullscreenBeatmapCard : ClickableContainer
         {
             AutoSizeAxes = Axes.Both,
             Direction = FillDirection.Horizontal,
-            Spacing = new Vector2(10, 0),
-            Margin = new MarginPadding { Top = 3 },
+            Spacing = new Vector2(9, 0),
+            Margin = new MarginPadding { Top = 2 },
             // Shown on hover only, like lazer's statisticsContainer.
             Alpha = 0,
         };
@@ -292,7 +351,7 @@ public partial class FullscreenBeatmapCard : ClickableContainer
     {
         AutoSizeAxes = Axes.Both,
         Direction = FillDirection.Horizontal,
-        Spacing = new Vector2(4, 0),
+        Spacing = new Vector2(3, 0),
         Children = new Drawable[]
         {
             new SpriteIcon
@@ -300,7 +359,7 @@ public partial class FullscreenBeatmapCard : ClickableContainer
                 Anchor = Anchor.CentreLeft,
                 Origin = Anchor.CentreLeft,
                 Icon = icon,
-                Size = new Vector2(10),
+                Size = new Vector2(9),
                 Colour = Theme.TextSecondary,
             },
             new SpriteText
@@ -308,14 +367,14 @@ public partial class FullscreenBeatmapCard : ClickableContainer
                 Anchor = Anchor.CentreLeft,
                 Origin = Anchor.CentreLeft,
                 Text = text,
-                Font = FontUsage.Default.With(size: Theme.CaptionTextSize),
+                Font = FontUsage.Default.With(size: 11),
                 Colour = Theme.TextSecondary,
             },
         },
     };
 
     /// <summary>The lazer-style bottom strip: status pill, one icon per ruleset present in the
-    /// set, then small vertical bars (not dots) coloured by star rating, sorted ascending.</summary>
+    /// set, then small vertical bars coloured by star rating, sorted ascending.</summary>
     private Drawable[] createStatusLine()
     {
         var children = new System.Collections.Generic.List<Drawable>
@@ -330,7 +389,7 @@ public partial class FullscreenBeatmapCard : ClickableContainer
                 Anchor = Anchor.CentreLeft,
                 Origin = Anchor.CentreLeft,
                 Icon = DifficultyRow.ModeIcon(mode),
-                Size = new Vector2(14),
+                Size = new Vector2(12),
                 Colour = Theme.TextPrimary,
             });
         }
@@ -345,7 +404,7 @@ public partial class FullscreenBeatmapCard : ClickableContainer
                 Origin = Anchor.CentreLeft,
                 AutoSizeAxes = Axes.Both,
                 Direction = FillDirection.Horizontal,
-                Spacing = new Vector2(3, 0),
+                Spacing = new Vector2(2.5f, 0),
             };
 
             foreach (double rating in ratings.Take(max_bars))
@@ -354,9 +413,9 @@ public partial class FullscreenBeatmapCard : ClickableContainer
                 {
                     Anchor = Anchor.CentreLeft,
                     Origin = Anchor.CentreLeft,
-                    Size = new Vector2(5, 14),
+                    Size = new Vector2(4, 12),
                     Masking = true,
-                    CornerRadius = 2.5f,
+                    CornerRadius = 2,
                     Child = new Box
                     {
                         RelativeSizeAxes = Axes.Both,
@@ -372,7 +431,7 @@ public partial class FullscreenBeatmapCard : ClickableContainer
                     Anchor = Anchor.CentreLeft,
                     Origin = Anchor.CentreLeft,
                     Text = $"+{ratings.Count - max_bars}",
-                    Font = FontUsage.Default.With(size: Theme.CaptionTextSize),
+                    Font = FontUsage.Default.With(size: 10),
                     Colour = Theme.TextSecondary,
                 });
             }
@@ -395,15 +454,14 @@ public partial class FullscreenBeatmapCard : ClickableContainer
             new SpriteText
             {
                 Text = text,
-                Font = FontUsage.Default.With(size: Theme.CaptionTextSize),
+                Font = FontUsage.Default.With(size: 11),
                 Colour = Color4.Black.Opacity(0.85f),
-                Margin = new MarginPadding { Horizontal = 7, Vertical = 2 },
+                Margin = new MarginPadding { Horizontal = 6, Vertical = 1.5f },
             },
         },
     };
 
-    /// <summary>One difficulty in the hover expansion: mode icon + star pill + version name.
-    /// Constructed by the owning overlay's floating expansion (see the class summary).</summary>
+    /// <summary>One difficulty in the expansion dropdown: mode icon + star pill + version name.</summary>
     internal partial class DifficultyRow : FillFlowContainer
     {
         public BeatmapInfo Beatmap { get; }
@@ -415,7 +473,7 @@ public partial class FullscreenBeatmapCard : ClickableContainer
             RelativeSizeAxes = Axes.X;
             AutoSizeAxes = Axes.Y;
             Direction = FillDirection.Horizontal;
-            Spacing = new Vector2(6, 0);
+            Spacing = new Vector2(5, 0);
 
             Children = new Drawable[]
             {
@@ -424,7 +482,7 @@ public partial class FullscreenBeatmapCard : ClickableContainer
                     Anchor = Anchor.CentreLeft,
                     Origin = Anchor.CentreLeft,
                     Icon = ModeIcon(beatmap.Mode),
-                    Size = new Vector2(12),
+                    Size = new Vector2(11),
                     Colour = Theme.TextSecondary,
                 },
                 new CircularContainer
@@ -441,7 +499,7 @@ public partial class FullscreenBeatmapCard : ClickableContainer
                             AutoSizeAxes = Axes.Both,
                             Direction = FillDirection.Horizontal,
                             Spacing = new Vector2(2, 0),
-                            Margin = new MarginPadding { Horizontal = 7, Vertical = 1 },
+                            Margin = new MarginPadding { Horizontal = 6, Vertical = 1 },
                             Children = new Drawable[]
                             {
                                 new SpriteIcon
@@ -449,7 +507,7 @@ public partial class FullscreenBeatmapCard : ClickableContainer
                                     Anchor = Anchor.CentreLeft,
                                     Origin = Anchor.CentreLeft,
                                     Icon = FontAwesome.Solid.Star,
-                                    Size = new Vector2(9),
+                                    Size = new Vector2(8),
                                     Colour = Color4.Black.Opacity(0.85f),
                                 },
                                 new SpriteText
@@ -457,7 +515,7 @@ public partial class FullscreenBeatmapCard : ClickableContainer
                                     Anchor = Anchor.CentreLeft,
                                     Origin = Anchor.CentreLeft,
                                     Text = beatmap.DifficultyRating.ToString("0.00"),
-                                    Font = FontUsage.Default.With(weight: "Bold", size: Theme.CaptionTextSize),
+                                    Font = FontUsage.Default.With(weight: "Bold", size: 11),
                                     Colour = Color4.Black.Opacity(0.85f),
                                 },
                             },
@@ -469,7 +527,7 @@ public partial class FullscreenBeatmapCard : ClickableContainer
                     Anchor = Anchor.CentreLeft,
                     Origin = Anchor.CentreLeft,
                     Text = beatmap.Version,
-                    Font = FontUsage.Default.With(size: Theme.RowSecondaryTextSize),
+                    Font = FontUsage.Default.With(size: 12),
                     Colour = Theme.TextSecondary,
                     Truncate = true,
                 },
@@ -489,43 +547,71 @@ public partial class FullscreenBeatmapCard : ClickableContainer
 
     // No scale, no size change, no widened hit area on hover — anything that grows this card's
     // flow footprint (even a 1% scale) can push a grid row over the wrap threshold and reflow the
-    // whole grid mid-hover (the exact bug the floating-expansion design replaced). Card hover
-    // only reveals in-card detail (the stats row and the icon rail sliding in, lazer's
-    // showDetails behaviour at lazer's exact timing); the difficulty EXPANSION is the dots
-    // strip's concern (see DotsStrip / ExpansionHoverChanged).
+    // whole grid mid-hover. Card hover only reveals in-card detail; the expansion is the
+    // difficulty strip's concern (see ExpansionHoverChanged), and the surface growth happens
+    // INSIDE the fixed-footprint drawable.
     protected override bool OnHover(HoverEvent e)
     {
         if (Enabled.Value)
-            updateHoverDetails(true);
+            updateHoverDetails();
 
         return base.OnHover(e);
     }
 
     protected override void OnHoverLost(HoverLostEvent e)
     {
-        updateHoverDetails(false);
+        updateHoverDetails();
         base.OnHoverLost(e);
     }
 
-    private void updateHoverDetails(bool shown)
+    /// <summary>Lazer's <c>showDetails</c>: shown while hovered OR expanded.</summary>
+    private void updateHoverDetails()
     {
+        bool shown = Enabled.Value && (IsHovered || Expanded.Value);
+
         statsRow.FadeTo(shown ? 1 : 0, TRANSITION_DURATION, Easing.OutQuint);
         iconRail.FadeTo(shown ? 1 : 0, TRANSITION_DURATION, Easing.OutQuint);
-        iconRail.MoveToX(shown ? 0 : 10, TRANSITION_DURATION, Easing.OutQuint);
+        iconRail.MoveToX(shown ? 0 : 8, TRANSITION_DURATION, Easing.OutQuint);
+    }
+
+    private void updateExpandedState(bool expanded)
+    {
+        if (ready)
+        {
+            // Lazer's dropdownContent fade (expand at full TRANSITION_DURATION, collapse at a
+            // third) — presence flips with alpha, which is what grows/shrinks the surface.
+            if (expanded)
+                dropdown.FadeIn(TRANSITION_DURATION, Easing.OutQuint);
+            else
+                dropdown.FadeOut(TRANSITION_DURATION / 3f, Easing.OutQuint);
+        }
+        else
+            dropdown.Alpha = expanded ? 1 : 0;
+
+        updateBorder();
+        updateHoverDetails();
     }
 
     private void updateBorder() => content.BorderThickness = Selected.Value || Expanded.Value ? 3 : 0;
 
-    /// <summary>The bottom difficulty strip — a dedicated hover-reporting container because THIS
-    /// (not the whole card) is the expansion trigger, matching lazer.</summary>
-    internal partial class DotsStrip : Container
+    /// <summary>A container that reports its hover to the owner; optionally consumes the hover
+    /// (the expansion dropdown does, so the expansion stays alive under the cursor AND the card
+    /// underneath the grown surface never sees a hover of its own).</summary>
+    internal partial class HoverReporter : Container
     {
         public event Action<bool>? HoverChanged;
+
+        private readonly bool consume;
+
+        public HoverReporter(bool consume)
+        {
+            this.consume = consume;
+        }
 
         protected override bool OnHover(HoverEvent e)
         {
             HoverChanged?.Invoke(true);
-            return base.OnHover(e);
+            return consume || base.OnHover(e);
         }
 
         protected override void OnHoverLost(HoverLostEvent e)
@@ -537,8 +623,8 @@ public partial class FullscreenBeatmapCard : ClickableContainer
 
     /// <summary>
     /// One icon in the hover rail, replicating lazer's <c>BeatmapCardIconButton</c> look and
-    /// timing: a bare 14px icon (no background) that brightens and slightly grows on hover with
-    /// an additive glow, idle/hover colours from the shared purple palette when present.
+    /// timing: a bare icon (no background) that brightens and slightly grows on hover with an
+    /// additive glow, idle/hover colours from the shared purple palette when present.
     /// </summary>
     internal partial class RailButton : ClickableContainer
     {
@@ -552,7 +638,7 @@ public partial class FullscreenBeatmapCard : ClickableContainer
 
         public RailButton(IconUsage iconUsage)
         {
-            Size = new Vector2(24);
+            Size = new Vector2(22);
 
             Children = new Drawable[]
             {
@@ -573,7 +659,7 @@ public partial class FullscreenBeatmapCard : ClickableContainer
                     Anchor = Anchor.Centre,
                     Origin = Anchor.Centre,
                     Icon = iconUsage,
-                    Size = new Vector2(14),
+                    Size = new Vector2(13),
                     Scale = new Vector2(0.8f),
                 },
             };

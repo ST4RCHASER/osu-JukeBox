@@ -42,22 +42,24 @@ namespace JukeBox.Game.UI;
 /// off the same results with the same infinite-scroll/auto-chain behaviour.
 ///
 /// Hovering a card expands it osu-web style: the card's grid footprint NEVER changes — a single
-/// floating <see cref="CardExpansion"/> (never more than one, see
-/// <see cref="onCardExpansionHoverChanged"/>) renders the difficulty list ABOVE the grid at the card's
-/// position, growing downward over the neighbours with its own shadow, and collapses on hover-out
-/// (short grace delay) or moves when another card is hovered. The ▶ preview button routes to the
-/// owned <see cref="PreviewPlayer"/>, which pauses the main jukebox track for the preview's
-/// duration and is always stopped when this overlay closes.
+/// expansion happens INSIDE the card's own single growing surface (lazer's BeatmapCardContent
+/// shape — see <see cref="FullscreenBeatmapCard"/>): this overlay only enforces that exactly ONE
+/// card is expanded at a time (<see cref="onCardExpansionHoverChanged"/>, 100ms debounce both
+/// ways) and raises the expanded card's depth so its grown surface draws over the neighbouring
+/// rows — the grid's layout order is pinned by <see cref="FullscreenBeatmapCard.FlowIndex"/>
+/// (see <see cref="CardFlow"/>), so depth changes can never reflow it. The ▶ preview button
+/// routes to the owned <see cref="PreviewPlayer"/>, which pauses the main jukebox track for the
+/// preview's duration and is always stopped when this overlay closes.
 /// </summary>
 public partial class FullscreenListingOverlay : FocusedOverlayContainer
 {
-    private const float label_width = 110;
+    private const float label_width = 92;
     private const float scroll_load_threshold = 200;
-    private const float min_column_width = 300;
+    private const float min_column_width = 260;
     private const int max_columns = 3;
 
     /// <summary>Width of the lazer-styled filter controls (dropdowns, sliders, checkboxes).</summary>
-    private const float control_width = 170;
+    private const float control_width = 150;
 
     /// <summary>
     /// The engine's ruleset filter as a dropdown-friendly enum — the engine speaks NeriNyan's raw
@@ -127,7 +129,7 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
     private const double expand_delay_ms = 100;
 
     private ListingSearchBox searchBox = null!;
-    private FillFlowContainer<FullscreenBeatmapCard> cardsFlow = null!;
+    private CardFlow cardsFlow = null!;
     private BasicScrollContainer scroll = null!;
     private SpriteText statusText = null!;
     private PreviewPlayer previewPlayer = null!;
@@ -154,14 +156,9 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
     private int settleFrames;
     private float lastCardWidth;
 
-    // ---- Hover expansion state (see onCardHoverChanged) --------------------------------------
-
-    /// <summary>Hosts the SINGLE <see cref="CardExpansion"/>, layered above the grid inside the
-    /// same scroll content (so it scrolls with the cards).</summary>
-    private Container expansionLayer = null!;
+    // ---- Hover expansion state (see onCardExpansionHoverChanged) -----------------------------
 
     private FullscreenBeatmapCard? expandedCard;
-    private CardExpansion? expansion;
     private osu.Framework.Threading.ScheduledDelegate? pendingExpand;
     private osu.Framework.Threading.ScheduledDelegate? pendingCollapse;
 
@@ -184,10 +181,6 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
     /// <summary>Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the currently
     /// expanded card (null when nothing is expanded) — there can only ever be one.</summary>
     internal FullscreenBeatmapCard? ExpandedCard => expandedCard;
-
-    /// <summary>Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the single
-    /// floating expansion panel (null when collapsed).</summary>
-    internal CardExpansion? Expansion => expansion;
 
     // Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the lazer-styled filter
     // controls, to drive/assert them without depending on internal layout.
@@ -225,7 +218,7 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
             panel = new Container
             {
                 RelativeSizeAxes = Axes.Both,
-                Padding = new MarginPadding(Theme.PanelPadding * 1.5f),
+                Padding = new MarginPadding(Theme.PanelPadding),
                 Child = new Container
                 {
                     RelativeSizeAxes = Axes.Both,
@@ -245,7 +238,7 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
                         new OsuTooltipContainer(null!)
                         {
                             RelativeSizeAxes = Axes.Both,
-                            Padding = new MarginPadding(Theme.PanelPadding * 1.5f),
+                            Padding = new MarginPadding(Theme.PanelPadding),
                             Child = new GridContainer
                             {
                                 RelativeSizeAxes = Axes.Both,
@@ -262,34 +255,16 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
                                         scroll = new BasicScrollContainer
                                         {
                                             RelativeSizeAxes = Axes.Both,
-                                            Padding = new MarginPadding { Top = Theme.SectionSpacing },
-                                            // The expansion layer sits AFTER (above) the grid in
-                                            // the same scroll content, so the floating expansion
-                                            // draws/hit-tests over every card and scrolls WITH
-                                            // the grid naturally.
-                                            Child = new Container
+                                            // A full section of clearance between the (fixed)
+                                            // filter block above and the scrolling grid — the
+                                            // grid's masked viewport starts below this padding,
+                                            // so cards can never collide with the filter rows.
+                                            Padding = new MarginPadding { Top = Theme.SectionSpacing + 4 },
+                                            Child = cardsFlow = new CardFlow
                                             {
                                                 RelativeSizeAxes = Axes.X,
                                                 AutoSizeAxes = Axes.Y,
-                                                Children = new Drawable[]
-                                                {
-                                                    cardsFlow = new FillFlowContainer<FullscreenBeatmapCard>
-                                                    {
-                                                        RelativeSizeAxes = Axes.X,
-                                                        AutoSizeAxes = Axes.Y,
-                                                        Direction = FillDirection.Full,
-                                                    },
-                                                    // Deliberately zero-height (the wrapper is
-                                                    // autosized to the grid; a relative-height
-                                                    // child would be forbidden there) — the
-                                                    // unmasked expansion child simply draws and
-                                                    // hit-tests beyond its bounds.
-                                                    expansionLayer = new Container
-                                                    {
-                                                        RelativeSizeAxes = Axes.X,
-                                                        Height = 0,
-                                                    },
-                                                },
+                                                Direction = FillDirection.Full,
                                             },
                                         },
                                     },
@@ -373,9 +348,9 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
                         {
                             Anchor = Anchor.CentreLeft,
                             Origin = Anchor.CentreLeft,
-                            Size = new Vector2(30),
+                            Size = new Vector2(26),
                             Masking = true,
-                            CornerRadius = 7,
+                            CornerRadius = 6,
                             BorderThickness = 2,
                             BorderColour = Theme.TextPrimary,
                             Children = new Drawable[]
@@ -386,7 +361,7 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
                                     Anchor = Anchor.Centre,
                                     Origin = Anchor.Centre,
                                     Icon = FontAwesome.Solid.Music,
-                                    Size = new Vector2(14),
+                                    Size = new Vector2(12),
                                     Colour = Theme.TextPrimary,
                                 },
                             },
@@ -396,7 +371,7 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
                             Anchor = Anchor.CentreLeft,
                             Origin = Anchor.CentreLeft,
                             Text = "beatmap listing",
-                            Font = FontUsage.Default.With(size: 24),
+                            Font = FontUsage.Default.With(size: 20),
                             Colour = Theme.TextPrimary,
                         },
                     },
@@ -404,7 +379,7 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
                 new Container // big keyword box (text scales with the box height)
                 {
                     RelativeSizeAxes = Axes.X,
-                    Height = 52,
+                    Height = 44,
                     Children = new Drawable[]
                     {
                         searchBox = new ListingSearchBox
@@ -419,7 +394,7 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
                             Origin = Anchor.CentreRight,
                             Margin = new MarginPadding { Right = 16 },
                             Icon = FontAwesome.Solid.Search,
-                            Size = new Vector2(18),
+                            Size = new Vector2(16),
                             Colour = Theme.TextTertiary,
                         },
                     },
@@ -449,7 +424,7 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
         RelativeSizeAxes = Axes.X,
         AutoSizeAxes = Axes.Y,
         Direction = FillDirection.Vertical,
-        Spacing = new Vector2(0, Theme.RowSpacing),
+        Spacing = new Vector2(0, 6),
         Children = new[]
         {
             controlRow("Mode", modeDropdown = new OsuEnumDropdown<SearchMode>
@@ -784,9 +759,11 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
             return;
         }
 
+        int flowIndex = 0;
+
         foreach (var set in visible)
         {
-            var card = new FullscreenBeatmapCard(set);
+            var card = new FullscreenBeatmapCard(set, flowIndex++);
 
             if (lastCardWidth > 0)
                 card.Width = lastCardWidth;
@@ -863,9 +840,10 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
         expandedCard = card;
         card.Expanded.Value = true;
 
-        expansion = new CardExpansion(card);
-        expansion.HoverLost += scheduleCollapse;
-        expansionLayer.Add(expansion);
+        // Raised so the card's grown surface draws (and hit-tests) over the neighbouring rows —
+        // layout is unaffected because CardFlow flows by FlowIndex, not depth.
+        if (card.Parent == cardsFlow)
+            cardsFlow.ChangeChildDepth(card, -1);
     }
 
     /// <summary>See <see cref="onCardExpansionHoverChanged"/> — the collapse side of the same
@@ -880,7 +858,7 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
         pendingCollapse?.Cancel();
         pendingCollapse = Scheduler.AddDelayed(() =>
         {
-            if (expandedCard?.DifficultyStrip.IsHovered != true && expansion?.IsHovered != true)
+            if (expandedCard?.DifficultyStrip.IsHovered != true && expandedCard?.ExpansionDropdown.IsHovered != true)
                 collapseExpansion();
         }, expand_delay_ms);
     }
@@ -891,11 +869,14 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
         pendingCollapse?.Cancel();
 
         if (expandedCard != null)
+        {
             expandedCard.Expanded.Value = false;
-        expandedCard = null;
 
-        expansion?.Collapse();
-        expansion = null;
+            if (expandedCard.Parent == cardsFlow)
+                cardsFlow.ChangeChildDepth(expandedCard, 0);
+        }
+
+        expandedCard = null;
     }
 
     /// <summary>Browser icon on a card's hover rail: opens the set's osu.ppy.sh page in the
@@ -926,100 +907,13 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
     }
 
     /// <summary>
-    /// The floating per-difficulty panel rendered ABOVE the grid while a card is hovered —
-    /// osu-web's expansion model: the card's grid footprint never changes, this panel simply
-    /// draws over whatever sits below the card, with its own shadow. Tracks the owning card's
-    /// position every frame (so grid relayouts — width syncs, window resizes — can't strand it)
-    /// and consumes hover, which both keeps the expansion alive while the cursor is over it and
-    /// stops the hover from falling through to the card underneath (the "two cards expanded"
-    /// bug this design replaces).
+    /// A grid whose layout order is pinned to each card's <see cref="FullscreenBeatmapCard.FlowIndex"/>
+    /// instead of the default depth-derived order — so raising an expanded card's depth (see
+    /// <see cref="expandCard"/>) reorders drawing/input WITHOUT reflowing the grid.
     /// </summary>
-    internal partial class CardExpansion : Container
+    private partial class CardFlow : FillFlowContainer<FullscreenBeatmapCard>
     {
-        /// <summary>The card this expansion belongs to.</summary>
-        public FullscreenBeatmapCard Card { get; }
-
-        /// <summary>The cursor left this panel — the overlay decides whether that collapses the
-        /// expansion (it doesn't when the cursor moved back onto the card).</summary>
-        public event Action? HoverLost;
-
-        public CardExpansion(FullscreenBeatmapCard card)
-        {
-            Card = card;
-
-            AutoSizeAxes = Axes.Y;
-            Masking = true;
-            CornerRadius = Theme.CornerRadius;
-            BorderColour = Theme.Accent;
-            BorderThickness = 3;
-            EdgeEffect = Theme.PanelShadow;
-
-            var rows = new FillFlowContainer
-            {
-                RelativeSizeAxes = Axes.X,
-                AutoSizeAxes = Axes.Y,
-                Direction = FillDirection.Vertical,
-                Padding = new MarginPadding(8),
-                Spacing = new Vector2(0, 4),
-            };
-
-            foreach (var beatmap in card.Set.Beatmaps.OrderBy(b => b.DifficultyRating))
-                rows.Add(new FullscreenBeatmapCard.DifficultyRow(beatmap));
-
-            Children = new Drawable[]
-            {
-                new Box
-                {
-                    RelativeSizeAxes = Axes.Both,
-                    Colour = Theme.PanelSurface,
-                },
-                new Container
-                {
-                    RelativeSizeAxes = Axes.X,
-                    AutoSizeAxes = Axes.Y,
-                    // Tucks up under the card's rounding so card + panel read as one grown card.
-                    Padding = new MarginPadding { Top = Theme.CornerRadius },
-                    Child = rows,
-                },
-            };
-
-            Alpha = 0;
-        }
-
-        protected override void LoadComplete()
-        {
-            base.LoadComplete();
-            // Lazer's dropdownContent fade-in (BeatmapCardContent.updateState).
-            this.FadeIn(FullscreenBeatmapCard.TRANSITION_DURATION, Easing.OutQuint);
-        }
-
-        /// <summary>Fades out and expires — called by the overlay; never self-triggered. A third
-        /// of the entrance duration, matching lazer's collapse.</summary>
-        public void Collapse()
-        {
-            HoverLost = null;
-            this.FadeOut(FullscreenBeatmapCard.TRANSITION_DURATION / 3f, Easing.OutQuint).Expire();
-        }
-
-        protected override void Update()
-        {
-            base.Update();
-
-            // Pinned to the owning card every frame, in the shared scroll-content space (the
-            // expansion layer's origin coincides with the grid's): aligned to the VISIBLE card
-            // (inside the card's grid-gutter padding), starting just under its bottom rounding.
-            Position = Card.Position + new Vector2(FullscreenBeatmapCard.GUTTER, Card.Height - FullscreenBeatmapCard.GUTTER - Theme.CornerRadius);
-            Width = Card.Width - 2 * FullscreenBeatmapCard.GUTTER;
-        }
-
-        // Consuming hover is load-bearing twice over: it keeps this panel (not the card below it)
-        // the hover target, and OnHoverLost tells the overlay when the cursor actually left.
-        protected override bool OnHover(HoverEvent e) => true;
-
-        protected override void OnHoverLost(HoverLostEvent e)
-        {
-            HoverLost?.Invoke();
-            base.OnHoverLost(e);
-        }
+        public override IEnumerable<Drawable> FlowingChildren
+            => AliveInternalChildren.Where(d => d.IsPresent).OfType<FullscreenBeatmapCard>().OrderBy(c => c.FlowIndex);
     }
 }
