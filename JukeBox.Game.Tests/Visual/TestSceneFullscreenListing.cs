@@ -210,7 +210,7 @@ namespace JukeBox.Game.Tests.Visual
         }
 
         [Test]
-        public void HoveringACardShowsOneFloatingExpansionWithoutReflowingTheGrid()
+        public void HoveringTheStripExpandsOneContinuousCardWithoutReflowingTheGrid()
         {
             AddStep("open seeded with 'a'", () => fullscreen.ShowWithInitialChar('a'));
             AddUntilStep("cards shown", () => fullscreen.ChildrenOfType<FullscreenBeatmapCard>().Count() == 3);
@@ -227,23 +227,37 @@ namespace JukeBox.Game.Tests.Visual
                 card2 = fullscreen.ChildrenOfType<FullscreenBeatmapCard>().Single(c => c.Set.Id == 2);
             });
 
-            AddAssert("nothing expanded before hover", () => fullscreen.Expansion == null && fullscreen.ExpandedCard == null);
+            AddAssert("nothing expanded before hover", () => fullscreen.ExpandedCard == null);
 
             // Lazer behaviour: hovering the card BODY shows details (stats/icon rail) but does
             // NOT expand — only the difficulty strip triggers the expansion.
             AddStep("hover the card body", () => InputManager.MoveMouseTo(card1));
             AddWaitStep("give any (wrong) expansion time to trigger", 5);
-            AddAssert("no expansion from body hover", () => fullscreen.Expansion == null);
+            AddAssert("no expansion from body hover", () => fullscreen.ExpandedCard == null);
 
             AddStep("hover the difficulty strip", () => InputManager.MoveMouseTo(card1.DifficultyStrip));
-            AddUntilStep("its floating expansion is fully visible", () => fullscreen.Expansion?.Alpha == 1);
+            AddUntilStep("its expansion dropdown is fully visible", () => card1.ExpansionDropdown.Alpha == 1);
             AddAssert("that card owns the expansion (accent border state)", () => fullscreen.ExpandedCard == card1 && card1.Expanded.Value);
 
+            // The lazer fix this round pins: ONE continuous card, not two stacked boxes — the
+            // dropdown lives INSIDE the card's single masked+bordered surface, which grows
+            // around it (single border, no seam, no second panel).
+            AddAssert("dropdown is part of the card's one bordered surface", () =>
+                card1.CardSurface.ChildrenOfType<FullscreenBeatmapCard.DifficultyRow>().Any()
+                && card1.CardSurface.Masking && card1.CardSurface.BorderThickness == 3);
+            AddAssert("the grown surface is one continuous quad (body + dropdown share edges)", () =>
+            {
+                var surface = card1.CardSurface.ScreenSpaceDrawQuad.AABBFloat;
+                var drop = card1.ExpansionDropdown.ScreenSpaceDrawQuad.AABBFloat;
+                return drop.Left >= surface.Left - 0.5f && drop.Right <= surface.Right + 0.5f
+                       && Math.Abs(drop.Bottom - surface.Bottom) < 0.5f;
+            });
+
             AddAssert("one row per difficulty, sourced from beatmaps[]", () =>
-                fullscreen.Expansion!.ChildrenOfType<FullscreenBeatmapCard.DifficultyRow>().Count() == card1.Set.Beatmaps.Count);
+                card1.ExpansionDropdown.ChildrenOfType<FullscreenBeatmapCard.DifficultyRow>().Count() == card1.Set.Beatmaps.Count);
             AddAssert("rows sorted ascending by stars", () =>
             {
-                var stars = fullscreen.Expansion!.ChildrenOfType<FullscreenBeatmapCard.DifficultyRow>()
+                var stars = card1.ExpansionDropdown.ChildrenOfType<FullscreenBeatmapCard.DifficultyRow>()
                                 .Select(r => r.Beatmap.DifficultyRating).ToList();
                 return stars.SequenceEqual(stars.OrderBy(s => s));
             });
@@ -257,18 +271,49 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("hover the neighbouring card's difficulty strip", () => InputManager.MoveMouseTo(card2.DifficultyStrip));
             AddUntilStep("expansion moved to the neighbour", () => fullscreen.ExpandedCard == card2 && card2.Expanded.Value);
             AddAssert("previous card released its expanded state", () => !card1.Expanded.Value);
-            AddUntilStep("only one expansion panel alive", () =>
-                fullscreen.ChildrenOfType<FullscreenListingOverlay.CardExpansion>().Count() == 1);
+            AddUntilStep("exactly one card expanded", () =>
+                fullscreen.ChildrenOfType<FullscreenBeatmapCard>().Count(c => c.Expanded.Value) == 1);
             AddAssert("grid still never moved", () =>
                 fullscreen.ChildrenOfType<FullscreenBeatmapCard>().All(c =>
                     osuTK.Vector2.Distance(c.ScreenSpaceDrawQuad.TopLeft, positionsBefore[c.Set.Id]) < 0.5f));
 
             AddStep("move the mouse away", () => InputManager.MoveMouseTo(fullscreen.SearchBox));
-            AddUntilStep("expansion collapsed", () => fullscreen.Expansion == null && fullscreen.ExpandedCard == null);
-            AddUntilStep("no expansion panels left in the tree", () =>
-                !fullscreen.ChildrenOfType<FullscreenListingOverlay.CardExpansion>().Any());
-            AddAssert("no card left with the expanded border", () =>
-                fullscreen.ChildrenOfType<FullscreenBeatmapCard>().All(c => !c.Expanded.Value));
+            AddUntilStep("expansion collapsed", () => fullscreen.ExpandedCard == null);
+            AddUntilStep("no card left with a visible dropdown or expanded border", () =>
+                fullscreen.ChildrenOfType<FullscreenBeatmapCard>().All(c => !c.Expanded.Value && c.ExpansionDropdown.Alpha == 0));
+        }
+
+        // The scaled-down density and the filter/grid clearance: cards stay compact, and the
+        // scrolling grid's masked viewport starts strictly below the filter block's last row —
+        // scrolled cards can never collide with the Stars/Sort rows.
+        [Test]
+        public void GridStartsBelowFilterBlockAndCardsAreCompact()
+        {
+            AddStep("open seeded with 'a'", () => fullscreen.ShowWithInitialChar('a'));
+            AddUntilStep("cards shown", () => fullscreen.ChildrenOfType<FullscreenBeatmapCard>().Count() == 3);
+            AddUntilStep("entrance settled", () => fullscreen.SlidePanel.Y == 0);
+
+            AddAssert("card height is the scaled-down target", () =>
+                FullscreenBeatmapCard.HEIGHT <= 100
+                && fullscreen.ChildrenOfType<FullscreenBeatmapCard>().All(c => c.DrawHeight == FullscreenBeatmapCard.HEIGHT));
+
+            AddAssert("grid viewport starts a clear gap below the stars row", () =>
+            {
+                float scrollTop = fullscreen.ChildrenOfType<osu.Framework.Graphics.Containers.BasicScrollContainer>().First().ScreenSpaceDrawQuad.TopLeft.Y;
+                float starsBottom = fullscreen.MinStarsSlider.ScreenSpaceDrawQuad.BottomLeft.Y;
+                return scrollTop >= starsBottom;
+            });
+            AddAssert("grid viewport starts below the sort dropdown too", () =>
+            {
+                float scrollTop = fullscreen.ChildrenOfType<osu.Framework.Graphics.Containers.BasicScrollContainer>().First().ScreenSpaceDrawQuad.TopLeft.Y;
+                float sortBottom = fullscreen.SortDropdown.ScreenSpaceDrawQuad.BottomLeft.Y;
+                return scrollTop >= sortBottom;
+            });
+            AddAssert("no card is drawn above the grid viewport's top", () =>
+            {
+                float scrollTop = fullscreen.ChildrenOfType<osu.Framework.Graphics.Containers.BasicScrollContainer>().First().ScreenSpaceDrawQuad.TopLeft.Y;
+                return fullscreen.ChildrenOfType<FullscreenBeatmapCard>().All(c => c.ScreenSpaceDrawQuad.TopLeft.Y >= scrollTop - 0.5f);
+            });
         }
 
         [Test]
