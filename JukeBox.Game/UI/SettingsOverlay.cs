@@ -127,6 +127,13 @@ public partial class SettingsOverlay : FocusedOverlayContainer
     private SettingsEnumDropdown<MirrorSource> mirrorDropdown = null!;
     private SettingsEnumDropdown<SearchStyle> searchStyleDropdown = null!;
     private SettingsCheckbox detachPlayerCheckbox = null!;
+    private SettingsCheckbox playOnMainCheckbox = null!;
+
+    // Checkbox-facing adapter for playOnMainCheckbox (same shape as hardwareAccelerationEnabled
+    // below): the dependent-row grey-out lives on THIS bindable's Disabled, never on the config
+    // bindable itself — a disabled config bindable would make any programmatic SetValue throw.
+    private readonly Bindable<bool> playOnMainUi = new Bindable<bool>();
+    private Bindable<bool> playOnMainConfig = null!;
 
     // ---- framework settings ----
     private DeviceSettingsDropdown audioDeviceDropdown = null!;
@@ -205,6 +212,8 @@ public partial class SettingsOverlay : FocusedOverlayContainer
     internal SettingsSlider<double>? ManiaScrollSpeedSlider => rulesetConfigs != null ? maniaScrollSpeedRow : null;
     internal SettingsDropdown<string> AudioDeviceDropdown => audioDeviceDropdown;
     internal SettingsSlider<double> MasterVolumeSlider => masterVolumeRow;
+    internal SettingsCheckbox DetachPlayerCheckbox => detachPlayerCheckbox;
+    internal SettingsCheckbox PlayOnMainCheckbox => playOnMainCheckbox;
 
     /// <summary>Test-only: scrolls a control into view (instantly, so the very next test step's
     /// mouse coordinates are already final) so real mouse input can reach it.</summary>
@@ -449,6 +458,16 @@ public partial class SettingsOverlay : FocusedOverlayContainer
         graphicsRows.Add(threadingDropdown = new SettingsEnumDropdown<ExecutionMode> { LabelText = "Threading mode" });
         graphicsRows.Add(fpsDisplayDropdown = new SettingsEnumDropdown<FpsDisplayMode> { LabelText = "FPS counter" });
         graphicsRows.Add(detachPlayerCheckbox = new SettingsCheckbox { LabelText = "Detach player window" });
+        // Dependent row, lazer-style: indented under its parent and disabled (greyed, not
+        // hidden — hiding would make the layout jump) whenever the parent is off. The disable
+        // is applied to the checkbox's Current (the config bindable) in LoadComplete.
+        graphicsRows.Add(new Container
+        {
+            RelativeSizeAxes = Axes.X,
+            AutoSizeAxes = Axes.Y,
+            Padding = new MarginPadding { Left = 24 },
+            Child = playOnMainCheckbox = new SettingsCheckbox { LabelText = "Play on main window too" },
+        });
         graphicsRows.Add(new Subsection("Video Playback")
         {
             Children = new Drawable[]
@@ -495,6 +514,23 @@ public partial class SettingsOverlay : FocusedOverlayContainer
         mirrorDropdown.Current = config.GetBindable<MirrorSource>(JukeBoxSetting.PreferredMirror);
         searchStyleDropdown.Current = config.GetBindable<SearchStyle>(JukeBoxSetting.SearchStyle);
         detachPlayerCheckbox.Current = config.GetBindable<bool>(JukeBoxSetting.DetachPlayer);
+
+        // "Play on main window too" only means something while the player IS detached; while it
+        // isn't, the row greys out with its remembered value intact (MainScreen gates on both,
+        // so a stale true never shows through by itself). Two-way adapter sync: config → UI
+        // lifts the disable for the mirroring write (the disable exists to stop USER edits,
+        // not programmatic ones), UI → config is only reachable while enabled anyway.
+        playOnMainConfig = config.GetBindable<bool>(JukeBoxSetting.DetachPlayOnMain);
+        playOnMainCheckbox.Current = playOnMainUi;
+        playOnMainConfig.BindValueChanged(e =>
+        {
+            bool wasDisabled = playOnMainUi.Disabled;
+            playOnMainUi.Disabled = false;
+            playOnMainUi.Value = e.NewValue;
+            playOnMainUi.Disabled = wasDisabled;
+        }, true);
+        playOnMainUi.BindValueChanged(e => playOnMainConfig.Value = e.NewValue);
+        detachPlayerCheckbox.Current.BindValueChanged(e => playOnMainUi.Disabled = !e.NewValue, true);
 
         // Session-only, like lazer's replay playback control (deliberately not persisted).
         if (playback != null)

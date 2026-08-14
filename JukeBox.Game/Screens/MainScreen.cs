@@ -13,6 +13,7 @@ using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Shapes;
 using osu.Framework.Graphics.Sprites;
 using osu.Framework.Input.Events;
+using osu.Framework.Logging;
 using osu.Framework.Screens;
 using osuTK;
 using osuTK.Input;
@@ -106,6 +107,7 @@ public partial class MainScreen : Screen
     private Bindable<UiLayout> uiLayout = null!;
     private Bindable<double> playfieldZoom = null!;
     private Bindable<bool> detachPlayer = null!;
+    private Bindable<bool> detachPlayOnMain = null!;
 
     private const float tab_slide_offset = 20;
 
@@ -202,6 +204,13 @@ public partial class MainScreen : Screen
     /// <summary>Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the icon rail, to
     /// assert the fullscreen style crossfades it in.</summary>
     internal Container SearchRail => searchRail;
+
+    /// <summary>Test-only: the visuals canvas's current alpha (0 while the player is detached
+    /// without <see cref="JukeBoxSetting.DetachPlayOnMain"/>).</summary>
+    internal float SceneAlpha => sceneContainer.Alpha;
+
+    /// <summary>Test-only: the "playing in detached window" placeholder's current alpha.</summary>
+    internal float PlaceholderAlpha => detachedPlaceholder.Alpha;
 
     private enum RightPanelTab
     {
@@ -492,11 +501,10 @@ public partial class MainScreen : Screen
         // (searchStyle wiring lives above via applySearchStyle — the branch's older duplicate
         // handler was dropped in this merge resolution.)
         detachPlayer = config.GetBindable<bool>(JukeBoxSetting.DetachPlayer);
-        detachPlayer.BindValueChanged(e =>
-        {
-            sceneContainer.Alpha = e.NewValue ? 0 : 1;
-            detachedPlaceholder.Alpha = e.NewValue ? 1 : 0;
-        }, true);
+        detachPlayOnMain = config.GetBindable<bool>(JukeBoxSetting.DetachPlayOnMain);
+        detachPlayer.BindValueChanged(_ => updatePlayerBoxPresentation());
+        detachPlayOnMain.BindValueChanged(_ => updatePlayerBoxPresentation());
+        updatePlayerBoxPresentation();
 
         jukebox.Start();
         jukebox.LastError.BindValueChanged(e =>
@@ -534,6 +542,20 @@ public partial class MainScreen : Screen
     /// the scale computed here never lags behind what's actually on screen that frame.
     /// </para>
     /// </summary>
+    // The placeholder only replaces the scene when the player is detached AND the user hasn't
+    // asked to keep the main window rendering too (JukeBoxSetting.DetachPlayOnMain). Logged
+    // because "why is/isn't my main window playing" is exactly the kind of state a bug report
+    // needs pinned down.
+    private void updatePlayerBoxPresentation()
+    {
+        bool placeholderShown = detachPlayer.Value && !detachPlayOnMain.Value;
+
+        sceneContainer.Alpha = placeholderShown ? 0 : 1;
+        detachedPlaceholder.Alpha = placeholderShown ? 1 : 0;
+
+        Logger.Log($"Player box presentation: detach={detachPlayer.Value} playOnMain={detachPlayOnMain.Value} → {(placeholderShown ? "placeholder" : "scene")}");
+    }
+
     private void updateSceneScale()
     {
         playerBoxSize.Value = playerBox.DrawSize;
