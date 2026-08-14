@@ -15,6 +15,7 @@ using osu.Framework.Audio.Track;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Testing;
+using osu.Game.Graphics.UserInterface;
 using osuTK.Input;
 
 namespace JukeBox.Game.Tests.Visual
@@ -117,6 +118,43 @@ namespace JukeBox.Game.Tests.Visual
                     return (handle, new TrackVirtual(30000));
                 };
             });
+        }
+
+        // The filter block is presented with lazer's real settings controls (the same
+        // components/theme SettingsOverlay uses), each bound — directly or through the
+        // enum<->string adapters — to the SHARED engine, so changes round-trip between the
+        // dropdowns here and the docked listing's chips.
+        [Test]
+        public void FiltersUseLazerControlsBoundToTheSharedEngine()
+        {
+            AddStep("open seeded with 'a'", () => fullscreen.ShowWithInitialChar('a'));
+            AddUntilStep("cards shown", () => fullscreen.ChildrenOfType<FullscreenBeatmapCard>().Count() == 3);
+            AddUntilStep("entrance settled", () => fullscreen.SlidePanel.Y == 0);
+
+            AddAssert("lazer dropdowns present for mode/categories/sort", () =>
+                fullscreen.ModeDropdown.IsLoaded && fullscreen.CategoryDropdown.IsLoaded && fullscreen.SortDropdown.IsLoaded);
+            AddAssert("two rounded sliders for the star range", () =>
+                fullscreen.ChildrenOfType<RoundedSliderBar<double>>().Count() == 2);
+            AddAssert("two checkbox pills for the extras", () =>
+                fullscreen.ChildrenOfType<OsuCheckbox>().Count() == 2);
+
+            AddStep("pick osu!mania in the mode dropdown",
+                () => fullscreen.ModeDropdown.Current.Value = FullscreenListingOverlay.SearchMode.Mania);
+            AddUntilStep("engine mode follows the dropdown", () => docked.Engine.Mode.Value == "m");
+
+            AddStep("category changed on the engine (e.g. via the docked chips)",
+                () => docked.Engine.Category.Value = "loved");
+            AddUntilStep("category dropdown follows the engine",
+                () => fullscreen.CategoryDropdown.Current.Value == FullscreenListingOverlay.SearchCategory.Loved);
+
+            AddStep("pick sort by plays", () => fullscreen.SortDropdown.Current.Value = FullscreenListingOverlay.SortField.Plays);
+            AddUntilStep("engine sort key follows", () => docked.Engine.SortKey.Value == "plays");
+
+            AddStep("toggle Has Video", () => fullscreen.HasVideoCheckbox.Current.Value = true);
+            AddAssert("engine extra follows", () => docked.Engine.HasVideo.Value);
+
+            AddStep("raise min stars through the slider's bindable", () => fullscreen.MinStarsSlider.Current.Value = 3);
+            AddAssert("engine min stars follows", () => Math.Abs(docked.Engine.MinStars.Value - 3) < 0.001);
         }
 
         [Test]

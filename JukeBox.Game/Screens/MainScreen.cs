@@ -2,6 +2,7 @@
 
 using System;
 using JukeBox.Game.Configuration;
+using JukeBox.Game.Online;
 using JukeBox.Game.Playback;
 using JukeBox.Game.UI;
 using osu.Framework.Allocation;
@@ -76,6 +77,11 @@ public partial class MainScreen : Screen
 {
     private const float left_column_width = 380;
     private const float right_column_width = 340;
+
+    /// <summary>The left column's collapsed width under the fullscreen search style — a slim rail
+    /// hosting only the search-opener icon (see <see cref="applySearchStyle"/>).</summary>
+    private const float search_rail_width = 64;
+
     private const float tab_header_height = 36;
 
     // Mirrors NowPlayingBar's own (private) bar_height constant — kept in sync manually since the
@@ -121,6 +127,24 @@ public partial class MainScreen : Screen
     private QueuePanel queuePanel = null!;
     private SettingsOverlay settingsBody = null!;
     private MapIdOverlay mapIdOverlay = null!;
+
+    /// <summary>
+    /// The one search engine both listing presentations render — hosted HERE (not inside the
+    /// docked listing, its default owner) so it keeps ticking (debounce, scheduled result
+    /// applies) even while the fullscreen style's icon rail hides the docked listing entirely.
+    /// </summary>
+    private BeatmapSearchEngine searchEngine = null!;
+
+    /// <summary>The left column's normal body — the docked listing (crossfaded away while the
+    /// fullscreen style collapses the column to the icon rail).</summary>
+    private Container listingBody = null!;
+
+    /// <summary>The left column's fullscreen-style body — only the search-opener icon.</summary>
+    private Container searchRail = null!;
+
+    /// <summary>Hosts <see cref="bottomBar"/>, its padding keeping the bar tiled between the
+    /// columns — animated alongside the column width on style switches.</summary>
+    private Container barHost = null!;
 
     private Bindable<SearchStyle> searchStyle = null!;
 
@@ -169,6 +193,14 @@ public partial class MainScreen : Screen
     /// </summary>
     internal MarginPadding VisualsHostPadding => visualsHost.Padding;
 
+    /// <summary>Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the left column's
+    /// docked-listing body, to assert the fullscreen style crossfades it away.</summary>
+    internal Container ListingBody => listingBody;
+
+    /// <summary>Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the icon rail, to
+    /// assert the fullscreen style crossfades it in.</summary>
+    internal Container SearchRail => searchRail;
+
     private enum RightPanelTab
     {
         Queue,
@@ -180,17 +212,20 @@ public partial class MainScreen : Screen
     {
         RelativeSizeAxes = Axes.Both;
 
-        listing = new BeatmapListingOverlay(docked: true) { RelativeSizeAxes = Axes.Both };
-        // The fullscreen search style's big listing — a second view over the docked listing's
-        // search engine (shared query/filters/results), presented as a whole-window modal on
-        // demand (see its hosting spot at the top level of InternalChildren below).
-        fullscreenListing = new FullscreenListingOverlay(listing.Engine) { RelativeSizeAxes = Axes.Both };
+        // The engine is created and hosted here (see the searchEngine field) and shared by both
+        // presentations: the docked listing renders it in the left column, and the fullscreen
+        // style's big listing — a whole-window modal (see its hosting spot at the top level of
+        // InternalChildren below) — renders the same query/filters/results.
+        searchEngine = new BeatmapSearchEngine();
+        listing = new BeatmapListingOverlay(docked: true, engine: searchEngine) { RelativeSizeAxes = Axes.Both };
+        fullscreenListing = new FullscreenListingOverlay(searchEngine) { RelativeSizeAxes = Axes.Both };
         queuePanel = new QueuePanel(docked: true);
         settingsBody = new SettingsOverlay(docked: true) { RelativeSizeAxes = Axes.Both };
         mapIdOverlay = new MapIdOverlay();
 
         InternalChildren = new Drawable[]
         {
+            searchEngine,
             // The app's own background, sitting behind absolutely everything — the columns and
             // bottom bar each paint their own opaque PanelSurface, and playerBox is masked to its
             // own gutter-inset bounds (see below), so this is only ever actually visible in the
@@ -254,11 +289,31 @@ public partial class MainScreen : Screen
                         RelativeSizeAxes = Axes.Both,
                         Colour = Theme.PanelSurface,
                     },
-                    new Container
+                    listingBody = new Container
                     {
                         RelativeSizeAxes = Axes.Both,
                         Padding = new MarginPadding(Theme.PanelPadding),
                         Child = listing,
+                    },
+                    // The fullscreen style's icon rail (see applySearchStyle): the column
+                    // collapses to search_rail_width and only this opener remains.
+                    searchRail = new Container
+                    {
+                        RelativeSizeAxes = Axes.Both,
+                        Alpha = 0,
+                        Child = new SearchRailButton
+                        {
+                            Anchor = Anchor.TopCentre,
+                            Origin = Anchor.TopCentre,
+                            Margin = new MarginPadding { Top = Theme.PanelPadding },
+                            Size = new Vector2(40),
+                            Icon = FontAwesome.Solid.Search,
+                            Action = () =>
+                            {
+                                if (uiLayout.Value == UiLayout.ThreeColumn)
+                                    fullscreenListing.ShowSearch();
+                            },
+                        },
                     },
                 },
             },
@@ -320,7 +375,7 @@ public partial class MainScreen : Screen
             // RelativeSizeAxes.X, and relative sizing resolves against the host's padded content
             // area, not its own margins. applyLayout keeps animating the BAR (not the host), so
             // the focus-mode slide/fade behaviour is unchanged (the bar is hidden there anyway).
-            new Container
+            barHost = new Container
             {
                 RelativeSizeAxes = Axes.Both,
                 Padding = new MarginPadding
@@ -382,24 +437,23 @@ public partial class MainScreen : Screen
 
         selectTab(RightPanelTab.Queue, animate: false);
 
+        // Both bindables are assigned BEFORE either apply runs: applyLayout's insets read the
+        // current style (rail vs full column width), and applySearchStyle's guard reads the
+        // current layout — the initial calls land the resting state instantly, then live changes
+        // animate.
         uiLayout = config.GetBindable<UiLayout>(JukeBoxSetting.UiLayout);
+        searchStyle = config.GetBindable<SearchStyle>(JukeBoxSetting.SearchStyle);
+
+        applySearchStyle(searchStyle.Value, animate: false);
         applyLayout(uiLayout.Value, animate: false);
+
         uiLayout.BindValueChanged(e => applyLayout(e.NewValue, animate: true));
+        searchStyle.BindValueChanged(e => applySearchStyle(e.NewValue, animate: true));
 
         // No BindValueChanged needed: updateSceneScale already re-reads this every frame (see its
         // own remarks on why it's driven off playerBox.OnUpdate rather than a one-shot), so a
         // config change here is picked up on the very next frame for free.
         playfieldZoom = config.GetBindable<double>(JukeBoxSetting.PlayfieldZoom);
-
-        // Live-switchable: flipping to Compact retires the big listing immediately (search goes
-        // back to living entirely in the left column); flipping to Fullscreen simply arms it for
-        // the next search open.
-        searchStyle = config.GetBindable<SearchStyle>(JukeBoxSetting.SearchStyle);
-        searchStyle.BindValueChanged(e =>
-        {
-            if (e.NewValue == SearchStyle.Compact)
-                fullscreenListing.Hide();
-        });
 
         jukebox.Start();
         jukebox.LastError.BindValueChanged(e =>
@@ -503,6 +557,27 @@ public partial class MainScreen : Screen
     /// so focus mode reads as pure fullscreen visuals with nothing left overlaying them, not just
     /// the side columns disappearing. Restoring plays every part of that back in reverse.
     /// </summary>
+    /// <summary>The left column's width under the CURRENT search style: the slim icon rail while
+    /// the fullscreen style is active, the full listing column otherwise. Every left inset (player
+    /// box, bar host, focus-mode slide distance) derives from this rather than the raw constant.</summary>
+    private float currentLeftColumnWidth => searchStyle.Value == SearchStyle.Fullscreen ? search_rail_width : left_column_width;
+
+    /// <summary>The centre cell's insets in ThreeColumn mode — shared by <see cref="applyLayout"/>
+    /// and <see cref="applySearchStyle"/> so both transitions target the same geometry.</summary>
+    private MarginPadding threeColumnPadding() => new MarginPadding
+    {
+        Left = currentLeftColumnWidth + Theme.SectionSpacing,
+        Right = right_column_width + Theme.SectionSpacing,
+        Top = Theme.SectionSpacing,
+        Bottom = bottom_bar_height + Theme.SectionSpacing,
+    };
+
+    private MarginPadding barHostPadding() => new MarginPadding
+    {
+        Left = currentLeftColumnWidth + Theme.SectionSpacing,
+        Right = right_column_width + Theme.SectionSpacing,
+    };
+
     private void applyLayout(UiLayout layout, bool animate)
     {
         bool focus = layout == UiLayout.Focus;
@@ -512,7 +587,7 @@ public partial class MainScreen : Screen
         double duration = animate ? Theme.DurationFast : 0;
         const Easing easing = Easing.None;
 
-        LeftColumn.MoveToX(focus ? -(left_column_width + Theme.SectionSpacing) : 0, duration, easing);
+        LeftColumn.MoveToX(focus ? -(currentLeftColumnWidth + Theme.SectionSpacing) : 0, duration, easing);
         LeftColumn.FadeTo(focus ? 0 : 1, duration, easing);
 
         RightColumn.MoveToX(focus ? right_column_width + Theme.SectionSpacing : 0, duration, easing);
@@ -527,15 +602,7 @@ public partial class MainScreen : Screen
         // being covered by it. Focus: the box dissolves to full-bleed (padding + rounding
         // animate to zero; the bottom bar is sliding away in parallel above, not just sitting
         // over the top of it).
-        var targetPadding = focus
-            ? new MarginPadding()
-            : new MarginPadding
-            {
-                Left = left_column_width + Theme.SectionSpacing,
-                Right = right_column_width + Theme.SectionSpacing,
-                Top = Theme.SectionSpacing,
-                Bottom = bottom_bar_height + Theme.SectionSpacing,
-            };
+        var targetPadding = focus ? new MarginPadding() : threeColumnPadding();
 
         visualsHost.TransformTo(nameof(visualsHost.Padding), targetPadding, duration, easing);
         playerBox.TransformTo(nameof(playerBox.CornerRadius), focus ? 0f : Theme.CornerRadius, duration, easing);
@@ -547,6 +614,39 @@ public partial class MainScreen : Screen
         {
             fullscreenListing.Hide();
             GetContainingFocusManager()?.ChangeFocus(null);
+        }
+    }
+
+    /// <summary>
+    /// Applies the search style's left-column presentation: the fullscreen style collapses the
+    /// column to the slim icon rail (crossfading the docked listing out and the search-opener
+    /// icon in) and slides the player box's/bar's left insets along with it; compact restores the
+    /// full listing column. One orchestrated animation on live switches (Theme timing), instant
+    /// for the initial call at load.
+    /// </summary>
+    private void applySearchStyle(SearchStyle style, bool animate)
+    {
+        bool fullscreen = style == SearchStyle.Fullscreen;
+
+        double duration = animate ? Theme.DurationNormal : 0;
+        var easing = fullscreen ? Theme.EaseExit : Theme.EaseEnter;
+
+        // Flipping to Compact retires the big listing immediately (search goes back to living
+        // entirely in the left column); flipping to Fullscreen simply arms it for the next open.
+        if (!fullscreen)
+            fullscreenListing.Hide();
+
+        LeftColumn.ResizeWidthTo(currentLeftColumnWidth, duration, Theme.EaseEnter);
+        listingBody.FadeTo(fullscreen ? 0 : 1, duration, easing);
+        searchRail.FadeTo(fullscreen ? 1 : 0, duration, easing);
+
+        // The centre cells (player box + bar) follow the column's new width so the tiling holds
+        // through the transition. Focus mode's zero padding must not be disturbed — its own
+        // restore recomputes from the then-current style (applyLayout → threeColumnPadding).
+        if (uiLayout.Value == UiLayout.ThreeColumn)
+        {
+            visualsHost.TransformTo(nameof(visualsHost.Padding), threeColumnPadding(), duration, Theme.EaseEnter);
+            barHost.TransformTo(nameof(barHost.Padding), barHostPadding(), duration, Theme.EaseEnter);
         }
     }
 
@@ -657,6 +757,13 @@ public partial class MainScreen : Screen
         // together, sit for the same 4s dwell, then pop back out together before expiring.
         text.FadeIn(Theme.DurationNormal, Theme.EaseEnter).Delay(4000).FadeOut(Theme.DurationSlow, Theme.EaseExit).Expire();
         text.ScaleTo(1f, Theme.DurationNormal, Theme.EaseEnter).Delay(4000).ScaleTo(Theme.PopScale, Theme.DurationSlow, Theme.EaseExit);
+    }
+
+    /// <summary>The icon rail's search-opener — a dedicated type (rather than a bare
+    /// <see cref="IconButton"/>) so tests can tell it apart from the docked listing's own
+    /// search-opener icon, which stays in the tree (hidden) under the fullscreen style.</summary>
+    private partial class SearchRailButton : IconButton
+    {
     }
 
     /// <summary>

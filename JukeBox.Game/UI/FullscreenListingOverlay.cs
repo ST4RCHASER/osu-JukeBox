@@ -2,10 +2,12 @@
 
 using System;
 using System.Collections.Generic;
+using DescriptionAttribute = System.ComponentModel.DescriptionAttribute;
 using System.Linq;
 using JukeBox.Game.Online;
 using JukeBox.Game.Playback;
 using osu.Framework.Allocation;
+using osu.Framework.Bindables;
 using osu.Framework.Extensions.Color4Extensions;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
@@ -13,6 +15,9 @@ using osu.Framework.Graphics.Shapes;
 using osu.Framework.Graphics.Sprites;
 using osu.Framework.Graphics.UserInterface;
 using osu.Framework.Input.Events;
+using osu.Game.Graphics.Cursor;
+using osu.Game.Graphics.UserInterface;
+using osu.Game.Overlays;
 using osuTK;
 using osuTK.Input;
 
@@ -49,6 +54,65 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
     private const float min_column_width = 300;
     private const int max_columns = 3;
 
+    /// <summary>Width of the lazer-styled filter controls (dropdowns, sliders, checkboxes).</summary>
+    private const float control_width = 170;
+
+    /// <summary>
+    /// The engine's ruleset filter as a dropdown-friendly enum — the engine speaks NeriNyan's raw
+    /// single-letter strings (see <see cref="BeatmapSearchEngine.Mode"/>), adapted both ways in
+    /// LoadComplete so this stays a pure presentation shape.
+    /// </summary>
+    public enum SearchMode
+    {
+        Any,
+
+        [Description("osu!")]
+        Osu,
+
+        [Description("osu!taiko")]
+        Taiko,
+
+        [Description("osu!catch")]
+        Catch,
+
+        [Description("osu!mania")]
+        Mania,
+    }
+
+    /// <summary>The engine's category filter (<see cref="BeatmapSearchEngine.Category"/>) as a
+    /// dropdown-friendly enum, adapted both ways in LoadComplete.</summary>
+    public enum SearchCategory
+    {
+        Any,
+        Ranked,
+        Qualified,
+        Loved,
+        Pending,
+
+        [Description("WIP")]
+        Wip,
+
+        Graveyard,
+    }
+
+    /// <summary>The engine's sort key (<see cref="BeatmapSearchEngine.SortKey"/>) as a
+    /// dropdown-friendly enum, adapted both ways in LoadComplete.</summary>
+    public enum SortField
+    {
+        Ranked,
+        Plays,
+        Favourites,
+        Difficulty,
+        Updated,
+        Title,
+    }
+
+    // The exact DI lazer's SettingsPanel provides its subtree (and SettingsOverlay already
+    // reuses): every lazer control below (OsuEnumDropdown/RoundedSliderBar/OsuCheckbox) resolves
+    // this for the purple pill/slider/dropdown palette.
+    [Cached]
+    private readonly OverlayColourProvider colourProvider = new OverlayColourProvider(OverlayColourScheme.Purple);
+
     private readonly BeatmapSearchEngine engine;
 
     public event Action<BeatmapSetInfo>? SetPicked;
@@ -60,6 +124,22 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
     private PreviewPlayer previewPlayer = null!;
     private Box scrim = null!;
     private Container panel = null!;
+
+    private OsuEnumDropdown<SearchMode> modeDropdown = null!;
+    private OsuEnumDropdown<SearchCategory> categoryDropdown = null!;
+    private OsuEnumDropdown<SortField> sortDropdown = null!;
+    private OsuCheckbox hasVideoCheckbox = null!;
+    private OsuCheckbox hasStoryboardCheckbox = null!;
+    private RoundedSliderBar<double> minStarsSlider = null!;
+    private RoundedSliderBar<double> maxStarsSlider = null!;
+
+    // Two-way adapters between the dropdowns' enum shapes and the engine's raw string bindables
+    // (same shape as SettingsOverlay's hardwareAccelerationEnabled adapter) — wired in
+    // LoadComplete; changes from either presentation's controls round-trip through the engine, so
+    // the docked listing's chips and these dropdowns stay in sync.
+    private readonly Bindable<SearchMode> modeAdapter = new Bindable<SearchMode>();
+    private readonly Bindable<SearchCategory> categoryAdapter = new Bindable<SearchCategory>();
+    private readonly Bindable<SortField> sortAdapter = new Bindable<SortField>();
 
     private int selectedIndex = -1;
     private int settleFrames;
@@ -80,6 +160,16 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
     /// listing panel, to assert the slide-up entrance / slide-down exit (its Y is offscreen-bottom
     /// while closed and 0 once the entrance settles).</summary>
     internal Container SlidePanel => panel;
+
+    // Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the lazer-styled filter
+    // controls, to drive/assert them without depending on internal layout.
+    internal OsuEnumDropdown<SearchMode> ModeDropdown => modeDropdown;
+    internal OsuEnumDropdown<SearchCategory> CategoryDropdown => categoryDropdown;
+    internal OsuEnumDropdown<SortField> SortDropdown => sortDropdown;
+    internal OsuCheckbox HasVideoCheckbox => hasVideoCheckbox;
+    internal OsuCheckbox HasStoryboardCheckbox => hasStoryboardCheckbox;
+    internal RoundedSliderBar<double> MinStarsSlider => minStarsSlider;
+    internal RoundedSliderBar<double> MaxStarsSlider => maxStarsSlider;
 
     public FullscreenListingOverlay(BeatmapSearchEngine engine)
     {
@@ -121,7 +211,10 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
                             RelativeSizeAxes = Axes.Both,
                             Colour = Theme.Background.Opacity(0.98f),
                         },
-                        new Container
+                        // Tooltip host for the panel: lazer's RoundedSliderBar surfaces its value
+                        // through a tooltip, which only renders inside a TooltipContainer ancestor
+                        // (same wrapper SettingsOverlay uses).
+                        new OsuTooltipContainer(null!)
                         {
                             RelativeSizeAxes = Axes.Both,
                             Padding = new MarginPadding(Theme.PanelPadding * 1.5f),
@@ -176,6 +269,28 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
         };
 
         engine.Status.BindValueChanged(e => statusText.Text = e.NewValue, true);
+
+        // Dropdown-enum <-> engine-string two-way sync (see the adapter fields): seed from the
+        // engine's current values, then mirror changes in both directions. The value writes are
+        // idempotent, so the echo of each direction is a no-op rather than a loop.
+        modeAdapter.Value = FromEngineMode(engine.Mode.Value);
+        modeAdapter.BindValueChanged(e => engine.Mode.Value = ToEngineMode(e.NewValue));
+        engine.Mode.BindValueChanged(e => modeAdapter.Value = FromEngineMode(e.NewValue));
+        modeDropdown.Current = modeAdapter;
+
+        categoryAdapter.Value = FromEngineCategory(engine.Category.Value);
+        categoryAdapter.BindValueChanged(e => engine.Category.Value = ToEngineCategory(e.NewValue));
+        engine.Category.BindValueChanged(e => categoryAdapter.Value = FromEngineCategory(e.NewValue));
+        categoryDropdown.Current = categoryAdapter;
+
+        sortAdapter.Value = FromEngineSort(engine.SortKey.Value);
+        sortAdapter.BindValueChanged(e => engine.SortKey.Value = ToEngineSort(e.NewValue));
+        engine.SortKey.BindValueChanged(e => sortAdapter.Value = FromEngineSort(e.NewValue));
+        sortDropdown.Current = sortAdapter;
+
+        // The toggles and sliders bind the engine's bindables directly — no adapters needed.
+        hasVideoCheckbox.Current = engine.HasVideo;
+        hasStoryboardCheckbox.Current = engine.HasStoryboard;
 
         // Pushed (rather than each card binding the player's bindable) because cards are
         // rebuilt wholesale on every result change — pushing the current value at rebuild plus
@@ -270,8 +385,12 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
     }
 
     /// <summary>
-    /// The osu-web-style labelled filter block. Rows mirror the reference layout where the engine
-    /// has real data to back them (Mode/Categories/Genre/Language/Extra + Sort + Stars); rows that
+    /// The osu-web-style labelled filter block, presented with lazer's real settings controls
+    /// (the same components/theme <see cref="SettingsOverlay"/> established, coloured by the
+    /// cached purple <see cref="OverlayColourProvider"/>): dropdowns for the single-choice
+    /// Mode/Categories/Sort rows, <see cref="RoundedSliderBar{T}"/>s for the star range and
+    /// <see cref="OsuCheckbox"/> pills for the Extra toggles. Genre/Language keep the osu-web
+    /// chip rows — 14 always-visible options read better as chips than a dropdown. Rows that
     /// would need data this app doesn't have (Rank Achieved, Played, Recommended difficulty,
     /// Subscribed mappers, Explicit content) are OMITTED rather than rendered dead.
     /// </summary>
@@ -283,15 +402,16 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
         Spacing = new Vector2(0, Theme.RowSpacing),
         Children = new[]
         {
-            ListingFilterRows.CreateChipRow("Mode", null, label_width, ListingFilterRows.SingleSelect(new (string, string?)[]
+            controlRow("Mode", modeDropdown = new OsuEnumDropdown<SearchMode>
             {
-                ("Any", null), ("osu!", "o"), ("osu!taiko", "t"), ("osu!catch", "c"), ("osu!mania", "m"),
-            }, engine.Mode)),
-            ListingFilterRows.CreateChipRow("Categories", null, label_width, ListingFilterRows.SingleSelect(new (string, string)[]
+                RelativeSizeAxes = Axes.None,
+                Width = control_width,
+            }),
+            controlRow("Categories", categoryDropdown = new OsuEnumDropdown<SearchCategory>
             {
-                ("Any", "all"), ("Ranked", "ranked"), ("Qualified", "qualified"), ("Loved", "loved"),
-                ("Pending", "pending"), ("WIP", "wip"), ("Graveyard", "graveyard"),
-            }, engine.Category)),
+                RelativeSizeAxes = Axes.None,
+                Width = control_width,
+            }),
             ListingFilterRows.CreateChipRow("Genre", "filters loaded results", label_width, ListingFilterRows.SingleSelect(new (string, int?)[]
             {
                 ("Any", null), ("Video Game", 2), ("Anime", 3), ("Rock", 4), ("Pop", 5), ("Other", 6),
@@ -304,21 +424,53 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
                 ("Instrumental", 5), ("German", 8), ("French", 7), ("Italian", 11), ("Spanish", 10),
                 ("Swedish", 9), ("Russian", 12), ("Polish", 13), ("Other", 14),
             }, engine.LanguageId)),
-            ListingFilterRows.CreateChipRow("Extra", null, label_width, new Drawable[]
+            controlRow("Extra",
+                hasVideoCheckbox = createFilterCheckbox("Has Video"),
+                hasStoryboardCheckbox = createFilterCheckbox("Has Storyboard")),
+            controlRow("Sort by", new Drawable[]
             {
-                ListingFilterRows.Toggle("Has Video", engine.HasVideo),
-                ListingFilterRows.Toggle("Has Storyboard", engine.HasStoryboard),
-            }),
-            ListingFilterRows.CreateChipRow("Sort by", null, label_width, ListingFilterRows.SingleSelect(new (string, string)[]
-            {
-                ("Ranked", "ranked"), ("Plays", "plays"), ("Favourites", "favourites"),
-                ("Difficulty", "difficulty"), ("Updated", "updated"), ("Title", "title"),
-            }, engine.SortKey).Concat(ListingFilterRows.SingleSelect(new (string, bool)[]
+                sortDropdown = new OsuEnumDropdown<SortField>
+                {
+                    RelativeSizeAxes = Axes.None,
+                    Width = control_width,
+                },
+            }.Concat(ListingFilterRows.SingleSelect(new (string, bool)[]
             {
                 ("desc", true), ("asc", false),
             }, engine.SortDescending)).ToArray()),
             createStarsRow(),
         },
+    };
+
+    /// <summary>One labelled filter row hosting arbitrary controls, matching the chip rows'
+    /// osu-web layout (same shared label column).</summary>
+    private static Drawable controlRow(string label, params Drawable[] controls)
+    {
+        var row = new FillFlowContainer
+        {
+            RelativeSizeAxes = Axes.X,
+            AutoSizeAxes = Axes.Y,
+            Direction = FillDirection.Full,
+            Spacing = new Vector2(8, 6),
+        };
+
+        row.Add(ListingFilterRows.CreateRowLabel(label, label_width));
+
+        foreach (var control in controls)
+            row.Add(control);
+
+        return row;
+    }
+
+    /// <summary>An <see cref="OsuCheckbox"/> pill sized for an inline filter row — its
+    /// constructor assumes a full-width settings row (RelativeSizeAxes.X), overridden here to the
+    /// shared fixed control width.</summary>
+    private static OsuCheckbox createFilterCheckbox(string label) => new OsuCheckbox
+    {
+        LabelText = label,
+        RelativeSizeAxes = Axes.None,
+        AutoSizeAxes = Axes.Y,
+        Width = control_width,
     };
 
     private Drawable createStarsRow()
@@ -330,35 +482,31 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
             RelativeSizeAxes = Axes.X,
             AutoSizeAxes = Axes.Y,
             Direction = FillDirection.Full,
-            Spacing = new Vector2(6, 6),
+            Spacing = new Vector2(8, 6),
             Children = new[]
             {
                 ListingFilterRows.CreateRowLabel("Stars", label_width),
-                new BasicSliderBar<double>
+                minStarsSlider = new RoundedSliderBar<double>
                 {
-                    Size = new Vector2(150, 16),
+                    Width = control_width,
                     Current = engine.MinStars,
-                    BackgroundColour = Theme.ElevatedSurface,
-                    SelectionColour = Theme.AccentDim,
                 },
                 minText = new SpriteText
                 {
                     Font = FontUsage.Default.With(size: Theme.RowSecondaryTextSize),
                     Colour = Theme.TextSecondary,
-                    Margin = new MarginPadding { Top = 1 },
+                    Margin = new MarginPadding { Top = 5 },
                 },
-                new BasicSliderBar<double>
+                maxStarsSlider = new RoundedSliderBar<double>
                 {
-                    Size = new Vector2(150, 16),
+                    Width = control_width,
                     Current = engine.MaxStars,
-                    BackgroundColour = Theme.ElevatedSurface,
-                    SelectionColour = Theme.AccentDim,
                 },
                 maxText = new SpriteText
                 {
                     Font = FontUsage.Default.With(size: Theme.RowSecondaryTextSize),
                     Colour = Theme.TextSecondary,
-                    Margin = new MarginPadding { Top = 1 },
+                    Margin = new MarginPadding { Top = 5 },
                 },
             },
         };
@@ -368,6 +516,52 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
 
         return row;
     }
+
+    // ---- Dropdown-enum <-> engine-string adapters --------------------------------------------
+
+    internal static string? ToEngineMode(SearchMode mode) => mode switch
+    {
+        SearchMode.Osu => "o",
+        SearchMode.Taiko => "t",
+        SearchMode.Catch => "c",
+        SearchMode.Mania => "m",
+        _ => null,
+    };
+
+    internal static SearchMode FromEngineMode(string? mode) => mode switch
+    {
+        "o" => SearchMode.Osu,
+        "t" => SearchMode.Taiko,
+        "c" => SearchMode.Catch,
+        "m" => SearchMode.Mania,
+        _ => SearchMode.Any,
+    };
+
+    internal static string ToEngineCategory(SearchCategory category)
+        => category == SearchCategory.Any ? "all" : category.ToString().ToLowerInvariant();
+
+    internal static SearchCategory FromEngineCategory(string category) => category switch
+    {
+        "all" => SearchCategory.Any,
+        "qualified" => SearchCategory.Qualified,
+        "loved" => SearchCategory.Loved,
+        "pending" => SearchCategory.Pending,
+        "wip" => SearchCategory.Wip,
+        "graveyard" => SearchCategory.Graveyard,
+        _ => SearchCategory.Ranked,
+    };
+
+    internal static string ToEngineSort(SortField field) => field.ToString().ToLowerInvariant();
+
+    internal static SortField FromEngineSort(string key) => key switch
+    {
+        "plays" => SortField.Plays,
+        "favourites" => SortField.Favourites,
+        "difficulty" => SortField.Difficulty,
+        "updated" => SortField.Updated,
+        "title" => SortField.Title,
+        _ => SortField.Ranked,
+    };
 
     /// <summary>
     /// Pops the listing open seeded with <paramref name="c"/> — the fullscreen style's
