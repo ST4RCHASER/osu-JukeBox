@@ -509,25 +509,82 @@ namespace JukeBox.Game.Tests.Visual
             AddUntilStep("panel slid back down past the bottom", () => fullscreen.SlidePanel.Y > 1);
         }
 
-        // The left column's dedicated search-opener icon (next to the "#" button): fullscreen
-        // style presents the big listing; compact style just focuses the docked keyword box.
+        // The search-opener icons: under compact style the docked listing's own icon focuses the
+        // keyword box; under fullscreen style the collapsed column's rail icon presents the big
+        // listing.
         [Test]
         public void SearchIconButtonOpensSearchPerStyle()
         {
-            AddStep("click the search icon under compact style", () => clickSearchIcon());
+            AddStep("click the docked listing's search icon under compact style", () =>
+                screen.ChildrenOfType<BeatmapListingOverlay>().Single()
+                      .ChildrenOfType<IconButton>().Single(b => b.Icon.Equals(FontAwesome.Solid.Search)).TriggerClick());
             AddUntilStep("docked keyword box focused", () => screen.ChildrenOfType<BeatmapListingOverlay>().Single().SearchBox.HasFocus);
             AddAssert("fullscreen listing stayed hidden", () =>
                 screen.ChildrenOfType<FullscreenListingOverlay>().Single().State.Value == Visibility.Hidden);
 
             AddStep("switch to fullscreen style", () => config.SetValue(JukeBoxSetting.SearchStyle, SearchStyle.Fullscreen));
 
-            AddStep("click the search icon again", () => clickSearchIcon());
+            AddStep("click the icon rail's search button", () => clickRailButton());
             AddUntilStep("fullscreen listing shown", () =>
                 screen.ChildrenOfType<FullscreenListingOverlay>().Single().State.Value == Visibility.Visible);
         }
 
-        private void clickSearchIcon()
-            => screen.ChildrenOfType<IconButton>().Single(b => b.Icon.Equals(FontAwesome.Solid.Search)).TriggerClick();
+        // SearchRailButton is a private nested type (MainScreen) — located by type name the same
+        // way the tab buttons are.
+        private void clickRailButton()
+            => screen.ChildrenOfType<ClickableContainer>().First(c => c.GetType().Name == "SearchRailButton").TriggerClick();
+
+        // The fullscreen style collapses the left column to a slim icon rail: the docked listing
+        // crossfades away (ONLY the search icon remains), the column width animates down, and the
+        // player box + bottom bar insets follow it so the centre tiling holds. Switching back to
+        // compact restores the full column live.
+        [Test]
+        public void FullscreenStyleCollapsesLeftColumnToIconRail()
+        {
+            FrameSampler sampler = null!;
+
+            AddAssert("column starts at full width (compact style)", () => screen.LeftColumn.Width == 380);
+            AddAssert("docked listing body shown, rail hidden", () => screen.ListingBody.Alpha == 1 && screen.SearchRail.Alpha == 0);
+
+            AddStep("add per-frame column-width sampler", () => uiContainer.Add(sampler = new FrameSampler(
+                () => (screen.LeftColumn.Width, 0))));
+
+            AddStep("switch to fullscreen style", () => config.SetValue(JukeBoxSetting.SearchStyle, SearchStyle.Fullscreen));
+
+            AddUntilStep("column collapsed to the rail width", () => screen.LeftColumn.Width < 70);
+            AddAssert("collapse animated through intermediate widths (no snap)",
+                () => sampler.Samples.Any(s => s.box > 70 && s.box < 375));
+            AddUntilStep("docked listing crossfaded away", () => screen.ListingBody.Alpha == 0);
+            AddUntilStep("only the search icon remains (rail shown)", () => screen.SearchRail.Alpha == 1);
+
+            // The centre insets follow the rail: the player box and the bar now sit a gutter
+            // right of the RAIL's edge, not the old full column's.
+            AddUntilStep("player box left inset follows the rail", () =>
+            {
+                float boxLeft = screen.PlayerBox.ScreenSpaceDrawQuad.TopLeft.X;
+                float railRight = screen.LeftColumn.ScreenSpaceDrawQuad.TopRight.X;
+                return boxLeft - railRight >= Theme.SectionSpacing - 0.5f && boxLeft - railRight <= Theme.SectionSpacing + 1.5f;
+            });
+            AddUntilStep("bottom bar left inset follows the rail", () =>
+            {
+                float barLeft = screen.ChildrenOfType<NowPlayingBar>().Single().ScreenSpaceDrawQuad.TopLeft.X;
+                float railRight = screen.LeftColumn.ScreenSpaceDrawQuad.TopRight.X;
+                return barLeft - railRight >= Theme.SectionSpacing - 0.5f && barLeft - railRight <= Theme.SectionSpacing + 1.5f;
+            });
+
+            AddStep("click the rail icon", () => clickRailButton());
+            AddUntilStep("fullscreen listing shown", () =>
+                screen.ChildrenOfType<FullscreenListingOverlay>().Single().State.Value == Visibility.Visible);
+            AddStep("press escape", () => InputManager.Key(Key.Escape));
+            AddUntilStep("fullscreen listing closed", () =>
+                screen.ChildrenOfType<FullscreenListingOverlay>().Single().State.Value == Visibility.Hidden);
+
+            AddStep("switch back to compact", () => config.SetValue(JukeBoxSetting.SearchStyle, SearchStyle.Compact));
+
+            AddUntilStep("column restored to full width", () => screen.LeftColumn.Width == 380);
+            AddUntilStep("docked listing body restored", () => screen.ListingBody.Alpha == 1);
+            AddUntilStep("rail hidden again", () => screen.SearchRail.Alpha == 0);
+        }
 
         // Regression coverage for the (now-removed) corner gear: Settings is reachable purely by
         // clicking its own tab header in the right column — no corner shortcut needed any more.

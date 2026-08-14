@@ -76,17 +76,24 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
     private SpriteText filtersToggleText = null!;
 
     /// <summary>
-    /// The search state machine this view renders. Owned here (created at construction, added as
-    /// an internal child so its debounce scheduler ticks with this drawable) and shared with the
-    /// fullscreen presentation — <see cref="Screens.MainScreen"/> passes it to
-    /// <see cref="FullscreenListingOverlay"/> so both views stay one engine.
+    /// The search state machine this view renders. Self-owned by default (created at construction,
+    /// added as an internal child so its debounce scheduler ticks with this drawable) — or
+    /// EXTERNALLY owned when the constructor is given one: <see cref="Screens.MainScreen"/> hosts
+    /// the engine itself (so it keeps ticking even while this listing is hidden behind the
+    /// fullscreen style's icon rail) and hands the same instance to both this view and
+    /// <see cref="FullscreenListingOverlay"/>.
     /// </summary>
     public BeatmapSearchEngine Engine { get; }
 
-    public BeatmapListingOverlay(bool docked = false)
+    /// <summary>Whether <see cref="Engine"/> was created (and is therefore hosted) by this
+    /// listing — see the property's remarks.</summary>
+    private readonly bool ownsEngine;
+
+    public BeatmapListingOverlay(bool docked = false, BeatmapSearchEngine? engine = null)
     {
         this.docked = docked;
-        Engine = new BeatmapSearchEngine();
+        ownsEngine = engine == null;
+        Engine = engine ?? new BeatmapSearchEngine();
     }
 
     /// <summary>Cards that weren't already on screen fade+rise in, staggered by this many ms per
@@ -183,7 +190,6 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
 
         InternalChildren = new Drawable[]
         {
-            Engine,
             new Box
             {
                 RelativeSizeAxes = Axes.Both,
@@ -222,6 +228,12 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
                 },
             },
         };
+
+        // A self-owned engine ticks with this drawable (preserving the floating overlay's
+        // "debounce only runs while visible" behaviour); an externally-owned one is hosted by its
+        // owner instead — see the Engine property.
+        if (ownsEngine)
+            AddInternal(Engine);
 
         searchBox.Current = Engine.Query;
     }
