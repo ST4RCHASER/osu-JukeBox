@@ -436,6 +436,77 @@ namespace JukeBox.Game.Tests.Visual
             AddUntilStep("fullscreen listing retired immediately", () => fullscreen.State.Value == Visibility.Hidden);
         }
 
+        // The fullscreen listing is a TRUE whole-window modal: its quad must cover the entire
+        // window — over the side columns and the bottom bar, not just the player-box area — and
+        // its entrance must SLIDE the panel up from past the bottom edge (sampled per engine
+        // frame, same pattern as the focus-transition regressions above) rather than snapping in.
+        [Test]
+        public void FullscreenListingCoversTheWholeWindowAndSlidesUpFromBottom()
+        {
+            FullscreenListingOverlay fullscreen = null!;
+            FrameSampler sampler = null!;
+
+            AddStep("switch to fullscreen style and grab the overlay", () =>
+            {
+                config.SetValue(JukeBoxSetting.SearchStyle, SearchStyle.Fullscreen);
+                fullscreen = screen.ChildrenOfType<FullscreenListingOverlay>().Single();
+            });
+            AddStep("add per-frame panel-Y sampler", () => uiContainer.Add(sampler = new FrameSampler(
+                () => (fullscreen.SlidePanel.Y, 0))));
+
+            AddStep("press 'a'", () => InputManager.Key(Key.A));
+            AddUntilStep("fullscreen listing shown", () => fullscreen.State.Value == Visibility.Visible);
+            AddUntilStep("entrance settled (panel at rest)", () => fullscreen.SlidePanel.Y == 0);
+            AddAssert("panel slid up from below (gradual entrance, not a snap)",
+                () => sampler.Samples.Any(s => s.box > 1));
+
+            AddAssert("overlay covers the entire window", () =>
+            {
+                var o = fullscreen.ScreenSpaceDrawQuad.AABBFloat;
+                var s = screen.ScreenSpaceDrawQuad.AABBFloat;
+
+                return o.Left <= s.Left + 0.5f && o.Top <= s.Top + 0.5f
+                       && o.Right >= s.Right - 0.5f && o.Bottom >= s.Bottom - 0.5f;
+            });
+            AddAssert("covers the side columns and the bottom bar too", () =>
+            {
+                var o = fullscreen.ScreenSpaceDrawQuad.AABBFloat;
+
+                bool covers(osu.Framework.Graphics.Primitives.RectangleF r)
+                    => o.Left <= r.Left + 0.5f && o.Top <= r.Top + 0.5f
+                       && o.Right >= r.Right - 0.5f && o.Bottom >= r.Bottom - 0.5f;
+
+                return covers(screen.LeftColumn.ScreenSpaceDrawQuad.AABBFloat)
+                       && covers(screen.RightColumn.ScreenSpaceDrawQuad.AABBFloat)
+                       && covers(screen.ChildrenOfType<NowPlayingBar>().Single().ScreenSpaceDrawQuad.AABBFloat);
+            });
+
+            AddStep("clear samples", () => sampler.Samples.Clear());
+            AddStep("press escape", () => InputManager.Key(Key.Escape));
+            AddUntilStep("closed back to the normal layout", () => fullscreen.State.Value == Visibility.Hidden);
+            AddUntilStep("panel slid back down past the bottom", () => fullscreen.SlidePanel.Y > 1);
+        }
+
+        // The left column's dedicated search-opener icon (next to the "#" button): fullscreen
+        // style presents the big listing; compact style just focuses the docked keyword box.
+        [Test]
+        public void SearchIconButtonOpensSearchPerStyle()
+        {
+            AddStep("click the search icon under compact style", () => clickSearchIcon());
+            AddUntilStep("docked keyword box focused", () => screen.ChildrenOfType<BeatmapListingOverlay>().Single().SearchBox.HasFocus);
+            AddAssert("fullscreen listing stayed hidden", () =>
+                screen.ChildrenOfType<FullscreenListingOverlay>().Single().State.Value == Visibility.Hidden);
+
+            AddStep("switch to fullscreen style", () => config.SetValue(JukeBoxSetting.SearchStyle, SearchStyle.Fullscreen));
+
+            AddStep("click the search icon again", () => clickSearchIcon());
+            AddUntilStep("fullscreen listing shown", () =>
+                screen.ChildrenOfType<FullscreenListingOverlay>().Single().State.Value == Visibility.Visible);
+        }
+
+        private void clickSearchIcon()
+            => screen.ChildrenOfType<IconButton>().Single(b => b.Icon.Equals(FontAwesome.Solid.Search)).TriggerClick();
+
         // Regression coverage for the (now-removed) corner gear: Settings is reachable purely by
         // clicking its own tab header in the right column — no corner shortcut needed any more.
         [Test]
