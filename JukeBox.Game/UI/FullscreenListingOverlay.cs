@@ -2,7 +2,6 @@
 
 using System;
 using System.Collections.Generic;
-using DescriptionAttribute = System.ComponentModel.DescriptionAttribute;
 using System.Linq;
 using JukeBox.Game.Online;
 using JukeBox.Game.Playback;
@@ -15,11 +14,17 @@ using osu.Framework.Graphics.Shapes;
 using osu.Framework.Graphics.Sprites;
 using osu.Framework.Graphics.UserInterface;
 using osu.Framework.Input.Events;
+using osu.Game.Graphics;
+using osu.Game.Graphics.Containers;
 using osu.Game.Graphics.Cursor;
 using osu.Game.Graphics.UserInterface;
 using osu.Game.Overlays;
+using osu.Game.Overlays.BeatmapListing;
+using osu.Game.Resources.Localisation.Web;
+using osu.Game.Rulesets;
 using osuTK;
 using osuTK.Input;
+using SearchExtra = osu.Game.Overlays.BeatmapListing.SearchExtra;
 
 namespace JukeBox.Game.UI;
 
@@ -53,69 +58,30 @@ namespace JukeBox.Game.UI;
 /// </summary>
 public partial class FullscreenListingOverlay : FocusedOverlayContainer
 {
-    private const float label_width = 92;
     private const float scroll_load_threshold = 200;
     private const float min_column_width = 260;
     private const int max_columns = 3;
 
-    /// <summary>Width of the lazer-styled filter controls (dropdowns, sliders, checkboxes).</summary>
-    private const float control_width = 150;
+    /// <summary>Width of the star-range sliders (the one row lazer's listing doesn't have).</summary>
+    private const float slider_width = 150;
 
-    /// <summary>
-    /// The engine's ruleset filter as a dropdown-friendly enum — the engine speaks NeriNyan's raw
-    /// single-letter strings (see <see cref="BeatmapSearchEngine.Mode"/>), adapted both ways in
-    /// LoadComplete so this stays a pure presentation shape.
-    /// </summary>
-    public enum SearchMode
-    {
-        Any,
+    /// <summary>The label column width lazer's own <see cref="BeatmapSearchFilterRow{T}"/> uses —
+    /// our custom Stars row matches it so every row aligns.</summary>
+    private const float filter_label_width = 100;
 
-        [Description("osu!")]
-        Osu,
-
-        [Description("osu!taiko")]
-        Taiko,
-
-        [Description("osu!catch")]
-        Catch,
-
-        [Description("osu!mania")]
-        Mania,
-    }
-
-    /// <summary>The engine's category filter (<see cref="BeatmapSearchEngine.Category"/>) as a
-    /// dropdown-friendly enum, adapted both ways in LoadComplete.</summary>
-    public enum SearchCategory
-    {
-        Any,
-        Ranked,
-        Qualified,
-        Loved,
-        Pending,
-
-        [Description("WIP")]
-        Wip,
-
-        Graveyard,
-    }
-
-    /// <summary>The engine's sort key (<see cref="BeatmapSearchEngine.SortKey"/>) as a
-    /// dropdown-friendly enum, adapted both ways in LoadComplete.</summary>
-    public enum SortField
-    {
-        Ranked,
-        Plays,
-        Favourites,
-        Difficulty,
-        Updated,
-        Title,
-    }
-
-    // The exact DI lazer's SettingsPanel provides its subtree (and SettingsOverlay already
-    // reuses): every lazer control below (OsuEnumDropdown/RoundedSliderBar/OsuCheckbox) resolves
-    // this for the purple pill/slider/dropdown palette.
+    // The exact DI lazer's own beatmap listing provides its filter rows (FilterTabItem and the
+    // sort control resolve this for the accent text colours; SettingsOverlay caches the same
+    // scheme for its panel).
     [Cached]
     private readonly OverlayColourProvider colourProvider = new OverlayColourProvider(OverlayColourScheme.Purple);
+
+    // Lazer's BeatmapSearchRulesetFilterRow resolves a RulesetStore for its Any/osu!/taiko/catch/
+    // mania items. The realm-backed store doesn't exist in this app; AssemblyRulesetStore is the
+    // DI-free equivalent, populating from the four ruleset assemblies (force-loaded in the
+    // constructor — the store scans the AppDomain, and lazily-loaded references wouldn't be there
+    // yet on a cold path).
+    [Cached(typeof(RulesetStore))]
+    private readonly RulesetStore rulesetStore;
 
     private readonly BeatmapSearchEngine engine;
 
@@ -136,21 +102,17 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
     private Box scrim = null!;
     private Container panel = null!;
 
-    private OsuEnumDropdown<SearchMode> modeDropdown = null!;
-    private OsuEnumDropdown<SearchCategory> categoryDropdown = null!;
-    private OsuEnumDropdown<SortField> sortDropdown = null!;
-    private OsuCheckbox hasVideoCheckbox = null!;
-    private OsuCheckbox hasStoryboardCheckbox = null!;
+    // Lazer's REAL beatmap-listing filter rows (label-left + horizontal text tab items) — wired
+    // both ways to the shared engine's raw bindables in LoadComplete, so selections here and the
+    // docked listing's chips round-trip through the one engine.
+    private BeatmapSearchRulesetFilterRow rulesetRow = null!;
+    private BeatmapSearchFilterRow<SearchCategory> categoryRow = null!;
+    private BeatmapSearchFilterRow<SearchGenre> genreRow = null!;
+    private BeatmapSearchFilterRow<SearchLanguage> languageRow = null!;
+    private BeatmapSearchMultipleSelectionFilterRow<SearchExtra> extraRow = null!;
+    private BeatmapListingSortTabControl sortControl = null!;
     private RoundedSliderBar<double> minStarsSlider = null!;
     private RoundedSliderBar<double> maxStarsSlider = null!;
-
-    // Two-way adapters between the dropdowns' enum shapes and the engine's raw string bindables
-    // (same shape as SettingsOverlay's hardwareAccelerationEnabled adapter) — wired in
-    // LoadComplete; changes from either presentation's controls round-trip through the engine, so
-    // the docked listing's chips and these dropdowns stay in sync.
-    private readonly Bindable<SearchMode> modeAdapter = new Bindable<SearchMode>();
-    private readonly Bindable<SearchCategory> categoryAdapter = new Bindable<SearchCategory>();
-    private readonly Bindable<SortField> sortAdapter = new Bindable<SortField>();
 
     private int selectedIndex = -1;
     private int settleFrames;
@@ -184,17 +146,25 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
 
     // Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the lazer-styled filter
     // controls, to drive/assert them without depending on internal layout.
-    internal OsuEnumDropdown<SearchMode> ModeDropdown => modeDropdown;
-    internal OsuEnumDropdown<SearchCategory> CategoryDropdown => categoryDropdown;
-    internal OsuEnumDropdown<SortField> SortDropdown => sortDropdown;
-    internal OsuCheckbox HasVideoCheckbox => hasVideoCheckbox;
-    internal OsuCheckbox HasStoryboardCheckbox => hasStoryboardCheckbox;
+    internal BeatmapSearchRulesetFilterRow RulesetRow => rulesetRow;
+    internal BeatmapSearchFilterRow<SearchCategory> CategoryRow => categoryRow;
+    internal BeatmapSearchFilterRow<SearchGenre> GenreRow => genreRow;
+    internal BeatmapSearchFilterRow<SearchLanguage> LanguageRow => languageRow;
+    internal BeatmapSearchMultipleSelectionFilterRow<SearchExtra> ExtraRow => extraRow;
+    internal BeatmapListingSortTabControl SortControl => sortControl;
     internal RoundedSliderBar<double> MinStarsSlider => minStarsSlider;
     internal RoundedSliderBar<double> MaxStarsSlider => maxStarsSlider;
 
     public FullscreenListingOverlay(BeatmapSearchEngine engine)
     {
         this.engine = engine;
+
+        // AssemblyRulesetStore scans already-loaded assemblies — touch each ruleset first so
+        // lazy assembly loading can't leave the Mode row empty (see the rulesetStore field).
+        foreach (string mode in new[] { "osu", "taiko", "fruits", "mania" })
+            _ = FullscreenBeatmapCard.RulesetFor(mode);
+
+        rulesetStore = new AssemblyRulesetStore();
     }
 
     [BackgroundDependencyLoader]
@@ -298,24 +268,50 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
         // Dropdown-enum <-> engine-string two-way sync (see the adapter fields): seed from the
         // engine's current values, then mirror changes in both directions. The value writes are
         // idempotent, so the echo of each direction is a no-op rather than a loop.
-        modeAdapter.Value = FromEngineMode(engine.Mode.Value);
-        modeAdapter.BindValueChanged(e => engine.Mode.Value = ToEngineMode(e.NewValue));
-        engine.Mode.BindValueChanged(e => modeAdapter.Value = FromEngineMode(e.NewValue));
-        modeDropdown.Current = modeAdapter;
 
-        categoryAdapter.Value = FromEngineCategory(engine.Category.Value);
-        categoryAdapter.BindValueChanged(e => engine.Category.Value = ToEngineCategory(e.NewValue));
-        engine.Category.BindValueChanged(e => categoryAdapter.Value = FromEngineCategory(e.NewValue));
-        categoryDropdown.Current = categoryAdapter;
+        // Mode row (lazer speaks RulesetInfo; the engine speaks NeriNyan's single letters).
+        rulesetRow.Current.Value = rulesetInfoForMode(engine.Mode.Value);
+        rulesetRow.Current.BindValueChanged(e => engine.Mode.Value = ModeForRuleset(e.NewValue));
+        engine.Mode.BindValueChanged(e => rulesetRow.Current.Value = rulesetInfoForMode(e.NewValue));
 
-        sortAdapter.Value = FromEngineSort(engine.SortKey.Value);
-        sortAdapter.BindValueChanged(e => engine.SortKey.Value = ToEngineSort(e.NewValue));
-        engine.SortKey.BindValueChanged(e => sortAdapter.Value = FromEngineSort(e.NewValue));
-        sortDropdown.Current = sortAdapter;
+        // Categories row.
+        categoryRow.Current.Value = CategoryFromEngine(engine.Category.Value);
+        categoryRow.Current.BindValueChanged(e => engine.Category.Value = CategoryToEngine(e.NewValue));
+        engine.Category.BindValueChanged(e => categoryRow.Current.Value = CategoryFromEngine(e.NewValue));
 
-        // The toggles and sliders bind the engine's bindables directly — no adapters needed.
-        hasVideoCheckbox.Current = engine.HasVideo;
-        hasStoryboardCheckbox.Current = engine.HasStoryboard;
+        // Genre/Language rows: lazer's enum values ARE osu-web's ids, which is exactly what the
+        // engine's client-side filters hold.
+        genreRow.Current.Value = GenreFromEngine(engine.GenreId.Value);
+        genreRow.Current.BindValueChanged(e => engine.GenreId.Value = e.NewValue == SearchGenre.Any ? null : (int)e.NewValue);
+        engine.GenreId.BindValueChanged(e => genreRow.Current.Value = GenreFromEngine(e.NewValue));
+
+        languageRow.Current.Value = LanguageFromEngine(engine.LanguageId.Value);
+        languageRow.Current.BindValueChanged(e => engine.LanguageId.Value = e.NewValue == SearchLanguage.Any ? null : (int)e.NewValue);
+        engine.LanguageId.BindValueChanged(e => languageRow.Current.Value = LanguageFromEngine(e.NewValue));
+
+        // Extra row (multi-select list <-> the engine's two bools). The set-membership checks
+        // make both directions idempotent.
+        extraRow.Current.BindCollectionChanged((_, _) =>
+        {
+            engine.HasVideo.Value = extraRow.Current.Contains(SearchExtra.Video);
+            engine.HasStoryboard.Value = extraRow.Current.Contains(SearchExtra.Storyboard);
+        });
+        engine.HasVideo.BindValueChanged(e => setExtra(SearchExtra.Video, e.NewValue), true);
+        engine.HasStoryboard.BindValueChanged(e => setExtra(SearchExtra.Storyboard, e.NewValue), true);
+
+        // Sort control: Reset(Any, false) yields the full non-authenticated criteria set
+        // (Title/Artist/Difficulty/Updated/Ranked/Rating/Plays/Favourites). Relevance and
+        // Nominations never appear — they're lazer couplings to a live query/pending category
+        // this app doesn't replicate. Keys are passed to the mirror as raw lowercase strings
+        // (NeriNyan accepts the osu-web sort set; fallback mirrors ignore sort entirely).
+        sortControl.Reset(SearchCategory.Any, false);
+        sortControl.Current.Value = SortFromEngine(engine.SortKey.Value);
+        sortControl.Current.BindValueChanged(e => engine.SortKey.Value = e.NewValue.ToString().ToLowerInvariant());
+        engine.SortKey.BindValueChanged(e => sortControl.Current.Value = SortFromEngine(e.NewValue));
+
+        sortControl.SortDirection.Value = engine.SortDescending.Value ? SortDirection.Descending : SortDirection.Ascending;
+        sortControl.SortDirection.BindValueChanged(e => engine.SortDescending.Value = e.NewValue == SortDirection.Descending);
+        engine.SortDescending.BindValueChanged(e => sortControl.SortDirection.Value = e.NewValue ? SortDirection.Descending : SortDirection.Ascending);
 
         // Pushed (rather than each card binding the player's bindable) because cards are
         // rebuilt wholesale on every result change — pushing the current value at rebuild plus
@@ -410,14 +406,16 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
     }
 
     /// <summary>
-    /// The osu-web-style labelled filter block, presented with lazer's real settings controls
-    /// (the same components/theme <see cref="SettingsOverlay"/> established, coloured by the
-    /// cached purple <see cref="OverlayColourProvider"/>): dropdowns for the single-choice
-    /// Mode/Categories/Sort rows, <see cref="RoundedSliderBar{T}"/>s for the star range and
-    /// <see cref="OsuCheckbox"/> pills for the Extra toggles. Genre/Language keep the osu-web
-    /// chip rows — 14 always-visible options read better as chips than a dropdown. Rows that
-    /// would need data this app doesn't have (Rank Achieved, Played, Recommended difficulty,
-    /// Subscribed mappers, Explicit content) are OMITTED rather than rendered dead.
+    /// LAZER'S REAL beatmap-listing filter block (osu.Game.Overlays.BeatmapListing): the
+    /// label-left rows with horizontal text tab items — Mode via
+    /// <see cref="BeatmapSearchRulesetFilterRow"/> (backed by the cached DI-free
+    /// <see cref="AssemblyRulesetStore"/>), Categories (auth-only Favourites/Mine omitted — no
+    /// signed-in account to back them), Genre and Language (client-side over loaded results, see
+    /// the hint by the sort strip), the multi-select Extra row, and lazer's
+    /// <see cref="BeatmapListingSortTabControl"/> (criteria + direction caret). The one row lazer's
+    /// listing doesn't have — the star range — keeps our slider pair, restyled to the same
+    /// label-column geometry so every row aligns. Rows osu-web shows but this app can't back with
+    /// real data (General/Rank Achieved/Played/Spotlights…) are OMITTED, not faked.
     /// </summary>
     private Drawable createFilterBlock() => new FillFlowContainer
     {
@@ -427,147 +425,169 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
         Spacing = new Vector2(0, 6),
         Children = new[]
         {
-            controlRow("Mode", modeDropdown = new OsuEnumDropdown<SearchMode>
-            {
-                RelativeSizeAxes = Axes.None,
-                Width = control_width,
-            }),
-            controlRow("Categories", categoryDropdown = new OsuEnumDropdown<SearchCategory>
-            {
-                RelativeSizeAxes = Axes.None,
-                Width = control_width,
-            }),
-            ListingFilterRows.CreateChipRow("Genre", "filters loaded results", label_width, ListingFilterRows.SingleSelect(new (string, int?)[]
-            {
-                ("Any", null), ("Video Game", 2), ("Anime", 3), ("Rock", 4), ("Pop", 5), ("Other", 6),
-                ("Novelty", 7), ("Hip Hop", 9), ("Electronic", 10), ("Metal", 11), ("Classical", 12),
-                ("Folk", 13), ("Jazz", 14),
-            }, engine.GenreId)),
-            ListingFilterRows.CreateChipRow("Language", "filters loaded results", label_width, ListingFilterRows.SingleSelect(new (string, int?)[]
-            {
-                ("Any", null), ("English", 2), ("Japanese", 3), ("Chinese", 4), ("Korean", 6),
-                ("Instrumental", 5), ("German", 8), ("French", 7), ("Italian", 11), ("Spanish", 10),
-                ("Swedish", 9), ("Russian", 12), ("Polish", 13), ("Other", 14),
-            }, engine.LanguageId)),
-            controlRow("Extra",
-                hasVideoCheckbox = createFilterCheckbox("Has Video"),
-                hasStoryboardCheckbox = createFilterCheckbox("Has Storyboard")),
-            controlRow("Sort by", new Drawable[]
-            {
-                sortDropdown = new OsuEnumDropdown<SortField>
-                {
-                    RelativeSizeAxes = Axes.None,
-                    Width = control_width,
-                },
-            }.Concat(ListingFilterRows.SingleSelect(new (string, bool)[]
-            {
-                ("desc", true), ("asc", false),
-            }, engine.SortDescending)).ToArray()),
+            rulesetRow = new BeatmapSearchRulesetFilterRow(),
+            categoryRow = new SupportedCategoryFilterRow(),
+            genreRow = new BeatmapSearchFilterRow<SearchGenre>(BeatmapsStrings.ListingSearchFiltersGenre),
+            languageRow = new BeatmapSearchFilterRow<SearchLanguage>(BeatmapsStrings.ListingSearchFiltersLanguage),
+            extraRow = new BeatmapSearchMultipleSelectionFilterRow<SearchExtra>(BeatmapsStrings.ListingSearchFiltersExtra),
             createStarsRow(),
+            new Container // sort strip below the filters, like lazer/osu-web
+            {
+                RelativeSizeAxes = Axes.X,
+                AutoSizeAxes = Axes.Y,
+                Margin = new MarginPadding { Top = 2 },
+                Children = new Drawable[]
+                {
+                    sortControl = new BeatmapListingSortTabControl
+                    {
+                        Anchor = Anchor.CentreLeft,
+                        Origin = Anchor.CentreLeft,
+                    },
+                    new SpriteText
+                    {
+                        Anchor = Anchor.CentreRight,
+                        Origin = Anchor.CentreRight,
+                        Text = "genre & language filter already-loaded results",
+                        Font = FontUsage.Default.With(size: Theme.CaptionTextSize),
+                        Colour = Theme.TextTertiary,
+                    },
+                },
+            },
         },
     };
 
-    /// <summary>One labelled filter row hosting arbitrary controls, matching the chip rows'
-    /// osu-web layout (same shared label column).</summary>
-    private static Drawable controlRow(string label, params Drawable[] controls)
-    {
-        var row = new FillFlowContainer
-        {
-            RelativeSizeAxes = Axes.X,
-            AutoSizeAxes = Axes.Y,
-            Direction = FillDirection.Full,
-            Spacing = new Vector2(8, 6),
-        };
-
-        row.Add(ListingFilterRows.CreateRowLabel(label, label_width));
-
-        foreach (var control in controls)
-            row.Add(control);
-
-        return row;
-    }
-
-    /// <summary>An <see cref="OsuCheckbox"/> pill sized for an inline filter row — its
-    /// constructor assumes a full-width settings row (RelativeSizeAxes.X), overridden here to the
-    /// shared fixed control width.</summary>
-    private static OsuCheckbox createFilterCheckbox(string label) => new OsuCheckbox
-    {
-        LabelText = label,
-        RelativeSizeAxes = Axes.None,
-        AutoSizeAxes = Axes.Y,
-        Width = control_width,
-    };
-
+    /// <summary>Our star-range row (lazer's listing has no equivalent), matching
+    /// <see cref="BeatmapSearchFilterRow{T}"/>'s exact label-column geometry (100px absolute
+    /// column, size-13 label) so it aligns with the lazer rows around it.</summary>
     private Drawable createStarsRow()
     {
         SpriteText minText, maxText;
 
-        var row = new FillFlowContainer
+        var row = new GridContainer
         {
             RelativeSizeAxes = Axes.X,
             AutoSizeAxes = Axes.Y,
-            Direction = FillDirection.Full,
-            Spacing = new Vector2(8, 6),
-            Children = new[]
+            ColumnDimensions = new[]
             {
-                ListingFilterRows.CreateRowLabel("Stars", label_width),
-                minStarsSlider = new RoundedSliderBar<double>
+                new Dimension(GridSizeMode.Absolute, size: filter_label_width),
+                new Dimension(),
+            },
+            RowDimensions = new[] { new Dimension(GridSizeMode.AutoSize) },
+            Content = new[]
+            {
+                new Drawable[]
                 {
-                    Width = control_width,
-                    Current = engine.MinStars,
-                },
-                minText = new SpriteText
-                {
-                    Font = FontUsage.Default.With(size: Theme.RowSecondaryTextSize),
-                    Colour = Theme.TextSecondary,
-                    Margin = new MarginPadding { Top = 5 },
-                },
-                maxStarsSlider = new RoundedSliderBar<double>
-                {
-                    Width = control_width,
-                    Current = engine.MaxStars,
-                },
-                maxText = new SpriteText
-                {
-                    Font = FontUsage.Default.With(size: Theme.RowSecondaryTextSize),
-                    Colour = Theme.TextSecondary,
-                    Margin = new MarginPadding { Top = 5 },
+                    new OsuTextFlowContainer(t => t.Font = OsuFont.GetFont(size: 13))
+                    {
+                        RelativeSizeAxes = Axes.X,
+                        AutoSizeAxes = Axes.Y,
+                        Text = "Stars",
+                    },
+                    new FillFlowContainer
+                    {
+                        RelativeSizeAxes = Axes.X,
+                        AutoSizeAxes = Axes.Y,
+                        Direction = FillDirection.Full,
+                        Spacing = new Vector2(8, 4),
+                        Children = new Drawable[]
+                        {
+                            minStarsSlider = new RoundedSliderBar<double>
+                            {
+                                Width = slider_width,
+                                Current = engine.MinStars,
+                            },
+                            minText = new SpriteText
+                            {
+                                Font = FontUsage.Default.With(size: 12),
+                                Colour = Theme.TextSecondary,
+                                Margin = new MarginPadding { Top = 5 },
+                            },
+                            maxStarsSlider = new RoundedSliderBar<double>
+                            {
+                                Width = slider_width,
+                                Current = engine.MaxStars,
+                            },
+                            maxText = new SpriteText
+                            {
+                                Font = FontUsage.Default.With(size: 12),
+                                Colour = Theme.TextSecondary,
+                                Margin = new MarginPadding { Top = 5 },
+                            },
+                        },
+                    },
                 },
             },
         };
 
-        engine.MinStars.BindValueChanged(e => minText.Text = e.NewValue > 0 ? $"min {e.NewValue:0.0}★" : "min any", true);
-        engine.MaxStars.BindValueChanged(e => maxText.Text = e.NewValue < 10 ? $"max {e.NewValue:0.0}★" : "max any", true);
+        engine.MinStars.BindValueChanged(e => minText.Text = e.NewValue > 0 ? $"min {e.NewValue:0.0}\u2605" : "min any", true);
+        engine.MaxStars.BindValueChanged(e => maxText.Text = e.NewValue < 10 ? $"max {e.NewValue:0.0}\u2605" : "max any", true);
 
         return row;
     }
 
-    // ---- Dropdown-enum <-> engine-string adapters --------------------------------------------
-
-    internal static string? ToEngineMode(SearchMode mode) => mode switch
+    /// <summary>Lazer's Categories row minus the auth-only items (Favourites/Mine need a
+    /// signed-in account this app doesn't have) — omitted rather than shown dead, per the
+    /// established rule for unbackable filters.</summary>
+    private partial class SupportedCategoryFilterRow : BeatmapSearchFilterRow<SearchCategory>
     {
-        SearchMode.Osu => "o",
-        SearchMode.Taiko => "t",
-        SearchMode.Catch => "c",
-        SearchMode.Mania => "m",
+        public SupportedCategoryFilterRow()
+            : base(BeatmapsStrings.ListingSearchFiltersStatus)
+        {
+        }
+
+        protected override Drawable CreateFilter() => new SupportedCategoryFilter();
+
+        private partial class SupportedCategoryFilter : BeatmapSearchFilter
+        {
+            public SupportedCategoryFilter()
+            {
+                // The base ctor added every enum member — drop the two this app can't back.
+                RemoveItem(SearchCategory.Favourites);
+                RemoveItem(SearchCategory.Mine);
+            }
+        }
+    }
+
+    // ---- Lazer filter enum <-> engine adapters -----------------------------------------------
+
+    private void setExtra(SearchExtra extra, bool present)
+    {
+        if (present && !extraRow.Current.Contains(extra))
+            extraRow.Current.Add(extra);
+        else if (!present)
+            extraRow.Current.Remove(extra);
+    }
+
+    private RulesetInfo rulesetInfoForMode(string? mode) => mode switch
+    {
+        "o" => rulesetStore.GetRuleset(0) ?? new RulesetInfo(),
+        "t" => rulesetStore.GetRuleset(1) ?? new RulesetInfo(),
+        "c" => rulesetStore.GetRuleset(2) ?? new RulesetInfo(),
+        "m" => rulesetStore.GetRuleset(3) ?? new RulesetInfo(),
+        // The Any tab item is `new RulesetInfo()` (see lazer's RulesetFilterTabItemAny) — an
+        // equal empty instance selects it.
+        _ => new RulesetInfo(),
+    };
+
+    internal static string? ModeForRuleset(RulesetInfo ruleset) => ruleset.OnlineID switch
+    {
+        0 => "o",
+        1 => "t",
+        2 => "c",
+        3 => "m",
         _ => null,
     };
 
-    internal static SearchMode FromEngineMode(string? mode) => mode switch
+    internal static string CategoryToEngine(SearchCategory category) => category switch
     {
-        "o" => SearchMode.Osu,
-        "t" => SearchMode.Taiko,
-        "c" => SearchMode.Catch,
-        "m" => SearchMode.Mania,
-        _ => SearchMode.Any,
+        SearchCategory.Any => "all",
+        _ => category.ToString().ToLowerInvariant(),
     };
 
-    internal static string ToEngineCategory(SearchCategory category)
-        => category == SearchCategory.Any ? "all" : category.ToString().ToLowerInvariant();
-
-    internal static SearchCategory FromEngineCategory(string category) => category switch
+    internal static SearchCategory CategoryFromEngine(string category) => category switch
     {
         "all" => SearchCategory.Any,
+        "leaderboard" => SearchCategory.Leaderboard,
         "qualified" => SearchCategory.Qualified,
         "loved" => SearchCategory.Loved,
         "pending" => SearchCategory.Pending,
@@ -576,16 +596,22 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
         _ => SearchCategory.Ranked,
     };
 
-    internal static string ToEngineSort(SortField field) => field.ToString().ToLowerInvariant();
+    internal static SearchGenre GenreFromEngine(int? id)
+        => id is int value && Enum.IsDefined(typeof(SearchGenre), value) ? (SearchGenre)value : SearchGenre.Any;
 
-    internal static SortField FromEngineSort(string key) => key switch
+    internal static SearchLanguage LanguageFromEngine(int? id)
+        => id is int value && Enum.IsDefined(typeof(SearchLanguage), value) ? (SearchLanguage)value : SearchLanguage.Any;
+
+    internal static SortCriteria SortFromEngine(string key) => key switch
     {
-        "plays" => SortField.Plays,
-        "favourites" => SortField.Favourites,
-        "difficulty" => SortField.Difficulty,
-        "updated" => SortField.Updated,
-        "title" => SortField.Title,
-        _ => SortField.Ranked,
+        "title" => SortCriteria.Title,
+        "artist" => SortCriteria.Artist,
+        "difficulty" => SortCriteria.Difficulty,
+        "updated" => SortCriteria.Updated,
+        "rating" => SortCriteria.Rating,
+        "plays" => SortCriteria.Plays,
+        "favourites" => SortCriteria.Favourites,
+        _ => SortCriteria.Ranked,
     };
 
     /// <summary>
