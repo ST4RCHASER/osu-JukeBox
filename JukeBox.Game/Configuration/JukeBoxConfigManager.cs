@@ -64,6 +64,24 @@ public enum JukeBoxSetting
     /// host is scaled. See BeatmapVisuals.load/LoadComplete.
     /// </summary>
     ChartZoom,
+    /// <summary>How beatmap search results are presented — see <see cref="Configuration.SearchStyle"/>.</summary>
+    SearchStyle,
+}
+
+/// <summary>
+/// Beatmap search presentation. <see cref="Compact"/> (the default) keeps everything in the
+/// docked left column, tightened: dense 48px-thumb card rows, filters collapsed by default,
+/// smaller chips. <see cref="Fullscreen"/> additionally presents an osu!-web-style "beatmap
+/// listing" overlay covering the player-box area whenever search is opened (type-anywhere, or
+/// focusing the docked search box) — a large keyword box, the full labelled filter block and a
+/// three-column card grid with hover-expanded cards; Escape or Enter-queue closes it back to the
+/// player. Both presentations are views over the same shared <see cref="Online.BeatmapSearchEngine"/>,
+/// so query/filter state stays in sync and the setting is live-switchable.
+/// </summary>
+public enum SearchStyle
+{
+    Fullscreen,
+    Compact,
 }
 
 /// <summary>
@@ -172,5 +190,6 @@ public class JukeBoxConfigManager : IniConfigManager<JukeBoxSetting>
         SetDefault(JukeBoxSetting.UiScale, 1.0, 0.8, 1.6);
         SetDefault(JukeBoxSetting.GlobalAudioOffset, 0.0, -250.0, 250.0);
         SetDefault(JukeBoxSetting.ChartZoom, 1.0, 0.5, 1.5);
+        SetDefault(JukeBoxSetting.SearchStyle, SearchStyle.Compact);
     }
 }
