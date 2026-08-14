@@ -136,6 +136,28 @@ namespace JukeBox.Game.Tests.Visual
                 return barTop - boxBottom >= Theme.SectionSpacing - 0.5f;
             });
 
+            // The bar sits only in the CENTRE strip: the columns own their full height, and the
+            // bar never runs underneath them — a full gutter separates it from each column, the
+            // same insets as the player box above it.
+            AddAssert("bar never reaches under the left column (full gutter between them)", () =>
+            {
+                float barLeft = screen.ChildrenOfType<NowPlayingBar>().Single().ScreenSpaceDrawQuad.TopLeft.X;
+                float leftColumnRight = screen.LeftColumn.ScreenSpaceDrawQuad.TopRight.X;
+                return barLeft - leftColumnRight >= Theme.SectionSpacing - 0.5f;
+            });
+            AddAssert("bar never reaches under the right column (full gutter between them)", () =>
+            {
+                float barRight = screen.ChildrenOfType<NowPlayingBar>().Single().ScreenSpaceDrawQuad.TopRight.X;
+                float rightColumnLeft = screen.RightColumn.ScreenSpaceDrawQuad.TopLeft.X;
+                return rightColumnLeft - barRight >= Theme.SectionSpacing - 0.5f;
+            });
+            AddAssert("columns run the full window height (nothing underneath them)", () =>
+            {
+                float screenBottom = screen.ScreenSpaceDrawQuad.BottomLeft.Y;
+                return Math.Abs(screen.LeftColumn.ScreenSpaceDrawQuad.BottomLeft.Y - screenBottom) < 0.5f
+                       && Math.Abs(screen.RightColumn.ScreenSpaceDrawQuad.BottomLeft.Y - screenBottom) < 0.5f;
+            });
+
             // Regression coverage for the fit-scale fix: with the side columns open, the boxed
             // player is normally much narrower than the storyboard's 854x480 design canvas — before
             // the fix the visuals stack was stretched to the box's raw size and its (wider) content
