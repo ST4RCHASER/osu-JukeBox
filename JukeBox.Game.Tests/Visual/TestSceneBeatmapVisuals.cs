@@ -88,6 +88,37 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("remove visuals", () => Remove(visuals, true));
         }
 
+        // Regression coverage for the stale low-res background bug: a JukeBoxSetting.PlayfieldZoom
+        // change (MainScreen zooms the whole scene, well outside this fixture, but the setting is
+        // shared) must force backgroundBlurContainer's cached framebuffer to redraw — see
+        // BeatmapVisuals.LoadComplete's own remarks on why RedrawOnScale=false alone isn't enough
+        // across this setting's wide 1%-200% range. Covers the wiring itself (deterministic, no GPU
+        // pixel readback needed); the framebuffer's actual resolution-at-redraw-time is
+        // osu.Framework's own already-tested BufferedContainer machinery.
+        [Test]
+        public void PlayfieldZoomChangeForcesBackgroundRedraw()
+        {
+            BeatmapVisuals visuals = null!;
+
+            AddStep("reset zoom to default", () => config.SetValue(JukeBoxSetting.PlayfieldZoom, 1.0));
+
+            AddStep("create visuals with a background", () => Add(visuals = new BeatmapVisuals(fixtureSetA, playbackClock)
+            {
+                RelativeSizeAxes = Axes.Both,
+            }));
+
+            AddUntilStep("visuals loaded", () => visuals.IsLoaded);
+            AddAssert("no forced redraw yet", () => visuals.BackgroundZoomForceRedrawCount == 0);
+
+            AddStep("zoom out to 1%", () => config.SetValue(JukeBoxSetting.PlayfieldZoom, 0.01));
+            AddAssert("background forced to redraw", () => visuals.BackgroundZoomForceRedrawCount == 1);
+
+            AddStep("zoom back to 100%", () => config.SetValue(JukeBoxSetting.PlayfieldZoom, 1.0));
+            AddAssert("background forced to redraw again on the way back", () => visuals.BackgroundZoomForceRedrawCount == 2);
+
+            AddStep("remove visuals", () => Remove(visuals, true));
+        }
+
         // Background auto-hide follows lazer's Storyboard.ReplacesBackground: only a storyboard
         // that explicitly draws the beatmap background as one of its own Background-layer sprites
         // hides our separate background sprite. Requires the .osu's own background event so the

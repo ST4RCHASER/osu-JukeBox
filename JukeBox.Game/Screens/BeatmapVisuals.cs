@@ -92,6 +92,7 @@ public partial class BeatmapVisuals : CompositeDrawable
     private readonly BindableDouble backgroundDim = new();
     private readonly BindableDouble backgroundBlur = new();
     private readonly Bindable<bool> showStoryboardVideo = new(true);
+    private readonly BindableDouble playfieldZoom = new(1.0);
     private readonly IBindable<JukeBoxSkin> effectiveSkin = new Bindable<JukeBoxSkin>();
 
     // Lazer's own background-blur scale: setting 0..1 maps to a gaussian sigma of 0..25.
@@ -165,6 +166,14 @@ public partial class BeatmapVisuals : CompositeDrawable
 
     /// <summary>Test-only: current alpha of the background-dim scrim.</summary>
     internal float DimAlpha => dimScrim.Alpha;
+
+    /// <summary>
+    /// Test-only: how many times a <see cref="JukeBoxSetting.PlayfieldZoom"/> change has forced the
+    /// background blur's framebuffer to redraw (regression coverage for the stale low-res buffer
+    /// bug — see the wiring in <see cref="LoadComplete"/>). 0 with no background (no
+    /// <c>backgroundBlurContainer</c> to redraw) or before any zoom change.
+    /// </summary>
+    internal int BackgroundZoomForceRedrawCount { get; private set; }
 
     /// <summary>
     /// Test-only: whether our own background <see cref="Sprite"/> is currently visible. Auto-hidden
@@ -338,6 +347,7 @@ public partial class BeatmapVisuals : CompositeDrawable
             config.BindWith(JukeBoxSetting.BackgroundDim, backgroundDim);
             config.BindWith(JukeBoxSetting.BackgroundBlur, backgroundBlur);
             config.BindWith(JukeBoxSetting.ShowStoryboardVideo, showStoryboardVideo);
+            config.BindWith(JukeBoxSetting.PlayfieldZoom, playfieldZoom);
         }
 
         if (skinSelection != null)
@@ -372,6 +382,32 @@ public partial class BeatmapVisuals : CompositeDrawable
             storyboardAudio.Volume.Value = e.NewValue ? 1 : 0;
             updateBackgroundVisibility();
         }, true);
+
+        // Regression fix: backgroundBlurContainer sets RedrawOnScale = false (see its own
+        // construction comment) so MainScreen's continuous, purely-cosmetic scale changes —
+        // window resizes, the focus-mode transition tween — never force a re-blur of a background
+        // that hasn't actually changed. That's fine for those small, incidental scale wobbles, but
+        // JukeBoxSetting.PlayfieldZoom spans a much wider, user-driven 1%-200% range applied to the
+        // very same ancestor chain (MainScreen.sceneContainer) — osu.Framework's own
+        // BufferedContainer.Update() cancels an ancestor scale change back to "local units" via the
+        // current DrawInfo's inverse before deciding whether to re-render (that's the whole point of
+        // RedrawOnScale=false), and that cancellation loses enough float precision at this zoom
+        // range's extremes that a redraw can end up baking the framebuffer at whatever tiny
+        // effective size was on screen at that moment — after which RedrawOnScale=false means
+        // returning to a larger zoom is never itself a reason to redraw again, so that stale
+        // low-res bake stays cached, visibly blurry/pixelated once stretched back up. Explicitly
+        // forcing a redraw on every PlayfieldZoom change sidesteps that precision-sensitive
+        // cancellation for exactly this known cause, while leaving RedrawOnScale=false doing its
+        // job for the resize/transition wobbles it was actually meant for — no cost at steady state
+        // (this only fires on an actual value change), and no rebuild.
+        playfieldZoom.BindValueChanged(_ =>
+        {
+            if (backgroundBlurContainer == null)
+                return;
+
+            backgroundBlurContainer.ForceRedraw();
+            BackgroundZoomForceRedrawCount++;
+        });
 
         beatmapOffset.BindValueChanged(_ => updateClockOffset());
         globalOffset.BindValueChanged(_ => updateClockOffset());
