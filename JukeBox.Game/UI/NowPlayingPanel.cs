@@ -23,23 +23,25 @@ namespace JukeBox.Game.UI;
 /// a placeholder box remains underneath until it loads or if it never does), title (with an accent
 /// underline) / artist (from <see cref="Playback.Jukebox.NowPlaying"/>), a status line
 /// (<see cref="Playback.Jukebox.Status"/>, styled in soft red when
-/// <see cref="Playback.Jukebox.LastError"/> is set), a seekable <see cref="ProgressSliderBar"/>
-/// with elapsed/total time labels beneath it, a difficulty <see cref="DifficultySwitcher"/>
-/// dropdown and an "open in browser" button.
+/// <see cref="Playback.Jukebox.LastError"/> is set), the <see cref="TransportRow"/> transport strip
+/// (which carries the "open in browser" button as its trailing entry), a seekable
+/// <see cref="ProgressSliderBar"/> with elapsed/total time labels beneath it, and a difficulty
+/// <see cref="DifficultySwitcher"/> dropdown.
 ///
 /// <para>
 /// Laid out VERTICALLY for a narrow (~340px) column: this used to be a full-width bar pinned along
 /// the bottom of the window, but that strip is gone — everything it carried now lives in the right
 /// column's "Playback" tab (see <see cref="PlaybackPanel"/>, which stacks this panel above the
-/// transport strip, the playback-speed slider and the per-beatmap offset row). This panel is
-/// chrome-less by design (no card of its own, no fixed height): it sizes to its content and sits
-/// directly on the owning column's surface rather than painting a second panel on top of it.
+/// playback-speed slider). This panel is chrome-less by design (no card of its own, no fixed
+/// height): it sizes to its content and sits directly on the owning column's surface rather than
+/// painting a second panel on top of it. Reading order is song → controls → position → difficulty:
+/// the transport sits directly under the song it acts on, above the progress bar rather than below
+/// the whole stack.
 /// </para>
 /// </summary>
 public partial class NowPlayingPanel : CompositeDrawable
 {
     private const float cover_size = 64;
-    private const float browser_button_size = 36;
 
     /// <summary>Room for the progress bar's hit area plus the elapsed/total labels below it.</summary>
     private const float progress_block_height = ProgressSliderBar.HitAreaHeight + Theme.CaptionTextSize + 4;
@@ -90,7 +92,7 @@ public partial class NowPlayingPanel : CompositeDrawable
     private SpriteText elapsedText = null!;
     private SpriteText totalText = null!;
     private DifficultySwitcher difficultySwitcher = null!;
-    private IconButton browserButton = null!;
+    private TransportRow transport = null!;
     private SpriteText statusText = null!;
     private FillFlowContainer songInfo = null!;
     private SpriteText titleText = null!;
@@ -116,9 +118,14 @@ public partial class NowPlayingPanel : CompositeDrawable
 
     /// <summary>
     /// Test-only access to the "open in browser" button (JukeBox.Game.Tests has
-    /// InternalsVisibleTo), to drive it via <see cref="Drawable.TriggerClick"/>.
+    /// InternalsVisibleTo), to drive it via <see cref="Drawable.TriggerClick"/> — it lives in the
+    /// transport strip (see <see cref="TransportRow.BrowserButton"/>), not in the title row.
     /// </summary>
-    internal IconButton BrowserButton => browserButton;
+    internal IconButton BrowserButton => transport.BrowserButton!;
+
+    /// <summary>Test-only access to the transport strip (JukeBox.Game.Tests has
+    /// InternalsVisibleTo), to assert where it sits in the stack.</summary>
+    internal TransportRow Transport => transport;
 
     /// <summary>Test-only access to the elapsed/total time labels (JukeBox.Game.Tests has
     /// InternalsVisibleTo).</summary>
@@ -161,17 +168,15 @@ public partial class NowPlayingPanel : CompositeDrawable
                                 Colour = Theme.ElevatedSurface,
                             },
                         },
-                        // Padding (rather than a positioned child) is what reserves the cover's and
-                        // the button's columns: the text inside is relatively sized, so it needs a
-                        // parent whose width is already the space actually left for it.
+                        // Padding (rather than a positioned child) is what reserves the cover's
+                        // column: the text inside is relatively sized, so it needs a parent whose
+                        // width is already the space actually left for it. The row's whole
+                        // remainder is the text's now — the browser button moved to the transport
+                        // strip below.
                         new Container
                         {
                             RelativeSizeAxes = Axes.Both,
-                            Padding = new MarginPadding
-                            {
-                                Left = cover_size + Theme.SectionSpacing,
-                                Right = browser_button_size + Theme.RowSpacing,
-                            },
+                            Padding = new MarginPadding { Left = cover_size + Theme.SectionSpacing },
                             Child = songInfo = new FillFlowContainer
                             {
                                 Anchor = Anchor.CentreLeft,
@@ -226,14 +231,6 @@ public partial class NowPlayingPanel : CompositeDrawable
                                 },
                             },
                         },
-                        browserButton = new IconButton
-                        {
-                            Anchor = Anchor.CentreRight,
-                            Origin = Anchor.CentreRight,
-                            Size = new Vector2(browser_button_size),
-                            Icon = FontAwesome.Solid.ExternalLinkAlt,
-                            Action = openInBrowser,
-                        },
                     },
                 },
                 statusText = new SpriteText
@@ -245,6 +242,20 @@ public partial class NowPlayingPanel : CompositeDrawable
                     // See songInfo's AlwaysPresent comment above — refreshStatus() fades this to 0
                     // then immediately back to 1.
                     AlwaysPresent = true,
+                },
+                // The transport is a cluster, not a row of full-width controls, so it's centred in
+                // its own full-width wrapper (a FillFlowContainer positions its children along the
+                // flow axis, so centring has to come from a wrapper rather than the child's own
+                // Anchor).
+                new Container
+                {
+                    RelativeSizeAxes = Axes.X,
+                    AutoSizeAxes = Axes.Y,
+                    Child = transport = new TransportRow(playback, jukebox, openInBrowser)
+                    {
+                        Anchor = Anchor.TopCentre,
+                        Origin = Anchor.TopCentre,
+                    },
                 },
                 // The progress bar spans the panel's full width, with its two time labels tucked
                 // underneath it (rather than flanking it, as they did while this was a wide bar —
