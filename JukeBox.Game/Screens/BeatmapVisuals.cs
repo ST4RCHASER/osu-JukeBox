@@ -107,6 +107,12 @@ public partial class BeatmapVisuals : CompositeDrawable
     [Resolved(canBeNull: true)]
     private BeatmapOffsetStore? offsetStore { get; set; }
 
+    // MainScreen's playerBox live pixel size (see its own [Cached] remarks) — resolved as
+    // nullable since only MainScreen's real hosting caches it; falls back to this Drawable's
+    // own (fixed-canvas) DrawSize wherever it isn't available (visual tests, catch mode).
+    [Resolved(canBeNull: true)]
+    private Bindable<Vector2>? playerBoxSize { get; set; }
+
     private readonly BindableDouble beatmapOffset = new();
     private readonly BindableDouble globalOffset = new();
 
@@ -505,7 +511,41 @@ public partial class BeatmapVisuals : CompositeDrawable
         }
         else
         {
-            chartContainer.Size = DrawSize;
+            // Taiko's own PlayfieldAdjustmentContainer already scales itself as a scale-invariant
+            // fraction of whatever aspect its parent hands it, including its own [5:4, 16:9]
+            // widescreen clamp — matching how real lazer's Player screen exposes the ruleset to
+            // the game window's REAL aspect directly, never an intermediate fixed-canvas one.
+            // Handing chartContainer this Drawable's own DrawSize (locked to MainScreen's fixed
+            // scene_width×scene_height design canvas) instead meant that whenever playerBox was
+            // wider than that canvas — the common case once a window/monitor is wide enough, or
+            // in focus mode where the box goes full-bleed — the CANVAS's own contain-fit
+            // letterboxing (purely an artefact of fitting a fixed-aspect canvas into a wider box,
+            // nothing to do with taiko's own clamp) left a margin down both sides of the lane
+            // that taiko's own clamp was never even asked about; the storyboard (not a
+            // chartContainer child) showed the exact same margin, confirming it wasn't
+            // taiko-specific. playerBoxSize is the box's REAL, live pixel size; dividing out the
+            // same base contain-fit scale MainScreen applies to sceneContainer (before its zoom
+            // multiply) converts it into this Drawable's own local units, handing chartContainer
+            // a size whose ASPECT matches the box's real aspect exactly — so it's taiko's own
+            // clamp, not an extra intermediate letterbox, that decides whether (and how) to
+            // letterbox from here on. std/mania are unaffected either way (their sizing is
+            // scale-invariant, see the catch-branch remarks above).
+            Vector2 available = DrawSize;
+
+            if (playerBoxSize != null)
+            {
+                Vector2 box = playerBoxSize.Value;
+
+                if (box.X > 0 && box.Y > 0 && DrawSize.X > 0 && DrawSize.Y > 0)
+                {
+                    float baseScale = Math.Min(box.X / DrawSize.X, box.Y / DrawSize.Y);
+
+                    if (baseScale > 0)
+                        available = new Vector2(box.X / baseScale, DrawSize.Y);
+                }
+            }
+
+            chartContainer.Size = available;
             chartContainer.Scale = Vector2.One;
         }
     }
