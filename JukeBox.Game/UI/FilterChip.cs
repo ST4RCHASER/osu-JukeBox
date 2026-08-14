@@ -23,10 +23,33 @@ internal partial class FilterChip : ClickableContainer
     public string Text { get; }
 
     private readonly Box background;
+    private readonly SpriteText label;
+
+    private bool compact;
 
     // Transforms (FadeColour) must only run after LoadComplete — see IconButton's `ready` field
     // for the same guard and reasoning.
     private bool ready;
+
+    /// <summary>
+    /// Dense presentation for the compact search style (see
+    /// <see cref="Configuration.SearchStyle.Compact"/>): smaller label and tighter padding, so an
+    /// expanded filter section costs less vertical room in the narrow docked column. Settable live
+    /// — the owning listing flips it when the style setting changes.
+    /// </summary>
+    public bool Compact
+    {
+        get => compact;
+        set
+        {
+            compact = value;
+            label.Font = FontUsage.Default.With(size: value ? Theme.CaptionTextSize - 1 : Theme.RowSecondaryTextSize);
+            label.Margin = value
+                ? new MarginPadding { Horizontal = 6, Vertical = 2 }
+                : new MarginPadding { Horizontal = 8, Vertical = 3 };
+            CornerRadius = value ? 8 : 10;
+        }
+    }
 
     public FilterChip(string text)
     {
@@ -42,7 +65,7 @@ internal partial class FilterChip : ClickableContainer
                 RelativeSizeAxes = Axes.Both,
                 Colour = Theme.ElevatedSurface,
             },
-            new SpriteText
+            label = new SpriteText
             {
                 Text = text,
                 Font = FontUsage.Default.With(size: Theme.RowSecondaryTextSize),

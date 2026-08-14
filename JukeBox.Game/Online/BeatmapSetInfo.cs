@@ -18,6 +18,11 @@ public class BeatmapSetInfo
     public bool Video { get; set; }
     public bool Storyboard { get; set; }
     public double Bpm { get; set; }
+    // osu-web schema `play_count`/`favourite_count` — parsed via the snake_case naming policy in
+    // ParseList, same as every other property here. Surfaced on the fullscreen listing's
+    // hover-expanded cards (FullscreenBeatmapCard's stats row).
+    public long PlayCount { get; set; }
+    public int FavouriteCount { get; set; }
     public System.DateTimeOffset? RankedDate { get; set; }
     public NamedIdInfo? Genre { get; set; }
     public NamedIdInfo? Language { get; set; }

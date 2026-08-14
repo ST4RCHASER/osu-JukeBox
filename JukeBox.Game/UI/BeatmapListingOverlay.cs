@@ -3,7 +3,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Threading.Tasks;
+using JukeBox.Game.Configuration;
 using JukeBox.Game.Online;
 using osu.Framework.Allocation;
 using osu.Framework.Bindables;
@@ -14,36 +14,28 @@ using osu.Framework.Graphics.Shapes;
 using osu.Framework.Graphics.Sprites;
 using osu.Framework.Graphics.UserInterface;
 using osu.Framework.Input.Events;
-using osu.Framework.Logging;
-using osu.Framework.Threading;
 using osuTK;
 using osuTK.Input;
 
 namespace JukeBox.Game.UI;
 
 /// <summary>
-/// osu!-web-style beatmap listing. A large keyword box drives a 300ms-debounced search against
-/// <see cref="IBeatmapMirror"/>, refined by collapsible chip filter rows (mode, category, genre,
-/// language, extras, sort, star range — see <see cref="createFiltersToggle"/>) and rendered as a
-/// scrollable grid of <see cref="BeatmapCard"/>s (two columns when wide enough, one when narrow —
-/// see <see cref="two_column_threshold"/>) with infinite scroll (the next page is requested
-/// whenever the scroll nears the bottom and the last page came back full).
-///
-/// Mode/category/extras/sort/stars are server-side parameters — changing them restarts the search
-/// at page 0. Genre and language are CLIENT-SIDE filters over the already-loaded results (the
-/// legacy mirror API can't express them), so their rows are captioned accordingly and flipping
-/// them never issues a request directly — but if the filtered results leave the viewport
-/// underfilled (possibly empty) while more pages exist, further pages are auto-chained, bounded
-/// by <see cref="max_auto_chain_pages"/> per user action, so a match on a later page still
-/// surfaces without the user being stuck on an unscrollable "no results".
+/// osu!-web-style beatmap listing — the docked/compact presentation. All search state (debounced
+/// keyword search, server-side filters, client-side genre/language filters, pagination,
+/// stale-response guard) lives in the owned <see cref="BeatmapSearchEngine"/>; this class is a
+/// VIEW over it: a keyword box and collapsible chip filter rows driving the engine's bindables,
+/// and a scrollable grid of <see cref="BeatmapCard"/>s (two columns when wide enough, one when
+/// narrow — see <see cref="two_column_threshold"/>) rebuilt off the engine's results, with
+/// infinite scroll. The fullscreen search style's <see cref="FullscreenListingOverlay"/> is a
+/// second view over the SAME engine (see <see cref="Engine"/>), so filters/query stay in sync
+/// across presentations with no duplicated search logic.
 ///
 /// Interaction contract (kept from the old SearchOverlay): typing anywhere opens it seeded with
 /// the char (<see cref="ShowWithInitialChar"/>); Up/Down move the highlighted card; Enter fires
 /// <see cref="SetPicked"/> with the selected card (falling back to the first) and closes the
 /// overlay; Escape closes it. Clicking a card fires <see cref="SetPicked"/> but keeps the listing
 /// open, so several sets can be queued in one browsing session. Download-disabled sets are dimmed
-/// and non-clickable (<see cref="ClickableContainer.Action"/> stays null). A slower, older search
-/// response can never overwrite a newer one (<see cref="searchSequence"/> guard).
+/// and non-clickable (<see cref="ClickableContainer.Action"/> stays null).
 ///
 /// <para>
 /// Also usable <b>docked</b> (see the constructor) — the three-column layout's permanent left
@@ -51,6 +43,14 @@ namespace JukeBox.Game.UI;
 /// load and never hidden again: <see cref="ShowWithInitialChar"/> only focuses and seeds the
 /// keyword box (no popping in/out), Escape blurs the keyword box instead of closing anything, and
 /// confirming a selection with Enter no longer closes the (non-existent, in this mode) overlay.
+/// </para>
+///
+/// <para>
+/// Presentation density follows <see cref="JukeBoxSetting.SearchStyle"/> live:
+/// <see cref="SearchStyle.Compact"/> renders dense half-height card rows
+/// (<see cref="BeatmapCard.Compact"/>), smaller chips and a filters section that DEFAULTS to
+/// collapsed; <see cref="SearchStyle.Fullscreen"/> keeps the roomier original presentation here
+/// (the big listing overlay is opened by <see cref="Screens.MainScreen"/> on top).
 /// </para>
 ///
 /// <para>
@@ -75,12 +75,19 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
     private bool filtersExpanded = true;
     private SpriteText filtersToggleText = null!;
 
+    /// <summary>
+    /// The search state machine this view renders. Owned here (created at construction, added as
+    /// an internal child so its debounce scheduler ticks with this drawable) and shared with the
+    /// fullscreen presentation — <see cref="Screens.MainScreen"/> passes it to
+    /// <see cref="FullscreenListingOverlay"/> so both views stay one engine.
+    /// </summary>
+    public BeatmapSearchEngine Engine { get; }
+
     public BeatmapListingOverlay(bool docked = false)
     {
         this.docked = docked;
+        Engine = new BeatmapSearchEngine();
     }
-    private const double debounce_ms = 300;
-    private const int page_size = 30;
 
     /// <summary>Cards that weren't already on screen fade+rise in, staggered by this many ms per
     /// card — capped at <see cref="max_stagger_cards"/> so a large page doesn't feel sluggish.</summary>
@@ -97,15 +104,6 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
     /// is requested.</summary>
     private const float scroll_load_threshold = 200;
 
-    /// <summary>
-    /// Cap on consecutive automatically-chained page fetches (pages requested without the user
-    /// scrolling — e.g. when the client-side genre/language filter reduces every loaded page to
-    /// fewer cards than fill the viewport, possibly zero). Bounded per user action so an
-    /// all-filtered result stream can't hammer the mirror indefinitely; the budget refreshes
-    /// whenever content becomes scrollable again or the user changes the search/filters.
-    /// </summary>
-    private const int max_auto_chain_pages = 5;
-
     private const float label_width = 92;
 
     public event Action<BeatmapSetInfo>? SetPicked;
@@ -119,20 +117,34 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
     /// </summary>
     public event Action? MapIdRequested;
 
-    [Resolved]
-    private IBeatmapMirror mirror { get; set; } = null!;
+    /// <summary>
+    /// Fired when the keyword box gains keyboard focus — under the fullscreen search style,
+    /// <see cref="Screens.MainScreen"/> responds by presenting <see cref="FullscreenListingOverlay"/>
+    /// ("opening search" covers both type-anywhere and focusing the docked box).
+    /// </summary>
+    public event Action? SearchBoxFocused;
+
+    [Resolved(canBeNull: true)]
+    private JukeBoxConfigManager? config { get; set; }
 
     private ListingSearchBox searchBox = null!;
     private FillFlowContainer<BeatmapCard> cardsFlow = null!;
     private BasicScrollContainer scroll = null!;
     private SpriteText statusText = null!;
 
+    private Bindable<SearchStyle> searchStyle = null!;
+
+    /// <summary>Every filter chip in the section, kept so <see cref="applyStyle"/> can flip their
+    /// density live when the style setting changes.</summary>
+    private readonly List<FilterChip> allChips = new List<FilterChip>();
+
+    private bool compactDensity;
+
     /// <summary>
     /// Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the keyword text box, to
     /// assert its seeded text/focus state (e.g. after <see cref="ShowWithInitialChar"/>) without
     /// depending on this panel's internal layout. Exposed as the public base type — <see
-    /// cref="ListingSearchBox"/> itself is a private nested type not reachable even with
-    /// InternalsVisibleTo.
+    /// cref="ListingSearchBox"/> itself is an internal type.
     /// </summary>
     internal AccentTextBox SearchBox => searchBox;
 
@@ -145,46 +157,12 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
     /// completes rather than only the instant <see cref="FiltersExpanded"/> flag.</summary>
     internal float FiltersBodyAlpha => filtersBody.Alpha;
 
-    private ScheduledDelegate? debounceDelegate;
-
-    // Guards against a slower, older search response overwriting the results of a newer one that
-    // happened to complete first. Bumped by every fetch (fresh search or next page), so a stale
-    // page-append can't interleave with a newer fresh search either.
-    private int searchSequence;
-
     private int selectedIndex = -1;
-
-    // ---- Server-side filter state (any change restarts the search at page 0) -----------------
-
-    private string? mode;                                  // NeriNyan `m`: "o"/"t"/"c"/"m", null = any
-    private string category = "ranked";                    // NeriNyan `s`
-    private bool hasVideo, hasStoryboard;                  // NeriNyan `e`
-    private string sortKey = "ranked";                     // `sort` = {key}_{asc|desc}
-    private bool sortDescending = true;
-
-    private readonly BindableDouble minStars = new BindableDouble { MinValue = 0, MaxValue = 10, Precision = 0.1 };
-    private readonly BindableDouble maxStars = new BindableDouble(10) { MinValue = 0, MaxValue = 10, Precision = 0.1 };
-
-    // ---- Client-side filter state (re-filters loaded results, never issues a request) --------
-
-    private int? genreId;
-    private int? languageId;
-
-    // ---- Pagination -----------------------------------------------------------------------------
-
-    private readonly List<BeatmapSetInfo> loadedSets = new List<BeatmapSetInfo>();
-    private int currentPage;
-    private bool isLoading;
-    private bool hasMore;
 
     /// <summary>Sets already rendered as of the last <see cref="rebuildCards"/> call — only cards
     /// for sets NOT in here animate in, so an already-visible card never re-flickers on an
     /// unrelated rebuild (e.g. a page append, or a client-side filter toggle).</summary>
     private readonly HashSet<BeatmapSetInfo> previouslyShownSets = new HashSet<BeatmapSetInfo>();
-
-    /// <summary>Auto-chained fetches consumed since the last user action — see
-    /// <see cref="max_auto_chain_pages"/>.</summary>
-    private int autoChainedPages;
 
     /// <summary>Frames to skip auto-fetch decisions for after a card rebuild, while the flow's
     /// autosize/scroll extents still reflect the previous content (or nothing at all).</summary>
@@ -197,6 +175,7 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
 
         InternalChildren = new Drawable[]
         {
+            Engine,
             new Box
             {
                 RelativeSizeAxes = Axes.Both,
@@ -235,25 +214,67 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
                 },
             },
         };
+
+        searchBox.Current = Engine.Query;
     }
 
     protected override void LoadComplete()
     {
         base.LoadComplete();
 
-        searchBox.Current.BindValueChanged(_ => scheduleSearch());
         searchBox.OnCommit += (_, _) => confirmSelection();
 
-        minStars.BindValueChanged(_ => scheduleSearch());
-        maxStars.BindValueChanged(_ => scheduleSearch());
+        Engine.ResultsChanged += fresh =>
+        {
+            if (fresh)
+                scroll.ScrollToStart();
 
-        updateFiltersExpanded();
+            rebuildCards();
+        };
+
+        Engine.Status.BindValueChanged(e => statusText.Text = e.NewValue, true);
+
+        // Presentation density (and the filters section's expand default) follows the style
+        // setting live — see the class summary. Standalone construction without a config manager
+        // (bare test scenes) just stays on the Compact default.
+        searchStyle = config?.GetBindable<SearchStyle>(JukeBoxSetting.SearchStyle)
+                      ?? new Bindable<SearchStyle>(SearchStyle.Compact);
+        searchStyle.BindValueChanged(e => applyStyle(e.NewValue), true);
 
         // Docked instances are the three-column layout's permanent left column: shown once here
         // and never hidden again (see the class summary and the docked guards throughout).
         if (docked)
             Show();
     }
+
+    /// <summary>
+    /// Applies the style's density: compact flips the chips dense, collapses the filters section
+    /// (its default state — the user can still expand it) and rebuilds the cards as dense rows;
+    /// fullscreen restores the roomier original presentation.
+    /// </summary>
+    private void applyStyle(SearchStyle style)
+    {
+        compactDensity = style == SearchStyle.Compact;
+
+        foreach (var chip in allChips)
+            chip.Compact = compactDensity;
+
+        filtersExpanded = !compactDensity;
+        updateFiltersExpanded();
+
+        // The initial application (the immediate BindValueChanged callback at LoadComplete) must
+        // land instantly — a compact-style listing shouldn't open with its filter section
+        // visibly fading away.
+        if (!styleInitialised)
+        {
+            styleInitialised = true;
+            filtersBody.FinishTransforms();
+        }
+
+        rebuildCards();
+    }
+
+    private bool styleInitialised;
 
     private Drawable createHeader()
     {
@@ -283,6 +304,7 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
                             Padding = new MarginPadding { Right = 48 },
                             PlaceholderText = "type in keywords…",
                             Exit = docked ? unfocusSearch : Hide,
+                            Focused = () => SearchBoxFocused?.Invoke(),
                         },
                         new IconButton
                         {
@@ -312,40 +334,40 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
                         Spacing = new Vector2(0, Theme.RowSpacing),
                         Children = new[]
                         {
-                            createChipRow("Mode", null, singleSelect(new (string, string?)[]
+                            chipRow("Mode", null, ListingFilterRows.SingleSelect(new (string, string?)[]
                             {
                                 ("Any", null), ("osu!", "o"), ("taiko", "t"), ("catch", "c"), ("mania", "m"),
-                            }, mode, v => { mode = v; scheduleSearch(); })),
-                            createChipRow("Categories", null, singleSelect(new (string, string)[]
+                            }, Engine.Mode)),
+                            chipRow("Categories", null, ListingFilterRows.SingleSelect(new (string, string)[]
                             {
                                 ("Any", "all"), ("Ranked", "ranked"), ("Qualified", "qualified"), ("Loved", "loved"),
                                 ("Pending", "pending"), ("WIP", "wip"), ("Graveyard", "graveyard"),
-                            }, category, v => { category = v; scheduleSearch(); })),
-                            createChipRow("Genre", "filters loaded results", singleSelect(new (string, int?)[]
+                            }, Engine.Category)),
+                            chipRow("Genre", "filters loaded results", ListingFilterRows.SingleSelect(new (string, int?)[]
                             {
                                 ("Any", null), ("Video Game", 2), ("Anime", 3), ("Rock", 4), ("Pop", 5), ("Other", 6),
                                 ("Novelty", 7), ("Hip Hop", 9), ("Electronic", 10), ("Metal", 11), ("Classical", 12),
                                 ("Folk", 13), ("Jazz", 14),
-                            }, genreId, v => { genreId = v; applyClientFilterChange(); })),
-                            createChipRow("Language", "filters loaded results", singleSelect(new (string, int?)[]
+                            }, Engine.GenreId)),
+                            chipRow("Language", "filters loaded results", ListingFilterRows.SingleSelect(new (string, int?)[]
                             {
                                 ("Any", null), ("English", 2), ("Japanese", 3), ("Chinese", 4), ("Korean", 6),
                                 ("Instrumental", 5), ("German", 8), ("French", 7), ("Italian", 11), ("Spanish", 10),
                                 ("Swedish", 9), ("Russian", 12), ("Polish", 13), ("Other", 14),
-                            }, languageId, v => { languageId = v; applyClientFilterChange(); })),
-                            createChipRow("Extra", null, new[]
+                            }, Engine.LanguageId)),
+                            chipRow("Extra", null, new[]
                             {
-                                toggleChip("Has Video", v => { hasVideo = v; scheduleSearch(); }),
-                                toggleChip("Has Storyboard", v => { hasStoryboard = v; scheduleSearch(); }),
+                                ListingFilterRows.Toggle("Has Video", Engine.HasVideo),
+                                ListingFilterRows.Toggle("Has Storyboard", Engine.HasStoryboard),
                             }),
-                            createChipRow("Sort", null, singleSelect(new (string, string)[]
+                            chipRow("Sort", null, ListingFilterRows.SingleSelect(new (string, string)[]
                             {
                                 ("Ranked", "ranked"), ("Plays", "plays"), ("Favourites", "favourites"),
                                 ("Difficulty", "difficulty"), ("Updated", "updated"), ("Title", "title"),
-                            }, sortKey, v => { sortKey = v; scheduleSearch(); }).Concat(singleSelect(new (string, bool)[]
+                            }, Engine.SortKey).Concat(ListingFilterRows.SingleSelect(new (string, bool)[]
                             {
                                 ("desc", true), ("asc", false),
-                            }, sortDescending, v => { sortDescending = v; scheduleSearch(); })).ToArray()),
+                            }, Engine.SortDescending)).ToArray()),
                             createStarsRow(),
                         },
                     },
@@ -357,6 +379,15 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
                 },
             },
         };
+    }
+
+    /// <summary>Builds one labelled chip row via the shared factory, remembering the chips for
+    /// live density switching (<see cref="applyStyle"/>).</summary>
+    private Drawable chipRow(string label, string? note, FilterChip[] chips)
+    {
+        allChips.AddRange(chips);
+        // ReSharper disable once CoVariantArrayConversion
+        return ListingFilterRows.CreateChipRow(label, note, label_width, chips);
     }
 
     /// <summary>
@@ -413,88 +444,6 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
 
     private void unfocusSearch() => GetContainingFocusManager()?.ChangeFocus(null);
 
-    /// <summary>
-    /// Builds a mutually-exclusive chip group: clicking a chip activates it, deactivates its
-    /// siblings and applies its value. The chip matching <paramref name="initial"/> starts active.
-    /// </summary>
-    private static FilterChip[] singleSelect<T>((string text, T value)[] options, T initial, Action<T> apply)
-    {
-        var chips = options.Select(o => new FilterChip(o.text)).ToArray();
-
-        for (int i = 0; i < options.Length; i++)
-        {
-            int index = i;
-            chips[i].Active.Value = EqualityComparer<T>.Default.Equals(options[i].value, initial);
-            chips[i].Action = () =>
-            {
-                if (chips[index].Active.Value)
-                    return; // already selected — don't restart the search for a no-op.
-
-                foreach (var c in chips)
-                    c.Active.Value = false;
-
-                chips[index].Active.Value = true;
-                apply(options[index].value);
-            };
-        }
-
-        return chips;
-    }
-
-    /// <summary>An independently-toggleable chip (the multi-select Extra row).</summary>
-    private static FilterChip toggleChip(string text, Action<bool> apply)
-    {
-        var chip = new FilterChip(text);
-        chip.Action = () =>
-        {
-            chip.Active.Value = !chip.Active.Value;
-            apply(chip.Active.Value);
-        };
-        return chip;
-    }
-
-    private static Drawable createChipRow(string label, string? note, FilterChip[] chips)
-    {
-        var row = new FillFlowContainer
-        {
-            RelativeSizeAxes = Axes.X,
-            AutoSizeAxes = Axes.Y,
-            Direction = FillDirection.Full,
-            Spacing = new Vector2(6, 6),
-        };
-
-        row.Add(createRowLabel(label));
-
-        foreach (var chip in chips)
-            row.Add(chip);
-
-        if (note != null)
-        {
-            row.Add(new SpriteText
-            {
-                Text = $"({note})",
-                Font = FontUsage.Default.With(size: Theme.CaptionTextSize),
-                Colour = Theme.TextTertiary,
-                Margin = new MarginPadding { Left = 4, Top = 4 },
-            });
-        }
-
-        return row;
-    }
-
-    private static Drawable createRowLabel(string label) => new Container
-    {
-        Width = label_width,
-        AutoSizeAxes = Axes.Y,
-        Child = new SpriteText
-        {
-            Text = label,
-            Font = FontUsage.Default.With(size: Theme.RowSecondaryTextSize),
-            Colour = Theme.TextSecondary,
-            Margin = new MarginPadding { Top = 3 },
-        },
-    };
-
     private Drawable createStarsRow()
     {
         SpriteText minText, maxText;
@@ -507,11 +456,11 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
             Spacing = new Vector2(6, 6),
             Children = new[]
             {
-                createRowLabel("Stars"),
+                ListingFilterRows.CreateRowLabel("Stars", label_width),
                 new BasicSliderBar<double>
                 {
                     Size = new Vector2(130, 16),
-                    Current = minStars,
+                    Current = Engine.MinStars,
                     BackgroundColour = Theme.ElevatedSurface,
                     SelectionColour = Theme.AccentDim,
                 },
@@ -524,7 +473,7 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
                 new BasicSliderBar<double>
                 {
                     Size = new Vector2(130, 16),
-                    Current = maxStars,
+                    Current = Engine.MaxStars,
                     BackgroundColour = Theme.ElevatedSurface,
                     SelectionColour = Theme.AccentDim,
                 },
@@ -537,9 +486,10 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
             },
         };
 
-        // "any" at the rails (0 for min, 10 for max) — matching how buildRequest omits the bound.
-        minStars.BindValueChanged(e => minText.Text = e.NewValue > 0 ? $"min {e.NewValue:0.0}★" : "min any", true);
-        maxStars.BindValueChanged(e => maxText.Text = e.NewValue < 10 ? $"max {e.NewValue:0.0}★" : "max any", true);
+        // "any" at the rails (0 for min, 10 for max) — matching how the engine's BuildRequest
+        // omits the bound.
+        Engine.MinStars.BindValueChanged(e => minText.Text = e.NewValue > 0 ? $"min {e.NewValue:0.0}★" : "min any", true);
+        Engine.MaxStars.BindValueChanged(e => maxText.Text = e.NewValue < 10 ? $"max {e.NewValue:0.0}★" : "max any", true);
 
         return row;
     }
@@ -574,7 +524,7 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
 
         // Cancel any pending debounced search so it doesn't fire (and mutate results) after the
         // overlay has closed.
-        debounceDelegate?.Cancel();
+        Engine.CancelPendingSearch();
     }
 
     protected override bool OnKeyDown(KeyDownEvent e)
@@ -657,14 +607,6 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
         SetPicked?.Invoke(card.Set);
     }
 
-    // ---- Search / pagination ---------------------------------------------------------------------
-
-    private void scheduleSearch()
-    {
-        debounceDelegate?.Cancel();
-        debounceDelegate = Scheduler.AddDelayed(() => { _ = runSearchAsync(fresh: true); }, debounce_ms);
-    }
-
     protected override void Update()
     {
         base.Update();
@@ -693,156 +635,20 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
             return;
         }
 
-        // Driven off the RAW loaded count, not the filtered card count: the client-side
-        // genre/language filter can legitimately reduce a full page to zero visible cards, and
-        // later pages may still contain matches.
-        if (State.Value != Visibility.Visible || isLoading || !hasMore || loadedSets.Count == 0)
+        if (State.Value != Visibility.Visible)
             return;
 
-        if (scroll.AvailableContent > scroll.DisplayableContent + 1)
-        {
-            // Content overflows the viewport: further paging is user-driven (infinite scroll), so
-            // the auto-chain budget refreshes for whenever the next stall happens.
-            autoChainedPages = 0;
-
-            if (scroll.IsScrolledToEnd(scroll_load_threshold))
-                _ = runSearchAsync(fresh: false);
-        }
-        else if (autoChainedPages < max_auto_chain_pages)
-        {
-            // Loaded content doesn't fill the viewport — possibly zero visible cards after the
-            // client-side filter — so the user has nothing to scroll and infinite scroll could
-            // never trigger. Chain the next page automatically, bounded per user action.
-            autoChainedPages++;
-            _ = runSearchAsync(fresh: false);
-        }
-        else if (cardsFlow.Count == 0)
-        {
-            statusText.Text = $"no matches in the first {loadedSets.Count} loaded results — refine the filters or keywords";
-        }
+        Engine.UpdatePaging(
+            contentOverflows: scroll.AvailableContent > scroll.DisplayableContent + 1,
+            nearEnd: scroll.IsScrolledToEnd(scroll_load_threshold));
     }
 
     private float lastCardWidth;
-
-    internal SearchRequest BuildRequest(int page)
-    {
-        double? min = minStars.Value > 0 ? minStars.Value : null;
-        double? max = maxStars.Value < 10 ? maxStars.Value : null;
-
-        // The two sliders are independent; if they cross, treat the crossed pair as an
-        // empty-but-valid band rather than sending an inverted range.
-        if (min != null && max != null && min > max)
-            (min, max) = (max, min);
-
-        return new SearchRequest
-        {
-            Query = searchBox.Text,
-            Page = page,
-            PageSize = page_size,
-            Status = category,
-            Sort = $"{sortKey}_{(sortDescending ? "desc" : "asc")}",
-            Mode = mode,
-            Extra = hasVideo && hasStoryboard ? SearchExtra.VideoAndStoryboard
-                : hasVideo ? SearchExtra.Video
-                : hasStoryboard ? SearchExtra.Storyboard
-                : SearchExtra.None,
-            MinStars = min,
-            MaxStars = max,
-        };
-    }
-
-    private async Task runSearchAsync(bool fresh)
-    {
-        int mySequence = ++searchSequence;
-        int page = fresh ? 0 : currentPage + 1;
-
-        isLoading = true;
-        Schedule(() => statusText.Text = fresh ? "searching…" : "loading more…");
-
-        var request = BuildRequest(page);
-
-        List<BeatmapSetInfo> results;
-
-        try
-        {
-            results = await mirror.SearchAsync(request).ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            Logger.Error(ex, "Beatmap search failed");
-            results = new List<BeatmapSetInfo>();
-        }
-
-        Schedule(() =>
-        {
-            // A newer search superseded this one while it was in flight — drop this response
-            // (the superseding search resets isLoading when it completes).
-            if (mySequence != searchSequence)
-                return;
-
-            isLoading = false;
-            currentPage = page;
-            hasMore = results.Count >= page_size;
-
-            if (fresh)
-            {
-                loadedSets.Clear();
-                scroll.ScrollToStart();
-
-                // A fresh search is a user action — the auto-chain budget starts over.
-                autoChainedPages = 0;
-            }
-
-            loadedSets.AddRange(results);
-            rebuildCards();
-        });
-    }
-
-    /// <summary>
-    /// Whether <paramref name="set"/> passes the client-side genre/language filters — the legacy
-    /// mirror search can't express either, so they're applied to loaded results instead. A set
-    /// with no genre/language assigned (NeriNyan serves nulls) only passes the "Any" filter.
-    /// </summary>
-    internal static bool MatchesClientFilters(BeatmapSetInfo set, int? genreId, int? languageId)
-        => (genreId == null || set.Genre?.Id == genreId)
-           && (languageId == null || set.Language?.Id == languageId);
-
-    /// <summary>
-    /// The base <see cref="osu.Framework.Graphics.UserInterface.TextBox"/> consumes the first
-    /// Escape itself (killing only its own focus), which would force a second press to actually
-    /// close the listing. Redirecting Escape to <see cref="Exit"/> makes a single press close it,
-    /// matching the "Esc closes" contract.
-    /// </summary>
-    private partial class ListingSearchBox : AccentTextBox
-    {
-        public Action? Exit;
-
-        protected override bool OnKeyDown(KeyDownEvent e)
-        {
-            if (e.Key == Key.Escape)
-            {
-                if (!e.Repeat)
-                    Exit?.Invoke();
-                return true;
-            }
-
-            return base.OnKeyDown(e);
-        }
-    }
 
     /// <summary>A dedicated (rather than anonymous) type for the "Filters" expander header purely
     /// so tests can locate it via <c>ChildrenOfType&lt;FiltersToggleButton&gt;</c>.</summary>
     private partial class FiltersToggleButton : ClickableContainer
     {
-    }
-
-    /// <summary>Genre/language changed — a user action: reset the auto-chain budget and
-    /// re-filter the loaded results. If the new filter leaves the viewport underfilled (or
-    /// empty) with more pages available, <see cref="Update"/> auto-chains further fetches.</summary>
-    private void applyClientFilterChange()
-    {
-        autoChainedPages = 0;
-        rebuildCards();
     }
 
     private void rebuildCards()
@@ -851,22 +657,19 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
         selectedIndex = -1;
         settleFrames = 2;
 
-        var visible = loadedSets.Where(s => MatchesClientFilters(s, genreId, languageId)).ToList();
+        var visible = Engine.VisibleSets.ToList();
 
         if (visible.Count == 0)
         {
-            statusText.Text = loadedSets.Count == 0 ? "no results" : "no results (client-side genre/language filter)";
             previouslyShownSets.Clear();
             return;
         }
-
-        statusText.Text = string.Empty;
 
         int newCardIndex = 0;
 
         foreach (var set in visible)
         {
-            var card = new BeatmapCard(set);
+            var card = new BeatmapCard(set, compactDensity);
 
             if (lastCardWidth > 0)
                 card.Width = lastCardWidth;
