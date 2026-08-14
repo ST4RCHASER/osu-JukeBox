@@ -177,31 +177,59 @@ namespace JukeBox.Game.Tests.Visual
         }
 
         [Test]
-        public void HoveringACardExpandsItsDifficultyList()
+        public void HoveringACardShowsOneFloatingExpansionWithoutReflowingTheGrid()
         {
             AddStep("open seeded with 'a'", () => fullscreen.ShowWithInitialChar('a'));
             AddUntilStep("cards shown", () => fullscreen.ChildrenOfType<FullscreenBeatmapCard>().Count() == 3);
             AddUntilStep("entrance settled", () => fullscreen.SlidePanel.Y == 0);
 
-            FullscreenBeatmapCard card = null!;
-            AddStep("grab the 3-difficulty card", () => card = fullscreen.ChildrenOfType<FullscreenBeatmapCard>().Single(c => c.Set.Id == 1));
+            var positionsBefore = new Dictionary<int, osuTK.Vector2>();
+            AddStep("record every card's screen position", () => positionsBefore = fullscreen.ChildrenOfType<FullscreenBeatmapCard>()
+                .ToDictionary(c => c.Set.Id, c => c.ScreenSpaceDrawQuad.TopLeft));
 
-            AddAssert("expansion hidden before hover", () => card.ExpandedPanel.Alpha == 0);
+            FullscreenBeatmapCard card1 = null!, card2 = null!;
+            AddStep("grab two cards", () =>
+            {
+                card1 = fullscreen.ChildrenOfType<FullscreenBeatmapCard>().Single(c => c.Set.Id == 1);
+                card2 = fullscreen.ChildrenOfType<FullscreenBeatmapCard>().Single(c => c.Set.Id == 2);
+            });
 
-            AddStep("hover the card", () => InputManager.MoveMouseTo(card));
-            AddUntilStep("expansion fully visible", () => card.ExpandedPanel.Alpha == 1);
+            AddAssert("nothing expanded before hover", () => fullscreen.Expansion == null && fullscreen.ExpandedCard == null);
+
+            AddStep("hover the 3-difficulty card", () => InputManager.MoveMouseTo(card1));
+            AddUntilStep("its floating expansion is fully visible", () => fullscreen.Expansion?.Alpha == 1);
+            AddAssert("that card owns the expansion (accent border state)", () => fullscreen.ExpandedCard == card1 && card1.Expanded.Value);
 
             AddAssert("one row per difficulty, sourced from beatmaps[]", () =>
-                card.ExpandedPanel.ChildrenOfType<FullscreenBeatmapCard.DifficultyRow>().Count() == card.Set.Beatmaps.Count);
+                fullscreen.Expansion!.ChildrenOfType<FullscreenBeatmapCard.DifficultyRow>().Count() == card1.Set.Beatmaps.Count);
             AddAssert("rows sorted ascending by stars", () =>
             {
-                var stars = card.ExpandedPanel.ChildrenOfType<FullscreenBeatmapCard.DifficultyRow>()
+                var stars = fullscreen.Expansion!.ChildrenOfType<FullscreenBeatmapCard.DifficultyRow>()
                                 .Select(r => r.Beatmap.DifficultyRating).ToList();
                 return stars.SequenceEqual(stars.OrderBy(s => s));
             });
 
+            // The core of the reflow bug: expansion must never move ANY card in the grid.
+            AddAssert("every card's grid position is unchanged while expanded", () =>
+                fullscreen.ChildrenOfType<FullscreenBeatmapCard>().All(c =>
+                    osuTK.Vector2.Distance(c.ScreenSpaceDrawQuad.TopLeft, positionsBefore[c.Set.Id]) < 0.5f));
+
+            // Exactly one expansion at a time: hovering another card MOVES it, never adds one.
+            AddStep("hover the neighbouring card", () => InputManager.MoveMouseTo(card2));
+            AddUntilStep("expansion moved to the neighbour", () => fullscreen.ExpandedCard == card2 && card2.Expanded.Value);
+            AddAssert("previous card released its expanded state", () => !card1.Expanded.Value);
+            AddUntilStep("only one expansion panel alive", () =>
+                fullscreen.ChildrenOfType<FullscreenListingOverlay.CardExpansion>().Count() == 1);
+            AddAssert("grid still never moved", () =>
+                fullscreen.ChildrenOfType<FullscreenBeatmapCard>().All(c =>
+                    osuTK.Vector2.Distance(c.ScreenSpaceDrawQuad.TopLeft, positionsBefore[c.Set.Id]) < 0.5f));
+
             AddStep("move the mouse away", () => InputManager.MoveMouseTo(fullscreen.SearchBox));
-            AddUntilStep("expansion hidden again", () => card.ExpandedPanel.Alpha == 0);
+            AddUntilStep("expansion collapsed", () => fullscreen.Expansion == null && fullscreen.ExpandedCard == null);
+            AddUntilStep("no expansion panels left in the tree", () =>
+                !fullscreen.ChildrenOfType<FullscreenListingOverlay.CardExpansion>().Any());
+            AddAssert("no card left with the expanded border", () =>
+                fullscreen.ChildrenOfType<FullscreenBeatmapCard>().All(c => !c.Expanded.Value));
         }
 
         [Test]

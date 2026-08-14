@@ -26,15 +26,15 @@ namespace JukeBox.Game.UI;
 /// listing card. Collapsed it shows the cover, title / "by artist" / "mapped by creator", a stats
 /// row (▶ play count, ♥ favourite count, ✓ ranked date), the status pill and mini difficulty
 /// dots, a ▶ preview button over the left thumb area, a ♥+count (display only — no account, so
-/// non-interactive) and a ⬇ queue button. On hover it EXPANDS (accent border + a panel unfolding
-/// below, drawn over the following grid rows — see <see cref="ExpandedPanel"/> and the owning
-/// overlay's depth-raising) listing every difficulty as its own row: mode icon, a star pill
-/// coloured by <see cref="Theme.DifficultyColour"/> (value to 2dp) and the version name, sorted
-/// ascending by stars.
+/// non-interactive) and a ⬇ queue button.
 ///
-/// The expanded panel deliberately does NOT change this card's flow size (the grid would reflow) —
-/// it overhangs the card's bounds, so <see cref="ReceivePositionalInputAt"/> is widened to keep
-/// hover alive while the cursor is over the panel.
+/// The hover EXPANSION (accent border + the per-difficulty list unfolding below) is NOT this
+/// card's concern: the card only reports hover via <see cref="HoverChanged"/> and shows the
+/// accent border while <see cref="Expanded"/>. The owning overlay renders the difficulty panel as
+/// a floating layer ABOVE the grid at this card's position (see
+/// <c>FullscreenListingOverlay.CardExpansion</c>) — the card's own flow footprint NEVER changes,
+/// so hovering can never reflow the grid, and the overlay enforces that exactly one card is
+/// expanded at a time.
 /// </summary>
 public partial class FullscreenBeatmapCard : ClickableContainer
 {
@@ -46,16 +46,16 @@ public partial class FullscreenBeatmapCard : ClickableContainer
 
     public BeatmapSetInfo Set { get; }
 
-    /// <summary>Layout position in the owning grid — the grid's flow order follows this (not
-    /// Depth), so the owning overlay can raise a hovered card's Depth to draw its expanded panel
-    /// over the neighbouring cards without reflowing the grid.</summary>
-    public int FlowIndex { get; }
-
     /// <summary>Driven by the owning overlay's keyboard navigation (accent border highlight).</summary>
     public readonly BindableBool Selected = new();
 
-    /// <summary>The hovered state changed — the owning overlay raises/restores this card's depth
-    /// in the grid so the expanded panel overlays its neighbours.</summary>
+    /// <summary>Set by the owning overlay while this card owns the (single) floating expansion —
+    /// drives the accent border, so the border always matches the actually-expanded card rather
+    /// than raw hover.</summary>
+    public readonly BindableBool Expanded = new();
+
+    /// <summary>The hovered state changed — the owning overlay uses this to move its single
+    /// floating expansion between cards (see the class summary).</summary>
     public event Action<FullscreenBeatmapCard, bool>? HoverChanged;
 
     /// <summary>▶ preview button clicked — the owning overlay routes this to its
@@ -70,22 +70,21 @@ public partial class FullscreenBeatmapCard : ClickableContainer
     private OnlineThumbnailStore? thumbnailStore { get; set; }
 
     private Container content = null!;
-    private Container expandedPanel = null!;
     private Container coverContainer = null!;
     private IconButton previewButton = null!;
-
-    /// <summary>Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the hover
-    /// expansion panel, to assert its visibility and difficulty rows.</summary>
-    internal Container ExpandedPanel => expandedPanel;
 
     /// <summary>Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the ▶ preview
     /// button, to click it without depending on internal layout.</summary>
     internal IconButton PreviewButton => previewButton;
 
-    public FullscreenBeatmapCard(BeatmapSetInfo set, int flowIndex)
+    /// <summary>The horizontal/vertical inset between this drawable's bounds and the visible card
+    /// (the grid gutter) — the owning overlay's floating expansion aligns to the visible card,
+    /// not the padded bounds.</summary>
+    public const float GUTTER = gutter;
+
+    public FullscreenBeatmapCard(BeatmapSetInfo set)
     {
         Set = set;
-        FlowIndex = flowIndex;
         Width = 400;
         Height = HEIGHT;
     }
@@ -218,13 +217,13 @@ public partial class FullscreenBeatmapCard : ClickableContainer
                     },
                 },
             },
-            expandedPanel = createExpandedPanel(),
         };
 
         if (Set.DownloadDisabled)
             Alpha = 0.4f;
 
         Selected.BindValueChanged(_ => updateBorder(), true);
+        Expanded.BindValueChanged(_ => updateBorder(), true);
         PreviewingSetId.BindValueChanged(e => previewButton.Icon = e.NewValue == Set.Id ? FontAwesome.Solid.Stop : FontAwesome.Solid.Play, true);
 
         _ = loadCoverAsync();
@@ -343,56 +342,8 @@ public partial class FullscreenBeatmapCard : ClickableContainer
         },
     };
 
-    /// <summary>
-    /// The per-difficulty list unfolding below the card on hover. Positioned just past the card's
-    /// own (fixed) height, so it overhangs the grid row below — the owning overlay raises this
-    /// card's depth while hovered so the panel draws (and hit-tests) above the neighbours.
-    /// </summary>
-    private Container createExpandedPanel()
-    {
-        var rows = new FillFlowContainer
-        {
-            RelativeSizeAxes = Axes.X,
-            AutoSizeAxes = Axes.Y,
-            Direction = FillDirection.Vertical,
-            Padding = new MarginPadding(8),
-            Spacing = new Vector2(0, 4),
-        };
-
-        foreach (var beatmap in Set.Beatmaps.OrderBy(b => b.DifficultyRating))
-            rows.Add(new DifficultyRow(beatmap));
-
-        return new Container
-        {
-            Anchor = Anchor.BottomLeft,
-            Origin = Anchor.TopLeft,
-            // Tucks slightly under the card so the pair reads as one grown card, not two stacked.
-            Y = -Theme.CornerRadius,
-            RelativeSizeAxes = Axes.X,
-            AutoSizeAxes = Axes.Y,
-            Masking = true,
-            CornerRadius = Theme.CornerRadius,
-            BorderColour = Theme.Accent,
-            Alpha = 0,
-            Children = new Drawable[]
-            {
-                new Box
-                {
-                    RelativeSizeAxes = Axes.Both,
-                    Colour = Theme.PanelSurface,
-                },
-                new Container
-                {
-                    RelativeSizeAxes = Axes.X,
-                    AutoSizeAxes = Axes.Y,
-                    Padding = new MarginPadding { Top = Theme.CornerRadius },
-                    Child = rows,
-                },
-            },
-        };
-    }
-
-    /// <summary>One difficulty in the hover expansion: mode icon + star pill + version name.</summary>
+    /// <summary>One difficulty in the hover expansion: mode icon + star pill + version name.
+    /// Constructed by the owning overlay's floating expansion (see the class summary).</summary>
     internal partial class DifficultyRow : FillFlowContainer
     {
         public BeatmapInfo Beatmap { get; }
@@ -476,40 +427,25 @@ public partial class FullscreenBeatmapCard : ClickableContainer
         };
     }
 
-    /// <summary>Widened so hover survives while the cursor is over the (overhanging) expanded
-    /// panel — see the class summary.</summary>
-    public override bool ReceivePositionalInputAt(Vector2 screenSpacePos)
-        => base.ReceivePositionalInputAt(screenSpacePos)
-           || (expandedPanel.Alpha > 0 && expandedPanel.ScreenSpaceDrawQuad.Contains(screenSpacePos));
-
+    // No scale, no size change, no widened hit area on hover — anything that grows this card's
+    // flow footprint (even a 1% scale) can push a grid row over the wrap threshold and reflow the
+    // whole grid mid-hover (the exact bug this design replaces). The card only REPORTS hover;
+    // everything visual about expansion happens in the overlay's floating layer.
     protected override bool OnHover(HoverEvent e)
     {
         if (Enabled.Value)
-        {
-            expandedPanel.FadeIn(Theme.DurationFast, Theme.EaseEnter);
-            this.ScaleTo(1.01f, Theme.DurationFast, Theme.EaseEnter);
-            updateBorder();
             HoverChanged?.Invoke(this, true);
-        }
 
         return base.OnHover(e);
     }
 
     protected override void OnHoverLost(HoverLostEvent e)
     {
-        expandedPanel.FadeOut(Theme.DurationFast, Theme.EaseExit);
-        this.ScaleTo(1f, Theme.DurationFast, Theme.EaseExit);
-        updateBorder();
         HoverChanged?.Invoke(this, false);
         base.OnHoverLost(e);
     }
 
-    private void updateBorder()
-    {
-        bool highlighted = Selected.Value || (IsHovered && Enabled.Value);
-        content.BorderThickness = highlighted ? 3 : 0;
-        expandedPanel.BorderThickness = IsHovered && Enabled.Value ? 3 : 0;
-    }
+    private void updateBorder() => content.BorderThickness = Selected.Value || Expanded.Value ? 3 : 0;
 
     private async Task loadCoverAsync()
     {
