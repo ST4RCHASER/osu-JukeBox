@@ -1269,6 +1269,140 @@ namespace JukeBox.Game.Tests.Visual
             });
         }
 
+        // Regression coverage for reopen #8, this time confirmed via a real windowed screenshot
+        // harness (TakeScreenshotAsync, a genuine GameHost window — headless geometry assertions
+        // alone had been exhausted across several prior rounds): a beatmap-provided legacy taiko
+        // skin's drum hit-flash (LegacyHalfDrum's Rim/Centre sprites) rendered as a half-disc
+        // hanging off the BOTTOM of the drum's own box on every hit.
+        //
+        // Root cause: LegacyHalfDrum.load() branches its Rim/Centre Position calibration on
+        // `skin.GetConfig<LegacySetting, decimal>(LegacySetting.Version)?.Value >= 2.1m` — the
+        // modern (>=2.1) branch has no extra Y offset; the pre-2.1 branch adds one
+        // (`taiko_bar_y + 31`, times the class's own ratio=1.6 constant = +49.6 local units
+        // downward). Real lazer's LegacyBeatmapSkin deliberately overrides GetConfig to always
+        // return null for LegacySetting.Version specifically ("ignore beatmap-level versioning
+        // completely" — its own comment notes the legacy decoder defaults an UNSPECIFIED version to
+        // 1.0, so a naive beatmap-skin lookup would always report a version, never fall through to
+        // the user's actual skin). Our BeatmapFolderSkin (the standalone equivalent — real
+        // LegacyBeatmapSkin can't be used directly, it's realm-backed) had no such override, so it
+        // always answered "1.0" (the .osu-file-as-skin-config parse's default) — permanently
+        // forcing the OLD, sub-2.1 positioning for the drum flash on EVERY beatmap-provided legacy
+        // taiko skin, regardless of the user's actual (typically modern, >=2.1) selected skin.
+        //
+        // BeatmapFolderSkin.GetConfig now mirrors LegacyBeatmapSkin's override exactly.
+        [Test]
+        public void TaikoBeatmapSkinDrumFlashStaysWithinTheDrumsOwnBounds()
+        {
+            BeatmapVisuals visuals = null!;
+            var manual = new osu.Framework.Timing.ManualClock();
+            osu.Framework.Timing.FramedClock? clock = null;
+
+            AddStep("enable chart, Classic skin", () =>
+            {
+                config.SetValue(JukeBoxSetting.RenderChart, true);
+                config.SetValue(JukeBoxSetting.Skin, JukeBoxSkin.Classic);
+            });
+
+            AddStep("create visuals with a beatmap-provided legacy drum skin", () =>
+            {
+                string mapDir = Path.Combine(tmp, "drumflash-version");
+                Directory.CreateDirectory(mapDir);
+
+                File.WriteAllBytes(Path.Combine(mapDir, "taiko-bar-left.png"), solidPng(64, 64));
+                File.WriteAllBytes(Path.Combine(mapDir, "taiko-drum-outer.png"), solidPng(96, 96));
+                File.WriteAllBytes(Path.Combine(mapDir, "taiko-drum-inner.png"), solidPng(80, 80));
+                File.WriteAllBytes(Path.Combine(mapDir, "bg.png"), solidPng(4, 4));
+
+                string osuFile = Path.Combine(mapDir, "taiko [x].osu");
+                File.WriteAllText(osuFile, """
+                    osu file format v14
+
+                    [General]
+                    AudioFilename: audio.mp3
+                    Mode: 1
+
+                    [Difficulty]
+                    HPDrainRate:5
+                    CircleSize:4
+                    OverallDifficulty:5
+                    ApproachRate:5
+                    SliderMultiplier:1.4
+                    SliderTickRate:1
+
+                    [TimingPoints]
+                    0,500,4,1,0,100,1,0
+
+                    [HitObjects]
+                    64,192,5000,1,0
+                    """);
+
+                var set = new CachedBeatmapSet
+                {
+                    SetId = 19,
+                    Directory = mapDir,
+                    BackgroundFile = Path.Combine(mapDir, "bg.png"),
+                    OsuFiles = { osuFile },
+                    PreferredOsuFile = osuFile,
+                };
+
+                clock = new osu.Framework.Timing.FramedClock(manual);
+                Add(visuals = new BeatmapVisuals(set, clock) { RelativeSizeAxes = Axes.Both });
+            });
+
+            AddUntilStep("chart loaded", () => visuals.IsLoaded && visuals.HasChartLayer && visuals.ChartRenderer?.DrawableRuleset != null);
+
+            // Drive PAST the hit (not just to it) so autoplay's replay actually presses the drum —
+            // LegacyHalfDrum.OnPressed, driven through the real input pipeline, is what starts the
+            // flash's fade-in/position in the first place.
+            AddStep("advance past the hit", () =>
+            {
+                manual.CurrentTime = 5010;
+                clock!.ProcessFrame();
+            });
+
+            AddAssert("both half-drum containers found", () =>
+            {
+                var playfield = visuals.ChartRenderer!.DrawableRuleset!.Playfield;
+                return playfield.ChildrenOfType<osu.Framework.Graphics.Containers.Container>()
+                                .Count(c => c.Name is "Left Half" or "Right Half") == 2;
+            });
+
+            // Checks the sprites' own LOCAL Y position directly rather than a screen-space
+            // containment box: LegacyHalfDrum's two position calibrations differ by a fixed, small
+            // local-unit offset (taiko_bar_y=0 vs. taiko_bar_y+31, times its own ratio=1.6 constant
+            // = 0 vs. +49.6 for Centre, 0 vs. +36.8 for Rim) that's independent of the drum's
+            // overall on-screen scale or the flash texture's own pixel size — unlike a screen-space
+            // "does it exceed this box" check, which needs a large-enough texture/small-enough
+            // playfield to ever actually cross a boundary, and so isn't a reliable regression guard
+            // on its own.
+            AddAssert("drum flash sprites use the modern (Y=0-based) position calibration, not the pre-2.1 one", () =>
+            {
+                var playfield = visuals.ChartRenderer!.DrawableRuleset!.Playfield;
+
+                var halves = playfield.ChildrenOfType<osu.Framework.Graphics.Containers.Container>()
+                                       .Where(c => c.Name is "Left Half" or "Right Half");
+
+                const float tolerance = 5f;
+
+                foreach (var half in halves)
+                {
+                    foreach (var sprite in half.ChildrenOfType<osu.Framework.Graphics.Sprites.Sprite>())
+                    {
+                        if (Math.Abs(sprite.Y) > tolerance)
+                            return false;
+                    }
+                }
+
+                return true;
+            });
+
+            AddStep("remove visuals", () =>
+            {
+                config.SetValue(JukeBoxSetting.RenderChart, false);
+                Remove(visuals, true);
+            });
+        }
+
         // 1x1 red pixel PNG — content is irrelevant, only that it decodes to a valid texture.
         private static byte[] solidPng() => Convert.FromBase64String(
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==");
