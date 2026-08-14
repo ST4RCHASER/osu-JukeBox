@@ -16,7 +16,9 @@ using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Testing;
 using osu.Game.Graphics.UserInterface;
+using osu.Game.Overlays.BeatmapListing;
 using osuTK.Input;
+using SearchExtra = osu.Game.Overlays.BeatmapListing.SearchExtra;
 
 namespace JukeBox.Game.Tests.Visual
 {
@@ -131,27 +133,54 @@ namespace JukeBox.Game.Tests.Visual
             AddUntilStep("cards shown", () => fullscreen.ChildrenOfType<FullscreenBeatmapCard>().Count() == 3);
             AddUntilStep("entrance settled", () => fullscreen.SlidePanel.Y == 0);
 
-            AddAssert("lazer dropdowns present for mode/categories/sort", () =>
-                fullscreen.ModeDropdown.IsLoaded && fullscreen.CategoryDropdown.IsLoaded && fullscreen.SortDropdown.IsLoaded);
+            // The rows are LAZER'S REAL components, populated: the Mode row carries Any + the
+            // four legacy rulesets, and the Categories row omits the auth-only entries.
+            AddAssert("mode row is lazer's ruleset filter with Any + 4 rulesets", () =>
+                fullscreen.RulesetRow.IsLoaded
+                && fullscreen.RulesetRow.ChildrenOfType<FilterTabItem<osu.Game.Rulesets.RulesetInfo>>().Count() == 5);
+            AddAssert("category row omits the auth-only Favourites/Mine items", () =>
+                fullscreen.CategoryRow.ChildrenOfType<FilterTabItem<SearchCategory>>().Any()
+                && !fullscreen.CategoryRow.ChildrenOfType<FilterTabItem<SearchCategory>>()
+                              .Any(i => i.Value == SearchCategory.Favourites || i.Value == SearchCategory.Mine));
+            AddAssert("genre/language/extra rows and the sort control are loaded lazer components", () =>
+                fullscreen.GenreRow.IsLoaded && fullscreen.LanguageRow.IsLoaded
+                && fullscreen.ExtraRow.IsLoaded && fullscreen.SortControl.IsLoaded);
             AddAssert("two rounded sliders for the star range", () =>
                 fullscreen.ChildrenOfType<RoundedSliderBar<double>>().Count() == 2);
-            AddAssert("two checkbox pills for the extras", () =>
-                fullscreen.ChildrenOfType<OsuCheckbox>().Count() == 2);
 
-            AddStep("pick osu!mania in the mode dropdown",
-                () => fullscreen.ModeDropdown.Current.Value = FullscreenListingOverlay.SearchMode.Mania);
-            AddUntilStep("engine mode follows the dropdown", () => docked.Engine.Mode.Value == "m");
+            // Row labels must never wrap (fixed 100px label column, single 13px line).
+            AddAssert("row labels stay on one line", () =>
+                new Drawable[] { fullscreen.RulesetRow, fullscreen.CategoryRow, fullscreen.GenreRow, fullscreen.LanguageRow, fullscreen.ExtraRow }
+                    .All(r => r.ChildrenOfType<osu.Game.Graphics.Containers.OsuTextFlowContainer>().First().DrawHeight < 20));
 
-            AddStep("category changed on the engine (e.g. via the docked chips)",
-                () => docked.Engine.Category.Value = "loved");
-            AddUntilStep("category dropdown follows the engine",
-                () => fullscreen.CategoryDropdown.Current.Value == FullscreenListingOverlay.SearchCategory.Loved);
+            // Selections round-trip through the shared engine, both directions.
+            AddStep("pick osu!mania on the mode row", () => fullscreen.RulesetRow.Current.Value =
+                fullscreen.RulesetRow.ChildrenOfType<FilterTabItem<osu.Game.Rulesets.RulesetInfo>>()
+                          .Select(i => i.Value).Single(r => r.OnlineID == 3));
+            AddUntilStep("engine mode follows the row", () => docked.Engine.Mode.Value == "m");
+            AddStep("engine mode cleared elsewhere", () => docked.Engine.Mode.Value = null);
+            AddUntilStep("mode row back on Any", () => fullscreen.RulesetRow.Current.Value.OnlineID < 0);
 
-            AddStep("pick sort by plays", () => fullscreen.SortDropdown.Current.Value = FullscreenListingOverlay.SortField.Plays);
-            AddUntilStep("engine sort key follows", () => docked.Engine.SortKey.Value == "plays");
+            AddStep("pick Loved on the category row", () => fullscreen.CategoryRow.Current.Value = SearchCategory.Loved);
+            AddUntilStep("engine category follows", () => docked.Engine.Category.Value == "loved");
+            AddStep("category changed on the engine (e.g. via the docked chips)", () => docked.Engine.Category.Value = "qualified");
+            AddUntilStep("category row follows the engine", () => fullscreen.CategoryRow.Current.Value == SearchCategory.Qualified);
 
-            AddStep("toggle Has Video", () => fullscreen.HasVideoCheckbox.Current.Value = true);
+            AddStep("pick Anime on the genre row", () => fullscreen.GenreRow.Current.Value = SearchGenre.Anime);
+            AddAssert("engine genre id follows (lazer enum values ARE osu-web ids)", () => docked.Engine.GenreId.Value == 3);
+
+            AddStep("pick English on the language row", () => fullscreen.LanguageRow.Current.Value = SearchLanguage.English);
+            AddAssert("engine language id follows", () => docked.Engine.LanguageId.Value == 2);
+
+            AddStep("toggle Has Video on the extra row", () => fullscreen.ExtraRow.Current.Add(SearchExtra.Video));
             AddAssert("engine extra follows", () => docked.Engine.HasVideo.Value);
+            AddStep("untoggle it", () => fullscreen.ExtraRow.Current.Remove(SearchExtra.Video));
+            AddAssert("engine extra cleared", () => !docked.Engine.HasVideo.Value);
+
+            AddStep("pick sort by plays", () => fullscreen.SortControl.Current.Value = SortCriteria.Plays);
+            AddUntilStep("engine sort key follows", () => docked.Engine.SortKey.Value == "plays");
+            AddStep("flip direction to ascending", () => fullscreen.SortControl.SortDirection.Value = osu.Game.Overlays.SortDirection.Ascending);
+            AddAssert("engine direction follows", () => !docked.Engine.SortDescending.Value);
 
             AddStep("raise min stars through the slider's bindable", () => fullscreen.MinStarsSlider.Current.Value = 3);
             AddAssert("engine min stars follows", () => Math.Abs(docked.Engine.MinStars.Value - 3) < 0.001);
@@ -306,7 +335,7 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("grid viewport starts below the sort dropdown too", () =>
             {
                 float scrollTop = fullscreen.ChildrenOfType<osu.Framework.Graphics.Containers.BasicScrollContainer>().First().ScreenSpaceDrawQuad.TopLeft.Y;
-                float sortBottom = fullscreen.SortDropdown.ScreenSpaceDrawQuad.BottomLeft.Y;
+                float sortBottom = fullscreen.SortControl.ScreenSpaceDrawQuad.BottomLeft.Y;
                 return scrollTop >= sortBottom;
             });
             AddAssert("no card is drawn above the grid viewport's top", () =>
