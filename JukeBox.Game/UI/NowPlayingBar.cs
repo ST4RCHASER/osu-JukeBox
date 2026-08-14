@@ -369,7 +369,7 @@ public partial class NowPlayingBar : CompositeDrawable
 
         try
         {
-            texture = await thumbnailStore!.Store.GetAsync($"https://b.ppy.sh/thumb/{setId}l.jpg", CancellationToken.None).ConfigureAwait(false);
+            texture = await thumbnailStore!.GetAsync($"https://b.ppy.sh/thumb/{setId}l.jpg").ConfigureAwait(false);
         }
         catch (Exception ex)
         {
