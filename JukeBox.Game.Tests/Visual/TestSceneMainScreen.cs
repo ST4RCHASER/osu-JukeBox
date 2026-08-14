@@ -110,7 +110,9 @@ namespace JukeBox.Game.Tests.Visual
         }
 
         // Everything the deleted bottom bar carried, plus the controls that used to sit in
-        // Settings → Playback, now lives in this one tab — with the queue underneath it.
+        // Settings → Playback, now lives in this one tab — with the queue underneath it. The
+        // per-beatmap offset slider is deliberately absent (user request): BeatmapOffsetStore still
+        // applies its value to playback, it just has no row anywhere in the UI.
         [Test]
         public void PlaybackTabHoldsTheNowPlayingPanelTransportSpeedAndQueue()
         {
@@ -120,8 +122,9 @@ namespace JukeBox.Game.Tests.Visual
                 () => playbackPanel().ChildrenOfType<TransportRow>().Any());
             AddAssert("playback speed slider moved in from settings",
                 () => playbackPanel().PlaybackRateSlider.LabelText.ToString() == "Playback speed");
-            AddAssert("per-beatmap offset row moved in from settings",
-                () => playbackPanel().BeatmapOffsetSlider?.LabelText.ToString() == "Audio offset (this beatmap)");
+            AddAssert("no per-beatmap offset row anywhere in the tab",
+                () => !playbackPanel().ChildrenOfType<SettingsItem<double>>()
+                                      .Any(i => i.LabelText.ToString() == "Audio offset (this beatmap)"));
             AddAssert("queue is in the tab too", () => playbackPanel().ChildrenOfType<QueuePanel>().Any());
 
             AddAssert("queue sits BELOW the playback section", () =>

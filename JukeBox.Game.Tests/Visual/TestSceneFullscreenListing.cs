@@ -326,19 +326,24 @@ namespace JukeBox.Game.Tests.Visual
                 FullscreenBeatmapCard.HEIGHT <= 100
                 && fullscreen.ChildrenOfType<FullscreenBeatmapCard>().All(c => c.DrawHeight == FullscreenBeatmapCard.HEIGHT));
 
-            AddAssert("grid viewport starts a clear gap below the stars row", () =>
+            // Polled, not asserted on the very next frame: "entrance settled" above only pins the
+            // slide panel's own Y, while the filter block it sits under (auto-sizing rows, the sort
+            // control's own layout pass) can still be resolving the grid viewport's top for another
+            // frame or two — which made these three intermittently read a mid-layout value under
+            // full-suite load. A genuinely wrong layout still fails, on the poll's timeout.
+            AddUntilStep("grid viewport starts a clear gap below the stars row", () =>
             {
                 float scrollTop = fullscreen.ChildrenOfType<osu.Framework.Graphics.Containers.BasicScrollContainer>().First().ScreenSpaceDrawQuad.TopLeft.Y;
                 float starsBottom = fullscreen.MinStarsSlider.ScreenSpaceDrawQuad.BottomLeft.Y;
                 return scrollTop >= starsBottom;
             });
-            AddAssert("grid viewport starts below the sort dropdown too", () =>
+            AddUntilStep("grid viewport starts below the sort dropdown too", () =>
             {
                 float scrollTop = fullscreen.ChildrenOfType<osu.Framework.Graphics.Containers.BasicScrollContainer>().First().ScreenSpaceDrawQuad.TopLeft.Y;
                 float sortBottom = fullscreen.SortControl.ScreenSpaceDrawQuad.BottomLeft.Y;
                 return scrollTop >= sortBottom;
             });
-            AddAssert("no card is drawn above the grid viewport's top", () =>
+            AddUntilStep("no card is drawn above the grid viewport's top", () =>
             {
                 float scrollTop = fullscreen.ChildrenOfType<osu.Framework.Graphics.Containers.BasicScrollContainer>().First().ScreenSpaceDrawQuad.TopLeft.Y;
                 return fullscreen.ChildrenOfType<FullscreenBeatmapCard>().All(c => c.ScreenSpaceDrawQuad.TopLeft.Y >= scrollTop - 0.5f);

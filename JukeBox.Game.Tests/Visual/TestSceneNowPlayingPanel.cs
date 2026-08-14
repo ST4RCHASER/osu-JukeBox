@@ -132,20 +132,52 @@ namespace JukeBox.Game.Tests.Visual
             });
         }
 
-        // This panel is the "what's playing" presentation only: the transport strip is its own
-        // sibling drawable in the Playback tab (TransportRow, see PlaybackPanel) and the volume
-        // sliders live in Settings → Audio, so neither belongs in here.
+        // Volume is a Settings → Audio concern (master/effect/music), never a per-song one, so it
+        // has no control in here — unlike the transport, which now sits in this panel.
         [Test]
-        public void NoTransportOrVolumeControlsInNowPlayingPanel()
+        public void NoVolumeControlsInNowPlayingPanel()
         {
-            AddAssert("no play/pause/skip icon button", () => nowPlaying.ChildrenOfType<IconButton>()
-                .All(b => !b.Icon.Equals(FontAwesome.Solid.Play)
-                          && !b.Icon.Equals(FontAwesome.Solid.Pause)
-                          && !b.Icon.Equals(FontAwesome.Solid.StepForward)));
-
             AddAssert("no volume slider", () => !nowPlaying.ChildrenOfType<BasicSliderBar<double>>().Any());
             AddAssert("no volume icon", () => !nowPlaying.ChildrenOfType<SpriteIcon>()
                 .Any(i => i.Icon.Equals(FontAwesome.Solid.VolumeUp)));
+        }
+
+        // Reading order in the column: song → transport → progress → difficulty. The transport is a
+        // cluster of buttons, so it is centred rather than left-aligned like the full-width rows.
+        [Test]
+        public void TransportSitsCentredAboveTheProgressBar()
+        {
+            AddUntilStep("panel has laid out", () => nowPlaying.DrawHeight > 0);
+
+            AddAssert("transport is above the progress bar",
+                () => nowPlaying.Transport.ScreenSpaceDrawQuad.BottomLeft.Y
+                      <= nowPlaying.ProgressBar.ScreenSpaceDrawQuad.TopLeft.Y);
+            AddAssert("progress bar is above the difficulty dropdown",
+                () => nowPlaying.ProgressBar.ScreenSpaceDrawQuad.BottomLeft.Y
+                      <= nowPlaying.DifficultySwitcher.ScreenSpaceDrawQuad.TopLeft.Y);
+
+            AddAssert("transport is horizontally centred in the panel", () =>
+            {
+                var transport = nowPlaying.Transport.ScreenSpaceDrawQuad;
+                var panel = nowPlaying.ScreenSpaceDrawQuad;
+                float transportCentre = (transport.TopLeft.X + transport.TopRight.X) / 2;
+                float panelCentre = (panel.TopLeft.X + panel.TopRight.X) / 2;
+                return Math.Abs(transportCentre - panelCentre) < 1f;
+            });
+            AddAssert("transport hugs its buttons rather than filling the column",
+                () => nowPlaying.Transport.DrawWidth < nowPlaying.DrawWidth);
+        }
+
+        // The dropdown used to keep the fixed 220px width it had in the old wide bar, stopping
+        // short of the column's right edge while every row around it ran full width.
+        [Test]
+        public void DifficultyDropdownSpansTheFullContentWidth()
+        {
+            AddUntilStep("panel has laid out", () => nowPlaying.DrawHeight > 0);
+            AddAssert("dropdown spans the panel's width",
+                () => Math.Abs(nowPlaying.DifficultySwitcher.DrawWidth - nowPlaying.DrawWidth) < 1f);
+            AddAssert("so does the dropdown control inside it",
+                () => Math.Abs(nowPlaying.DifficultySwitcher.Dropdown.DrawWidth - nowPlaying.DrawWidth) < 1f);
         }
 
         // Regression coverage for the progress bar overflowing its host: the fill's visual track
@@ -174,9 +206,28 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("panel is no wider than its column", () => nowPlaying.DrawWidth <= column_content_width + 0.5f);
             AddAssert("progress bar spans the panel's full width",
                 () => nowPlaying.ProgressBar.DrawWidth >= nowPlaying.DrawWidth - 0.5f);
-            AddAssert("progress bar is below the browser button, not beside it",
+            // The cover row (64px tall) and the transport both sit above it, so the progress bar
+            // can only start well down the panel — never on the same line as the cover.
+            AddAssert("progress bar starts below the cover row, not beside it",
                 () => nowPlaying.ProgressBar.ScreenSpaceDrawQuad.TopLeft.Y
-                      >= nowPlaying.BrowserButton.ScreenSpaceDrawQuad.BottomLeft.Y);
+                      - nowPlaying.ScreenSpaceDrawQuad.TopLeft.Y >= 64);
+        }
+
+        // The button moved out of the title row and into the transport strip (to the right of
+        // skip-next), which is where a per-song action belongs — the URL seam is unchanged.
+        [Test]
+        public void BrowserButtonLivesInTheTransportRow()
+        {
+            AddAssert("browser button is inside the transport strip",
+                () => nowPlaying.Transport.ChildrenOfType<IconButton>().Contains(nowPlaying.BrowserButton));
+            AddAssert("it trails the skip-next button", () =>
+            {
+                var buttons = nowPlaying.Transport.ChildrenOfType<IconButton>().ToList();
+                return buttons.IndexOf(nowPlaying.BrowserButton) == buttons.Count - 1;
+            });
+            AddAssert("nothing in the title row opens a browser", () =>
+                nowPlaying.ChildrenOfType<IconButton>()
+                          .Count(b => b.Icon.Equals(FontAwesome.Solid.ExternalLinkAlt)) == 1);
         }
 
         [Test]
