@@ -172,7 +172,8 @@ public partial class MainScreen : Screen
 
         listing = new BeatmapListingOverlay(docked: true) { RelativeSizeAxes = Axes.Both };
         // The fullscreen search style's big listing — a second view over the docked listing's
-        // search engine (shared query/filters/results), presented over the player box on demand.
+        // search engine (shared query/filters/results), presented as a whole-window modal on
+        // demand (see its hosting spot at the top level of InternalChildren below).
         fullscreenListing = new FullscreenListingOverlay(listing.Engine) { RelativeSizeAxes = Axes.Both };
         queuePanel = new QueuePanel(docked: true);
         settingsBody = new SettingsOverlay(docked: true) { RelativeSizeAxes = Axes.Both };
@@ -196,40 +197,33 @@ public partial class MainScreen : Screen
             visualsHost = new Container
             {
                 RelativeSizeAxes = Axes.Both,
-                Children = new Drawable[]
+                Child = playerBox = new Container
                 {
-                    playerBox = new Container
+                    RelativeSizeAxes = Axes.Both,
+                    Masking = true,
+                    CornerRadius = Theme.CornerRadius,
+                    EdgeEffect = Theme.PanelShadow,
+                    Children = new Drawable[]
                     {
-                        RelativeSizeAxes = Axes.Both,
-                        Masking = true,
-                        CornerRadius = Theme.CornerRadius,
-                        EdgeEffect = Theme.PanelShadow,
-                        Children = new Drawable[]
+                        // Black bed: the player's letterbox ground, and the empty-state fill
+                        // while nothing is playing yet.
+                        new Box
                         {
-                            // Black bed: the player's letterbox ground, and the empty-state fill
-                            // while nothing is playing yet.
-                            new Box
-                            {
-                                RelativeSizeAxes = Axes.Both,
-                                Colour = Colour4.Black,
-                            },
-                            // Fixed design-size canvas, scaled uniformly to fit playerBox (see
-                            // updateSceneScale) instead of visualsStack stretching RelativeSizeAxes
-                            // straight to the box — that's what let the scene overflow (and get
-                            // masked/cropped) whenever the box got narrower than the design aspect.
-                            sceneContainer = new Container
-                            {
-                                Anchor = Anchor.Centre,
-                                Origin = Anchor.Centre,
-                                Size = new Vector2(scene_width, scene_height),
-                                Child = visualsStack = new ScreenStack { RelativeSizeAxes = Axes.Both },
-                            },
+                            RelativeSizeAxes = Axes.Both,
+                            Colour = Colour4.Black,
+                        },
+                        // Fixed design-size canvas, scaled uniformly to fit playerBox (see
+                        // updateSceneScale) instead of visualsStack stretching RelativeSizeAxes
+                        // straight to the box — that's what let the scene overflow (and get
+                        // masked/cropped) whenever the box got narrower than the design aspect.
+                        sceneContainer = new Container
+                        {
+                            Anchor = Anchor.Centre,
+                            Origin = Anchor.Centre,
+                            Size = new Vector2(scene_width, scene_height),
+                            Child = visualsStack = new ScreenStack { RelativeSizeAxes = Axes.Both },
                         },
                     },
-                    // Sharing visualsHost (and therefore its animated padding) is what makes the
-                    // fullscreen listing cover exactly the player-box area — never the side
-                    // columns or the bottom bar.
-                    fullscreenListing,
                 },
             },
             LeftColumn = new Container
@@ -311,6 +305,11 @@ public partial class MainScreen : Screen
                 },
             },
             bottomBar = new NowPlayingBar(),
+            // Top level, ABOVE the columns and the bottom bar: the fullscreen search style's big
+            // listing is a true whole-window modal (dim scrim + centred sliding panel — see
+            // FullscreenListingOverlay), not a player-box-area overlay. The map-ID modal stays
+            // above it so "#" lookup keeps working from either presentation.
+            fullscreenListing,
             mapIdOverlay,
         };
 
@@ -331,6 +330,17 @@ public partial class MainScreen : Screen
         {
             if (searchStyle.Value == SearchStyle.Fullscreen && uiLayout.Value == UiLayout.ThreeColumn)
                 fullscreenListing.ShowSearch();
+        };
+
+        // The left column's dedicated search-opener icon: under the fullscreen style it presents
+        // the big listing; under compact it just focuses the docked keyword box (same as clicking
+        // the box itself).
+        listing.SearchOpenRequested += () =>
+        {
+            if (searchStyle.Value == SearchStyle.Fullscreen && uiLayout.Value == UiLayout.ThreeColumn)
+                fullscreenListing.ShowSearch();
+            else
+                listing.FocusSearch();
         };
 
         // See updateSceneScale's own doc comment for why this is hung off playerBox's OnUpdate

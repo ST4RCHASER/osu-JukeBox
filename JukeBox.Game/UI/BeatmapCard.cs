@@ -360,7 +360,7 @@ public partial class BeatmapCard : ClickableContainer
 
         try
         {
-            texture = await thumbnailStore.Store.GetAsync($"https://assets.ppy.sh/beatmaps/{Set.Id}/covers/card.jpg", CancellationToken.None).ConfigureAwait(false);
+            texture = await thumbnailStore.GetAsync($"https://assets.ppy.sh/beatmaps/{Set.Id}/covers/card.jpg").ConfigureAwait(false);
         }
         catch (Exception ex)
         {
