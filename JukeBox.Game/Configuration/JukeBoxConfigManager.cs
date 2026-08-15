@@ -87,6 +87,14 @@ public enum JukeBoxSetting
     /// </summary>
     DetachPlayOnMain,
     /// <summary>
+    /// Directory the in-app file picker (<see cref="UI.FileImportOverlay"/>) last browsed, so
+    /// reopening it lands where the user left off rather than back at the default. Empty (the
+    /// default) means "no remembered directory" — see <c>FileImportOverlay.ResolveInitialPath</c>
+    /// for the fallback chain, which also covers a remembered directory that has since been
+    /// deleted or moved.
+    /// </summary>
+    LastImportDirectory,
+    /// <summary>
     /// Folder NAME (not a full path) of the user-imported legacy skin under the app storage's
     /// <c>skins/</c> directory — written when a .osk is dragged onto the window (see
     /// <see cref="Import.SkinArchive"/>), read by <see cref="LazerPlayer.SkinSelection"/> whenever
@@ -217,6 +225,7 @@ public class JukeBoxConfigManager : IniConfigManager<JukeBoxSetting>
         SetDefault(JukeBoxSetting.PlayfieldZoom, 1.0, 0.01, 2.0);
         SetDefault(JukeBoxSetting.DetachPlayer, false);
         SetDefault(JukeBoxSetting.DetachPlayOnMain, false);
+        SetDefault(JukeBoxSetting.LastImportDirectory, string.Empty);
         SetDefault(JukeBoxSetting.CustomSkinPath, string.Empty);
     }
 }

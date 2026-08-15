@@ -22,9 +22,10 @@ namespace JukeBox.Game.UI;
 /// <see cref="BeatmapSearchEngine"/>. There is exactly one search model in the app: searching and
 /// filtering happen in <see cref="FullscreenListingOverlay"/>, and this column shows whatever that
 /// engine last produced. It therefore carries no keyword box and no filter section at all; its top
-/// row is just two buttons — a wide <see cref="SearchButton"/> that asks the host to open the
-/// fullscreen listing (<see cref="SearchOpenRequested"/>) and a narrow "#" button that opens the
-/// manual ID/link dialog (<see cref="MapIdRequested"/>) — above a scrollable list of dense
+/// row is just three buttons — a wide <see cref="SearchButton"/> that asks the host to open the
+/// fullscreen listing (<see cref="SearchOpenRequested"/>), a narrow "#" button that opens the
+/// manual ID/link dialog (<see cref="MapIdRequested"/>), and a folder button that opens the file
+/// picker (<see cref="FileImportRequested"/>) — above a scrollable list of dense
 /// <see cref="BeatmapCard"/> rows.
 ///
 /// Because the engine is shared and outlives any one view, closing the fullscreen listing leaves
@@ -67,9 +68,9 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
     /// is being fetched.</summary>
     private const float append_spinner_row_height = 44;
 
-    /// <summary>Share of the button row's width taken by the "#" button — the rest goes to the
-    /// search button, giving the ~80/20 split the row is designed around.</summary>
-    private const float map_id_button_width_ratio = 0.2f;
+    /// <summary>Share of the button row's width taken by EACH of the two icon buttons — the
+    /// search button gets the rest, giving the ~60/20/20 split the row is designed around.</summary>
+    private const float icon_button_width_ratio = 0.2f;
 
     /// <summary>Whether this instance is permanently embedded (three-column layout's left column)
     /// rather than a dismissable floating overlay. See the class summary.</summary>
@@ -119,6 +120,14 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
     /// across the app.
     /// </summary>
     public event Action? MapIdRequested;
+
+    /// <summary>
+    /// Fired when the folder button is clicked — <see cref="Screens.MainScreen"/> opens
+    /// <see cref="FileImportOverlay"/> in response, the click-to-import counterpart to dropping a
+    /// file on the window. Kept as an event for the same reason <see cref="MapIdRequested"/> is:
+    /// one overlay instance, owned by the screen.
+    /// </summary>
+    public event Action? FileImportRequested;
 
     /// <summary>
     /// Fired by the big search button — <see cref="Screens.MainScreen"/> responds by presenting
@@ -322,17 +331,18 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
                 {
                     RelativeSizeAxes = Axes.X,
                     Height = button_row_height,
-                    // The two buttons split the row's full width (~80/20). Each sits inside its
-                    // own padded cell rather than carrying a Margin: a Margin on a
+                    // The search button takes whatever the two icon buttons leave. Each sits
+                    // inside its own padded cell rather than carrying a Margin: a Margin on a
                     // relatively-sized child offsets it without shrinking it, which would leave
-                    // the pair overlapping by the gutter width.
+                    // them overlapping by the gutter width.
                     Child = new GridContainer
                     {
                         RelativeSizeAxes = Axes.Both,
                         ColumnDimensions = new[]
                         {
                             new Dimension(),
-                            new Dimension(GridSizeMode.Relative, size: map_id_button_width_ratio),
+                            new Dimension(GridSizeMode.Relative, size: icon_button_width_ratio),
+                            new Dimension(GridSizeMode.Relative, size: icon_button_width_ratio),
                         },
                         Content = new[]
                         {
@@ -351,12 +361,23 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
                                 new Container
                                 {
                                     RelativeSizeAxes = Axes.Both,
-                                    Padding = new MarginPadding { Left = Theme.RowSpacing / 2 },
+                                    Padding = new MarginPadding { Horizontal = Theme.RowSpacing / 2 },
                                     Child = new IconButton
                                     {
                                         RelativeSizeAxes = Axes.Both,
                                         Icon = FontAwesome.Solid.Hashtag,
                                         Action = () => MapIdRequested?.Invoke(),
+                                    },
+                                },
+                                new Container
+                                {
+                                    RelativeSizeAxes = Axes.Both,
+                                    Padding = new MarginPadding { Left = Theme.RowSpacing / 2 },
+                                    Child = new IconButton
+                                    {
+                                        RelativeSizeAxes = Axes.Both,
+                                        Icon = FontAwesome.Solid.FolderOpen,
+                                        Action = () => FileImportRequested?.Invoke(),
                                     },
                                 },
                             },

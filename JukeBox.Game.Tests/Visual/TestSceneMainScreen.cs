@@ -620,6 +620,37 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("overlay hidden again", () => overlay.State.Value == Visibility.Hidden);
         }
 
+        // The folder button is the click-to-import counterpart to dropping a file on the window,
+        // and it must land in the SAME importer — asserted end to end here: an unsupported path
+        // picked in the overlay comes back as the drop importer's own "can't import" toast, which
+        // only happens if MainScreen really routed it through DroppedFileImporter.
+        [Test]
+        public void FolderButtonOpensThePickerAndItsChoiceGoesThroughTheDropImporter()
+        {
+            FileImportOverlay picker = null!;
+            AddStep("grab the file-import overlay", () => picker = screen.ChildrenOfType<FileImportOverlay>().Single());
+
+            AddAssert("starts hidden", () => picker.State.Value == Visibility.Hidden);
+
+            AddStep("click the folder button",
+                () => screen.ChildrenOfType<IconButton>().Single(b => b.Icon.Equals(FontAwesome.Solid.FolderOpen)).TriggerClick());
+            AddAssert("picker visible", () => picker.State.Value == Visibility.Visible);
+
+            // Deliberately an extension the importer rejects: it reports the rejection without
+            // touching storage, the mirror or the queue, so this asserts the wiring and nothing else.
+            string unimportable = Path.Combine(tmp, "not-a-beatmap.txt");
+            AddStep("pick a file the importer can't take", () =>
+            {
+                File.WriteAllText(unimportable, "hello");
+                picker.Selector.CurrentFile.Value = new FileInfo(unimportable);
+            });
+
+            AddUntilStep("picker closed itself", () => picker.State.Value == Visibility.Hidden);
+            AddUntilStep("the drop importer's own rejection surfaced as a toast", () =>
+                screen.ChildrenOfType<SpriteText>().Any(t => t.Text.ToString().Contains("not-a-beatmap.txt")
+                                                             && t.Text.ToString().Contains(".osz")));
+        }
+
         // RightPanelTabButton is a private nested type (MainScreen) — located by type name the
         // same way TestSceneBeatmapListing locates FiltersToggleButton, then disambiguated by its
         // own label text.
