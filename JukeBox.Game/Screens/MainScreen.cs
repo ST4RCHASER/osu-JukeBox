@@ -445,7 +445,24 @@ public partial class MainScreen : Screen
                 showToast(e.NewValue);
         });
 
-        jukebox.Enqueued += set => showToast($"Added to queue: {set.DisplayTitle}", Theme.Accent);
+        jukebox.Enqueued += onEnqueued;
+    }
+
+    private void onEnqueued(BeatmapSetInfo set) => showToast($"Added to queue: {set.DisplayTitle}", Theme.Accent);
+
+    /// <summary>
+    /// <see cref="Jukebox.Enqueued"/> is a plain event on an object that outlives any one screen,
+    /// so unlike a bindable field (see <see cref="lastError"/>) nothing detaches it automatically
+    /// — and a dead screen's handler still reaching <see cref="showToast"/> means <c>AddInternal</c>
+    /// on a screen the async disposal queue is already walking.
+    /// </summary>
+    protected override void Dispose(bool isDisposing)
+    {
+        // Resolved dependencies are still null if this screen never finished loading.
+        if (jukebox != null)
+            jukebox.Enqueued -= onEnqueued;
+
+        base.Dispose(isDisposing);
     }
 
     /// <summary>
