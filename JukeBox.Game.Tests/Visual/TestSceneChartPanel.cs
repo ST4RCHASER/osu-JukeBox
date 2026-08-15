@@ -39,6 +39,7 @@ namespace JukeBox.Game.Tests.Visual
         private PlaybackController playback = null!;
         private ChartModSelection chartMods = null!;
         private PlayfieldElementVisibility visibility = null!;
+        private ChartConversion conversion = null!;
         private ChartPanel panel = null!;
 
         /// <summary>The panel gets its own host container: assigning <c>Child</c> on the scene
@@ -59,8 +60,10 @@ namespace JukeBox.Game.Tests.Visual
             playback = new PlaybackController();
             chartMods = new ChartModSelection();
             visibility = new PlayfieldElementVisibility();
+            conversion = new ChartConversion();
 
             var deps = new DependencyContainer(parent);
+            deps.Cache(conversion);
             deps.Cache(config);
             deps.CacheAs(playback);
             deps.Cache(chartMods);
@@ -75,6 +78,7 @@ namespace JukeBox.Game.Tests.Visual
             Add(playback);
             Add(chartMods);
             Add(visibility);
+            Add(conversion);
             Add(panelHost = new Container { RelativeSizeAxes = Axes.Both });
         }
 
@@ -85,6 +89,8 @@ namespace JukeBox.Game.Tests.Visual
             {
                 config.SetValue(JukeBoxSetting.ChartMods, string.Empty);
                 config.SetValue(JukeBoxSetting.HiddenPlayfieldElements, string.Empty);
+                config.SetValue(JukeBoxSetting.ConvertToRuleset, ChartConversionTarget.Off);
+                conversion.Publish(null);
                 jukebox.NowPlaying.Value = null;
                 playback.Current.Value = null;
                 playback.SelectedOsuFile.Value = null;
@@ -246,6 +252,26 @@ namespace JukeBox.Game.Tests.Visual
                     .Concat(group.ChildrenOfType<SettingsItem<PlayfieldBorderStyle>>().Select(i => i.LabelText.ToString()))
                     .Concat(group.ChildrenOfType<SettingsItem<ManiaScrollingDirection>>().Select(i => i.LabelText.ToString()))
                     .ToList();
+
+        /// <summary>Publishes a real osu!std beatmap converted to osu!mania, which is the state the
+        /// key-count control is live in — the same call BeatmapVisuals makes for what is on screen.</summary>
+        private void convertToMania()
+        {
+            string dir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+            Directory.CreateDirectory(dir);
+
+            string osu = Path.Combine(dir, "convert [0].osu");
+
+            File.WriteAllText(osu,
+                "osu file format v14\n\n[General]\nAudioFilename: a.wav\nMode: 0\n\n"
+                + "[Metadata]\nTitle:t\nArtist:t\nCreator:t\nVersion:v\n\n"
+                + "[Difficulty]\nHPDrainRate:5\nCircleSize:4\nOverallDifficulty:5\nApproachRate:5\nSliderMultiplier:1.4\nSliderTickRate:1\n\n"
+                + "[TimingPoints]\n0,500,4,1,0,100,1,0\n\n"
+                + "[HitObjects]\n64,192,1000,1,0\n192,192,1500,1,0\n");
+
+            config.SetValue(JukeBoxSetting.ConvertToRuleset, ChartConversionTarget.Mania);
+            conversion.Publish(new osu.Game.Beatmaps.FlatWorkingBeatmap(osu));
+        }
 
         private ManiaRulesetConfigManager maniaConfig()
             => (ManiaRulesetConfigManager)rulesetConfigs.GetConfigFor(new ManiaRuleset())!;
@@ -422,8 +448,8 @@ namespace JukeBox.Game.Tests.Visual
         {
             AddStep("play a mania difficulty", () => playing(3));
 
-            AddStep("make the control live, as it would be for a convert", () => panel.AssumeConvertedBeatmap = true);
-            AddAssert("it really is live now", () => !panel.KeyOverrideInert);
+            AddStep("convert an osu! map to mania", () => convertToMania());
+            AddUntilStep("the control went live", () => !panel.KeyOverrideInert);
 
             // The value is a dependent row: there is nothing to pick a count FOR until the
             // override is on, so it stays inert while the checkbox is off.

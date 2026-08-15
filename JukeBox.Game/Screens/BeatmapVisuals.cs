@@ -107,6 +107,10 @@ public partial class BeatmapVisuals : CompositeDrawable
     // PlayfieldElementFilter.
     private readonly IBindable<int> chartModRevision = new Bindable<int>();
 
+    // And once more for the "Convert to" choice, which changes which RULESET the beatmap is built
+    // for — the same reason mods can't be applied to a live DrawableRuleset applies to this.
+    private readonly IBindable<int> chartConversionRevision = new Bindable<int>();
+
     // Lazer's own background-blur scale: setting 0..1 maps to a gaussian sigma of 0..25.
     private const float max_blur_sigma = 25;
 
@@ -118,6 +122,9 @@ public partial class BeatmapVisuals : CompositeDrawable
 
     [Resolved(canBeNull: true)]
     private ChartModSelection? chartMods { get; set; }
+
+    [Resolved(canBeNull: true)]
+    private ChartConversion? chartConversion { get; set; }
 
     [Resolved(canBeNull: true)]
     private BeatmapOffsetStore? offsetStore { get; set; }
@@ -417,6 +424,9 @@ public partial class BeatmapVisuals : CompositeDrawable
         if (chartMods != null)
             chartModRevision.BindTo(chartMods.Revision);
 
+        if (chartConversion != null)
+            chartConversionRevision.BindTo(chartConversion.Revision);
+
         if (offsetStore != null)
             beatmapOffset.BindTo(offsetStore.CurrentOffset);
 
@@ -486,7 +496,24 @@ public partial class BeatmapVisuals : CompositeDrawable
         // Same mechanism for a mod-selection change — see chartModRevision's own remarks for why
         // mods need the rebuild that element visibility doesn't.
         chartModRevision.BindValueChanged(_ => rebuildChartLayer());
+
+        chartConversionRevision.BindValueChanged(_ =>
+        {
+            publishConversionState();
+            rebuildChartLayer();
+        });
+
+        // This difficulty's own convertibility is only knowable from a decoded beatmap, which is
+        // what this class holds — so the Chart tab reads the answer from here rather than decoding
+        // anything itself.
+        publishConversionState();
     }
+
+    /// <summary>Tells the shared conversion service what is actually on screen for this
+    /// difficulty. A difficulty with no chart (unparseable, or none selected) publishes nothing
+    /// convertible, which greys the control rather than offering a conversion of nothing.</summary>
+    private void publishConversionState()
+        => chartConversion?.Publish(chartWorking, allowConversion: replays?.ForOsuFile(osuFile)?.Score == null);
 
     private void rebuildChartLayer()
     {
