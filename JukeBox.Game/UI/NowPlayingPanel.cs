@@ -22,8 +22,9 @@ namespace JukeBox.Game.UI;
 /// <summary>
 /// The "now playing" presentation: cover thumb (fetched async from
 /// <see cref="OnlineThumbnailStore"/> whenever <see cref="Playback.Jukebox.NowPlaying"/> changes;
-/// a placeholder box remains underneath until it loads or if it never does), title (with an accent
-/// underline) / artist (from <see cref="Playback.Jukebox.NowPlaying"/>), a status line
+/// a placeholder box remains underneath until it loads or if it never does), the song block —
+/// title / artist / "mapped by" credit, all from <see cref="Playback.Jukebox.NowPlaying"/> — a
+/// status line
 /// (<see cref="Playback.Jukebox.Status"/>, styled in soft red when
 /// <see cref="Playback.Jukebox.LastError"/> is set), the <see cref="TransportRow"/> transport strip
 /// (which carries the "open in browser" button as its trailing entry), a seekable
@@ -122,8 +123,8 @@ public partial class NowPlayingPanel : CompositeDrawable
     private bool lastStatusBusy;
     private int lastStatusPercent = -1;
     private SpriteText titleText = null!;
-    private Box titleUnderline = null!;
     private SpriteText artistText = null!;
+    private SpriteText mapperText = null!;
 
     // Last text actually written to elapsedText/totalText, as whole seconds — SpriteText.Text
     // re-lays-out glyphs on every write, so Update() (which runs every frame) only touches these
@@ -167,6 +168,18 @@ public partial class NowPlayingPanel : CompositeDrawable
     internal string StatusText => statusText.Text.ToString();
 
     internal string DownloadPercentText => statusPercentText.Alpha > 0 ? statusPercentText.Text.ToString() : string.Empty;
+
+    /// <summary>Test-only access to the song block's three lines (JukeBox.Game.Tests has
+    /// InternalsVisibleTo).</summary>
+    internal SpriteText TitleText => titleText;
+
+    internal SpriteText ArtistText => artistText;
+
+    internal SpriteText MapperText => mapperText;
+
+    /// <summary>Test-only: the song block's own drawables, so a test can assert what the block is
+    /// made of (no accent rule, three text lines) without reaching into its layout.</summary>
+    internal FillFlowContainer SongInfo => songInfo;
 
     [BackgroundDependencyLoader]
     private void load()
@@ -230,31 +243,20 @@ public partial class NowPlayingPanel : CompositeDrawable
                                 // drawable, stalling that FadeIn indefinitely instead of letting
                                 // it progress every frame.
                                 AlwaysPresent = true,
+                                // Title / artist / mapper, three plain lines with no rule between
+                                // them: an accent underline used to sit under the title, but a
+                                // full-width coloured bar inside a stack this small reads as a
+                                // section divider cutting the song's own metadata in half. The type
+                                // scale (primary → secondary → tertiary) already establishes the
+                                // hierarchy, and the freed line gives the mapper credit a home.
                                 Children = new Drawable[]
                                 {
-                                    new Container
+                                    titleText = new SpriteText
                                     {
                                         RelativeSizeAxes = Axes.X,
-                                        AutoSizeAxes = Axes.Y,
-                                        Children = new Drawable[]
-                                        {
-                                            titleText = new SpriteText
-                                            {
-                                                RelativeSizeAxes = Axes.X,
-                                                Truncate = true,
-                                                Font = FontUsage.Default.With(size: Theme.RowTitleTextSize),
-                                                Colour = Theme.TextPrimary,
-                                            },
-                                            titleUnderline = new Box
-                                            {
-                                                Anchor = Anchor.BottomLeft,
-                                                Origin = Anchor.BottomLeft,
-                                                RelativeSizeAxes = Axes.X,
-                                                Height = 2,
-                                                Y = 2,
-                                                Colour = Theme.Accent,
-                                            },
-                                        }
+                                        Truncate = true,
+                                        Font = FontUsage.Default.With(size: Theme.RowTitleTextSize),
+                                        Colour = Theme.TextPrimary,
                                     },
                                     artistText = new SpriteText
                                     {
@@ -262,6 +264,13 @@ public partial class NowPlayingPanel : CompositeDrawable
                                         Truncate = true,
                                         Font = FontUsage.Default.With(size: Theme.RowSecondaryTextSize),
                                         Colour = Theme.TextSecondary,
+                                    },
+                                    mapperText = new SpriteText
+                                    {
+                                        RelativeSizeAxes = Axes.X,
+                                        Truncate = true,
+                                        Font = FontUsage.Default.With(size: Theme.CaptionTextSize),
+                                        Colour = Theme.TextTertiary,
                                     },
                                 },
                             },
@@ -524,17 +533,18 @@ public partial class NowPlayingPanel : CompositeDrawable
     {
         string title = change.NewValue?.DisplayTitle ?? string.Empty;
         string artist = change.NewValue?.DisplayArtist ?? string.Empty;
+        string creator = change.NewValue?.Creator ?? string.Empty;
 
         songInfo.FadeOut(Theme.DurationFast, Theme.EaseExit).OnComplete(_ =>
         {
             titleText.Text = title;
             artistText.Text = artist;
+            // Sets served without a creator (and the nothing-playing state) leave this blank rather
+            // than printing a credit to nobody; SpriteText collapses to zero height, so the flow
+            // above simply closes up.
+            mapperText.Text = creator.Length > 0 ? $"mapped by {creator}" : string.Empty;
             songInfo.FadeIn(Theme.DurationFast, Theme.EaseEnter);
         });
-
-        // Nothing playing means no title to underline — the accent rule would otherwise sit under
-        // an empty line as a stray divider.
-        titleUnderline.Alpha = title.Length > 0 ? 1 : 0;
 
         int myGeneration = ++thumbnailGeneration;
 
