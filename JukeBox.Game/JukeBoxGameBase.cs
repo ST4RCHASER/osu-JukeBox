@@ -2,6 +2,7 @@ using System;
 using System.Net.Http;
 using JukeBox.Game.Beatmaps;
 using JukeBox.Game.Configuration;
+using JukeBox.Game.Import;
 using JukeBox.Game.LazerPlayer;
 using JukeBox.Game.Online;
 using JukeBox.Game.Playback;
@@ -147,6 +148,7 @@ namespace JukeBox.Game
         private LazerRulesetConfigCache lazerRulesetConfigs = null!;
         private SkinSelection skinSelection = null!;
         private osu.Game.Skinning.SkinManager skinManager = null!;
+        private DroppedFileImporter fileImporter = null!;
 
         [BackgroundDependencyLoader]
         private void load(osu.Framework.Configuration.FrameworkConfigManager frameworkConfig)
@@ -321,6 +323,13 @@ namespace JukeBox.Game
 
             Add(skinSelection = new SkinSelection());
             dependencies.Cache(skinSelection);
+
+            // Drag-and-drop importer. Wired here (rather than in JukeBoxGame) so the test browser
+            // and visual test scenes get it too — it resolves host.Window itself and simply has no
+            // OS-level drop source when there isn't one (headless), so nothing here spawns
+            // window-thread work a test host can't service.
+            Add(fileImporter = new DroppedFileImporter());
+            dependencies.Cache(fileImporter);
 
             var offsetStore = new BeatmapOffsetStore();
             Add(offsetStore);
