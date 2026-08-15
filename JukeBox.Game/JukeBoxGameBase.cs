@@ -270,6 +270,14 @@ namespace JukeBox.Game
                 config.GetBindable<MirrorSource>(JukeBoxSetting.PreferredMirror));
             dependencies.CacheAs<IBeatmapMirror>(mirror);
 
+            // The alternative SEARCH backend (downloads always stay on the mirror chain above).
+            // Cached unconditionally even with no credentials configured: BeatmapSearchEngine only
+            // reaches for it when the user picked it, and it reports the missing credentials as an
+            // ordinary search failure — which already falls back to the mirror.
+            dependencies.Cache(new OfficialBeatmapSearch(http,
+                config.GetBindable<string>(JukeBoxSetting.OsuClientId),
+                config.GetBindable<string>(JukeBoxSetting.OsuClientSecret)));
+
             var cache = new BeatmapCache(Host.Storage.GetFullPath("cache"), mirror, config.Get<bool>(JukeBoxSetting.NoVideoDownloads));
             dependencies.Cache(cache);
 

@@ -40,5 +40,18 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("select Compact again", () => jukeBoxGame.FpsDisplay.Value = FpsDisplayMode.Compact);
             AddAssert("overlay visible again", () => jukeBoxGame.FpsCounter.State.Value == Visibility.Visible);
         }
+
+        // The official search backend is constructed and cached by the REAL JukeBoxGameBase (this
+        // scene's runner is one), which is the one piece TestSceneSearchBackend can't cover — it
+        // substitutes its own stub-backed instance. Without this, a wiring mistake there would only
+        // show up as the setting silently doing nothing at runtime.
+        [Test]
+        public void OfficialSearchBackendIsWiredIntoDependencies()
+        {
+            AddAssert("official search resolvable", () => officialSearch != null);
+        }
+
+        [Resolved]
+        private JukeBox.Game.Online.OfficialBeatmapSearch officialSearch { get; set; } = null!;
     }
 }

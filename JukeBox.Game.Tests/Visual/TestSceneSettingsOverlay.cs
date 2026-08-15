@@ -54,6 +54,9 @@ namespace JukeBox.Game.Tests.Visual
             {
                 config.SetValue(JukeBoxSetting.FpsDisplayMode, FpsDisplayMode.Off);
                 config.SetValue(JukeBoxSetting.PreferredMirror, MirrorSource.Auto);
+                config.SetValue(JukeBoxSetting.SearchApi, SearchApi.Mirror);
+                config.SetValue(JukeBoxSetting.OsuClientId, string.Empty);
+                config.SetValue(JukeBoxSetting.OsuClientSecret, string.Empty);
                 Child = overlay = new SettingsOverlay();
             });
         }
@@ -161,6 +164,77 @@ namespace JukeBox.Game.Tests.Visual
             });
 
             AddAssert("dropdown starts OsuDirect", () => overlay.MirrorDropdown.Current.Value == MirrorSource.OsuDirect);
+        }
+
+        // The "Search API" row and the credentials only the official backend needs. Mirror is the
+        // default precisely so a fresh install needs no credentials at all, which is why the whole
+        // credential block is absent rather than greyed until the user opts in.
+        [Test]
+        public void SearchApiDefaultsToMirrorAndHidesTheCredentials()
+        {
+            AddStep("show overlay", () => overlay.Show());
+
+            AddAssert("config starts Mirror", () => config.Get<SearchApi>(JukeBoxSetting.SearchApi) == SearchApi.Mirror);
+            AddAssert("dropdown starts Mirror", () => overlay.SearchApiDropdown.Current.Value == SearchApi.Mirror);
+            AddAssert("credentials hidden", () => overlay.OfficialCredentials.Alpha == 0);
+        }
+
+        [Test]
+        public void SelectingOfficialRevealsTheCredentialsAndPersistsThem()
+        {
+            AddStep("show overlay", () => overlay.Show());
+            AddStep("select the official API", () => overlay.SearchApiDropdown.Current.Value = SearchApi.Official);
+
+            AddAssert("config updated", () => config.Get<SearchApi>(JukeBoxSetting.SearchApi) == SearchApi.Official);
+            AddAssert("credentials revealed", () => overlay.OfficialCredentials.Alpha == 1);
+
+            AddStep("type credentials", () =>
+            {
+                overlay.ClientIdTextBox.Current.Value = "9999";
+                overlay.ClientSecretTextBox.Current.Value = "hunter2";
+            });
+
+            AddAssert("client id persisted", () => config.Get<string>(JukeBoxSetting.OsuClientId) == "9999");
+            AddAssert("client secret persisted", () => config.Get<string>(JukeBoxSetting.OsuClientSecret) == "hunter2");
+
+            AddStep("back to the mirror", () => overlay.SearchApiDropdown.Current.Value = SearchApi.Mirror);
+            AddAssert("credentials hidden again", () => overlay.OfficialCredentials.Alpha == 0);
+            AddAssert("but not forgotten", () => config.Get<string>(JukeBoxSetting.OsuClientId) == "9999");
+        }
+
+        [Test]
+        public void SecretIsMasked()
+        {
+            AddStep("show overlay", () => overlay.Show());
+            AddStep("select the official API", () => overlay.SearchApiDropdown.Current.Value = SearchApi.Official);
+
+            // A plain SettingsTextBox would render the secret in clear text on a panel the user may
+            // well be screen-sharing.
+            AddAssert("secret row uses a masked control", () => overlay.ClientSecretTextBox
+                .ChildrenOfType<osu.Game.Graphics.UserInterface.OsuPasswordTextBox>().Any());
+            AddAssert("id row does not", () => !overlay.ClientIdTextBox
+                .ChildrenOfType<osu.Game.Graphics.UserInterface.OsuPasswordTextBox>().Any());
+        }
+
+        [Test]
+        public void OauthLinkOpensTheAccountPage()
+        {
+            string? opened = null;
+
+            AddStep("show overlay with a stubbed browser", () =>
+            {
+                overlay.OpenUrl = url => opened = url;
+                overlay.Show();
+            });
+            AddStep("select the official API", () => overlay.SearchApiDropdown.Current.Value = SearchApi.Official);
+
+            // Triggered through the button's own Action rather than a real click: the row sits at
+            // the very bottom of a long scrolling panel, and driving the mouse there would be
+            // testing the framework's scrolling rather than this wiring. That the row is REACHABLE
+            // at all (present only under the official backend) is what the tests above cover.
+            AddStep("press the OAuth button", () => overlay.OfficialCredentials.ChildrenOfType<SettingsButton>().Single().Action!.Invoke());
+
+            AddAssert("account page opened", () => opened == SettingsOverlay.oauth_application_url);
         }
 
         // Docked mode (the three-column layout's "Settings" tab body): permanently visible from

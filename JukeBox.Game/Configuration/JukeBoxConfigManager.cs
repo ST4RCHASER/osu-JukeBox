@@ -103,6 +103,27 @@ public enum JukeBoxSetting
     /// install). Empty means nothing has been imported, in which case Custom degrades to Argon.
     /// </summary>
     CustomSkinPath,
+
+    /// <summary>
+    /// Which backend answers beatmap SEARCHES (see <see cref="Online.SearchApi"/>). Downloads are
+    /// unaffected and always go through <see cref="PreferredMirror"/>'s chain.
+    /// </summary>
+    SearchApi,
+
+    /// <summary>
+    /// The user's own osu! OAuth application client id, used only when <see cref="SearchApi"/> is
+    /// <see cref="Online.SearchApi.Official"/>. Per-user rather than bundled with the app: osu!'s
+    /// docs are explicit that a client secret must not be shared, and a secret shipped inside an
+    /// open-source binary is published to everyone who downloads it.
+    /// </summary>
+    OsuClientId,
+
+    /// <summary>
+    /// The matching client secret. Stored in the plain-text config like every other setting — it
+    /// grants the <c>public</c> scope only (no user data, no writes), but it is still the user's
+    /// credential, so it is masked in the settings UI and never written to the log.
+    /// </summary>
+    OsuClientSecret,
 }
 
 /// <summary>
@@ -227,5 +248,11 @@ public class JukeBoxConfigManager : IniConfigManager<JukeBoxSetting>
         SetDefault(JukeBoxSetting.DetachPlayOnMain, false);
         SetDefault(JukeBoxSetting.LastImportDirectory, string.Empty);
         SetDefault(JukeBoxSetting.CustomSkinPath, string.Empty);
+
+        // Mirror by default: the official API needs credentials the user has to create themselves,
+        // so anything else would leave a fresh install unable to search at all.
+        SetDefault(JukeBoxSetting.SearchApi, SearchApi.Mirror);
+        SetDefault(JukeBoxSetting.OsuClientId, string.Empty);
+        SetDefault(JukeBoxSetting.OsuClientSecret, string.Empty);
     }
 }

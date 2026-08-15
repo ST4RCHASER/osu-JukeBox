@@ -70,6 +70,10 @@ public partial class SettingsOverlay : FocusedOverlayContainer
 {
     private const float panel_width = 360;
 
+    /// <summary>Where a user creates the OAuth application the official search backend needs — the
+    /// account page's OAuth section, deep-linked so it opens already scrolled to it.</summary>
+    internal const string oauth_application_url = "https://osu.ppy.sh/home/account/edit#oauth";
+
     /// <summary>Fraction of the game height the floating card may occupy (content scrolls inside).</summary>
     private const float floating_height = 0.85f;
 
@@ -119,6 +123,15 @@ public partial class SettingsOverlay : FocusedOverlayContainer
     private SettingsSlider<double> uiScaleRow = null!;
     private SettingsSlider<double> playfieldZoomRow = null!;
     private SettingsEnumDropdown<MirrorSource> mirrorDropdown = null!;
+    private SettingsEnumDropdown<SearchApi> searchApiDropdown = null!;
+    private SettingsTextBox clientIdTextBox = null!;
+    private SettingsPasswordTextBox clientSecretTextBox = null!;
+
+    // Wraps the three official-API-only rows so "Search API = Mirror" hides the whole block in one
+    // write. Hidden by Alpha (not removed) because these rows carry live config bindables that must
+    // keep their values across toggles; a zero-Alpha child is not IsPresent, so the surrounding
+    // FillFlowContainer stops laying it out entirely rather than leaving a gap.
+    private Container officialCredentials = null!;
     private SettingsCheckbox detachPlayerCheckbox = null!;
     private SettingsCheckbox playOnMainCheckbox = null!;
 
@@ -196,6 +209,28 @@ public partial class SettingsOverlay : FocusedOverlayContainer
     internal SettingsCheckbox HardwareAccelerationCheckbox => hardwareAccelerationCheckbox;
 
     internal SettingsDropdown<MirrorSource> MirrorDropdown => mirrorDropdown;
+    internal SettingsDropdown<SearchApi> SearchApiDropdown => searchApiDropdown;
+    internal SettingsItem<string> ClientIdTextBox => clientIdTextBox;
+    internal SettingsItem<string> ClientSecretTextBox => clientSecretTextBox;
+
+    /// <summary>Test-only: the block of official-API credential rows, present only while the
+    /// official search backend is selected.</summary>
+    internal Container OfficialCredentials => officialCredentials;
+
+    /// <summary>Test seam (JukeBox.Game.Tests has InternalsVisibleTo): replaces
+    /// <see cref="osu.Framework.Platform.GameHost.OpenUrlExternally"/> so tests can assert the
+    /// opened URL without actually opening a browser. Mirrors
+    /// <see cref="FullscreenListingOverlay.OpenUrl"/>.</summary>
+    internal Action<string>? OpenUrl;
+
+    private void openUrl(string url)
+    {
+        if (OpenUrl != null)
+            OpenUrl(url);
+        else
+            host.OpenUrlExternally(url);
+    }
+
     internal SettingsCheckbox RenderChartCheckbox => renderChartCheckbox;
     internal SettingsCheckbox PlayHitSoundsCheckbox => playHitSoundsCheckbox;
     internal SettingsSlider<double> BackgroundDimSlider => backgroundDimRow;
@@ -465,6 +500,44 @@ public partial class SettingsOverlay : FocusedOverlayContainer
             Children = new Drawable[]
             {
                 mirrorDropdown = new SettingsEnumDropdown<MirrorSource> { LabelText = "Beatmap mirror" },
+                searchApiDropdown = new SettingsEnumDropdown<SearchApi> { LabelText = "Search API" },
+                officialCredentials = new Container
+                {
+                    RelativeSizeAxes = Axes.X,
+                    AutoSizeAxes = Axes.Y,
+                    Child = new FillFlowContainer
+                    {
+                        RelativeSizeAxes = Axes.X,
+                        AutoSizeAxes = Axes.Y,
+                        Direction = FillDirection.Vertical,
+                        Children = new Drawable[]
+                        {
+                            clientIdTextBox = new SettingsTextBox { LabelText = "Client ID" },
+                            clientSecretTextBox = new SettingsPasswordTextBox { LabelText = "Client secret" },
+                            new OsuTextFlowContainer(t => t.Font = OsuFont.GetFont(size: 12))
+                            {
+                                RelativeSizeAxes = Axes.X,
+                                AutoSizeAxes = Axes.Y,
+                                Padding = new MarginPadding
+                                {
+                                    Left = SettingsPanel.CONTENT_PADDING.Left,
+                                    Right = SettingsPanel.CONTENT_PADDING.Right,
+                                    Top = 8,
+                                    Bottom = 8,
+                                },
+                                Colour = Theme.TextTertiary,
+                                Text = "Create an OAuth application on your osu! account page and paste its id and "
+                                       + "secret here. The callback URL can be left blank. Nothing about your account "
+                                       + "is read — the credentials only unlock osu!'s own beatmap search.",
+                            },
+                            new SettingsButton
+                            {
+                                Text = "Open osu! OAuth settings",
+                                Action = () => openUrl(oauth_application_url),
+                            },
+                        },
+                    },
+                },
             },
         });
 
@@ -499,6 +572,15 @@ public partial class SettingsOverlay : FocusedOverlayContainer
         uiScaleRow.Current = config.GetBindable<double>(JukeBoxSetting.UiScale);
         globalOffsetRow.Current = config.GetBindable<double>(JukeBoxSetting.GlobalAudioOffset);
         mirrorDropdown.Current = config.GetBindable<MirrorSource>(JukeBoxSetting.PreferredMirror);
+
+        searchApiDropdown.Current = config.GetBindable<SearchApi>(JukeBoxSetting.SearchApi);
+        clientIdTextBox.Current = config.GetBindable<string>(JukeBoxSetting.OsuClientId);
+        clientSecretTextBox.Current = config.GetBindable<string>(JukeBoxSetting.OsuClientSecret);
+
+        // Credentials only mean anything to the official backend — with the mirrors selected the
+        // block is gone rather than greyed, since there is nothing about it to explain in that mode.
+        searchApiDropdown.Current.BindValueChanged(e => officialCredentials.Alpha = e.NewValue == SearchApi.Official ? 1 : 0, true);
+
         detachPlayerCheckbox.Current = config.GetBindable<bool>(JukeBoxSetting.DetachPlayer);
 
         // "Play on main window too" only means something while the player IS detached; while it
@@ -782,6 +864,22 @@ public partial class SettingsOverlay : FocusedOverlayContainer
                     ? $"Custom: {customSkinName.Value}"
                     : base.GenerateItemText(item);
         }
+    }
+
+    /// <summary>
+    /// A <see cref="SettingsTextBox"/> whose control masks what it holds. lazer ships no settings
+    /// row of this shape (its only password box lives in the login form), but it does ship the
+    /// masked <see cref="OsuPasswordTextBox"/> — so this is that control dropped into
+    /// <see cref="SettingsItem{T}"/>'s label/revert-arrow chrome, matching every other row here.
+    /// </summary>
+    internal partial class SettingsPasswordTextBox : SettingsItem<string>
+    {
+        protected override Drawable CreateControl() => new OsuPasswordTextBox
+        {
+            Margin = new MarginPadding { Top = 5 },
+            RelativeSizeAxes = Axes.X,
+            CommitOnFocusLost = true,
+        };
     }
 
     /// <summary>
