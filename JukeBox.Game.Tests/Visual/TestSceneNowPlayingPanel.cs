@@ -421,6 +421,51 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("and the dropdown agrees", () => nowPlaying.DifficultySwitcher.Dropdown.Current.Value?.Version == "Hard");
         }
 
+        // A replay is tied to one exact .osu, so switching difficulty would silently drop it back to
+        // autoplay on a difficulty the player never played. The dropdown is locked and dimmed while
+        // one is being watched — still showing which difficulty it was — and live again afterwards.
+        [Test]
+        public void TheDifficultySwitcherIsLockedWhileAReplayIsBeingWatched()
+        {
+            AddStep("play a multi-difficulty set with a replay attached", () =>
+            {
+                var replaySet = new CachedBeatmapSet { SetId = 107, Directory = tmp, AudioFile = fixtureSet.AudioFile, PreferredOsuFile = "easy.osu" };
+                replaySet.OsuFiles.AddRange(new[] { "easy.osu", "hard.osu" });
+                replaySet.Difficulties.Add(new DifficultyInfo { Path = "easy.osu", Version = "Easy", Mode = 0 });
+                replaySet.Difficulties.Add(new DifficultyInfo { Path = "hard.osu", Version = "Hard", Mode = 0 });
+
+                playback.Current.Value = replaySet;
+                playback.SelectedOsuFile.Value = "hard.osu";
+
+                jukebox.NowPlaying.Value = new BeatmapSetInfo
+                {
+                    Id = 107,
+                    Title = "Replayed",
+                    Replay = new JukeBox.Game.Replays.ReplayAttachment { PlayerName = "Cookiezi", OsuFile = "hard.osu" },
+                };
+            });
+
+            AddUntilStep("dropdown is locked", () => nowPlaying.DifficultySwitcher.Dropdown.Current.Disabled);
+            AddUntilStep("and dimmed", () => nowPlaying.DifficultySwitcher.Dropdown.Alpha < 1);
+            AddAssert("still showing the replay's own difficulty",
+                () => nowPlaying.DifficultySwitcher.Dropdown.Current.Value?.Version == "Hard");
+
+            AddStep("move on to an ordinary multi-difficulty set", () =>
+            {
+                var plainSet = new CachedBeatmapSet { SetId = 108, Directory = tmp, AudioFile = fixtureSet.AudioFile, PreferredOsuFile = "easy.osu" };
+                plainSet.OsuFiles.AddRange(new[] { "easy.osu", "hard.osu" });
+                plainSet.Difficulties.Add(new DifficultyInfo { Path = "easy.osu", Version = "Easy", Mode = 0 });
+                plainSet.Difficulties.Add(new DifficultyInfo { Path = "hard.osu", Version = "Hard", Mode = 0 });
+
+                playback.Current.Value = plainSet;
+                playback.SelectedOsuFile.Value = "easy.osu";
+                jukebox.NowPlaying.Value = new BeatmapSetInfo { Id = 108, Title = "Plain" };
+            });
+
+            AddUntilStep("dropdown is interactive again", () => !nowPlaying.DifficultySwitcher.Dropdown.Current.Disabled);
+            AddUntilStep("and back to full opacity", () => nowPlaying.DifficultySwitcher.Dropdown.Alpha == 1);
+        }
+
         // The mode used to be a text tag baked into the item's label ("[taiko] Oni"). It's now drawn
         // as lazer's real ruleset icon in the item's badge strip instead, so the label carries only
         // the difficulty name — no bracketed prefix left behind.
