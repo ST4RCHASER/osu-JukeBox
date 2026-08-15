@@ -169,7 +169,7 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
         // AssemblyRulesetStore scans already-loaded assemblies — touch each ruleset first so
         // lazy assembly loading can't leave the Mode row empty (see the rulesetStore field).
         foreach (string mode in new[] { "osu", "taiko", "fruits", "mania" })
-            _ = FullscreenBeatmapCard.RulesetFor(mode);
+            _ = RulesetIcons.For(mode);
 
         rulesetStore = new AssemblyRulesetStore();
     }

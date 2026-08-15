@@ -384,7 +384,7 @@ public partial class FullscreenBeatmapCard : ClickableContainer
 
         foreach (string mode in Set.Beatmaps.Select(b => b.Mode).Distinct())
         {
-            children.Add(CreateRulesetIcon(mode).With(icon =>
+            children.Add(RulesetIcons.Create(mode).With(icon =>
             {
                 icon.Anchor = Anchor.CentreLeft;
                 icon.Origin = Anchor.CentreLeft;
@@ -476,50 +476,14 @@ public partial class FullscreenBeatmapCard : ClickableContainer
 
             Children = new Drawable[]
             {
-                CreateRulesetIcon(beatmap.Mode).With(icon =>
+                RulesetIcons.Create(beatmap.Mode).With(icon =>
                 {
                     icon.Anchor = Anchor.CentreLeft;
                     icon.Origin = Anchor.CentreLeft;
                     icon.Size = new Vector2(11);
                     icon.Colour = Theme.TextSecondary;
                 }),
-                new CircularContainer
-                {
-                    Anchor = Anchor.CentreLeft,
-                    Origin = Anchor.CentreLeft,
-                    AutoSizeAxes = Axes.Both,
-                    Masking = true,
-                    Children = new Drawable[]
-                    {
-                        new Box { RelativeSizeAxes = Axes.Both, Colour = Theme.DifficultyColour(beatmap.DifficultyRating) },
-                        new FillFlowContainer
-                        {
-                            AutoSizeAxes = Axes.Both,
-                            Direction = FillDirection.Horizontal,
-                            Spacing = new Vector2(2, 0),
-                            Margin = new MarginPadding { Horizontal = 6, Vertical = 1 },
-                            Children = new Drawable[]
-                            {
-                                new SpriteIcon
-                                {
-                                    Anchor = Anchor.CentreLeft,
-                                    Origin = Anchor.CentreLeft,
-                                    Icon = FontAwesome.Solid.Star,
-                                    Size = new Vector2(8),
-                                    Colour = Color4.Black.Opacity(0.85f),
-                                },
-                                new SpriteText
-                                {
-                                    Anchor = Anchor.CentreLeft,
-                                    Origin = Anchor.CentreLeft,
-                                    Text = beatmap.DifficultyRating.ToString("0.00"),
-                                    Font = FontUsage.Default.With(weight: "Bold", size: 11),
-                                    Colour = Color4.Black.Opacity(0.85f),
-                                },
-                            },
-                        },
-                    },
-                },
+                StarRatingPill.Create(beatmap.DifficultyRating),
                 new SpriteText
                 {
                     Anchor = Anchor.CentreLeft,
@@ -533,32 +497,6 @@ public partial class FullscreenBeatmapCard : ClickableContainer
         }
 
     }
-
-    // One shared instance per ruleset — Ruleset construction isn't free and CreateIcon() is
-    // called for every card rebuild.
-    private static readonly osu.Game.Rulesets.Ruleset osu_ruleset = new osu.Game.Rulesets.Osu.OsuRuleset();
-    private static readonly osu.Game.Rulesets.Ruleset taiko_ruleset = new osu.Game.Rulesets.Taiko.TaikoRuleset();
-    private static readonly osu.Game.Rulesets.Ruleset catch_ruleset = new osu.Game.Rulesets.Catch.CatchRuleset();
-    private static readonly osu.Game.Rulesets.Ruleset mania_ruleset = new osu.Game.Rulesets.Mania.ManiaRuleset();
-
-    /// <summary>
-    /// LAZER'S REAL ruleset icon for one of our <see cref="BeatmapInfo.Mode"/> strings
-    /// (osu/taiko/fruits/mania, "catch" tolerated), via the matching ruleset's
-    /// <c>CreateIcon()</c> — a <see cref="SpriteIcon"/> over the texture-backed
-    /// <c>OsuIcon</c> glyphs (see the <c>OsuIconStore</c> registration in JukeBoxGameBase).
-    /// Unknown modes fall back to osu!'s icon, matching how the rest of this app treats
-    /// unrecognised modes. Colour is applied by the caller (the glyph textures are white, so a
-    /// plain <see cref="Drawable.Colour"/> tint works, same as lazer's own difficulty lists).
-    /// </summary>
-    internal static Drawable CreateRulesetIcon(string mode) => RulesetFor(mode).CreateIcon();
-
-    internal static osu.Game.Rulesets.Ruleset RulesetFor(string mode) => mode switch
-    {
-        "taiko" => taiko_ruleset,
-        "fruits" or "catch" => catch_ruleset,
-        "mania" => mania_ruleset,
-        _ => osu_ruleset, // "osu" and anything unknown
-    };
 
     // No scale, no size change, no widened hit area on hover — anything that grows this card's
     // flow footprint (even a 1% scale) can push a grid row over the wrap threshold and reflow the
