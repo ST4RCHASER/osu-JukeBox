@@ -471,7 +471,12 @@ public partial class ChartPanel : CompositeDrawable
                     cursorTrailCheckbox = new SettingsCheckbox { LabelText = "Cursor trail" },
                     cursorRipplesCheckbox = new SettingsCheckbox { LabelText = "Cursor ripples" },
                     playfieldBorderDropdown = new SettingsEnumDropdown<PlayfieldBorderStyle> { LabelText = "Playfield border style" },
-                    new LazerSubsection("Replay analysis")
+                    // Labelled "(osu!)" even though it is nested inside the osu! group: lazer's
+                    // subsection heading is one size, so a nested one is indistinguishable from a
+                    // sibling and read as a fifth ruleset in the real window. The suffix — which is
+                    // also what this block was called in Settings — carries the parentage that the
+                    // visual hierarchy cannot.
+                    new LazerSubsection("Analysis (osu!)")
                     {
                         RelativeSizeAxes = Axes.X,
                         AutoSizeAxes = Axes.Y,
