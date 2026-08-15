@@ -92,6 +92,12 @@ namespace JukeBox.Game.Tests.Visual
                 uiContainer.Clear();
             });
 
+            // Give the release a few frames to actually end the drag before the next panel is
+            // built. Under the full suite the process is busy enough that the rearrangement is
+            // still running when the button comes up, and a pointer the input manager still
+            // considers to be dragging delivers no hover at all to whatever is built next.
+            AddWaitStep("let any drag settle", 5);
+
             AddStep("queue three sets", () =>
             {
                 queue.Items.Clear();
@@ -127,6 +133,7 @@ namespace JukeBox.Game.Tests.Visual
         public void AtRestTheCardSpansTheFullWidth()
         {
             AddAssert("nothing is hovered", () => !rows().Any(r => r.IsHovered));
+            AddAssert("so no drag handle is showing", () => rows().All(r => handleOf(r).Alpha == 0));
 
             AddUntilStep("each card is as wide as the list", () =>
             {
@@ -141,34 +148,6 @@ namespace JukeBox.Game.Tests.Visual
 
                 return rows().All(r => cardOf(r).ScreenSpaceDrawQuad.TopLeft.X <= listLeft + 0.5f);
             });
-        }
-
-        /// <summary>Hovering reveals the handle — and it must be a real hit target, because that is
-        /// what the list asks about when deciding whether a drag may begin.</summary>
-        [Test]
-        public void HoveringRevealsAHandleThatCanStartADrag()
-        {
-            // Captured once: re-querying the live list on every step makes the test depend on the
-            // queue still holding the same rows, which is not what it is about.
-            QueuePanel.QueueRow row = null!;
-            AddStep("take the first row", () => row = rows()[0]);
-
-            AddAssert("the handle is hidden at rest", () => handleOf(row).Alpha == 0);
-
-            AddStep("hover the first card", () => InputManager.MoveMouseTo(cardOf(row)));
-
-            // The row's own hover state first: if that never arrives the fade never starts, and
-            // waiting on the alpha alone reports the wrong thing when the pointer didn't move.
-            AddUntilStep("the row is hovered", () => row.IsHovered);
-            AddUntilStep("the handle faded in", () => handleOf(row).Alpha == 1);
-
-            AddAssert("and the list will start a drag from it",
-                () => row.CanBeDraggedAt(handleOf(row).ScreenSpaceDrawQuad.Centre));
-
-            AddAssert("but not from the middle of the card",
-                () => !row.CanBeDraggedAt(cardOf(row).ScreenSpaceDrawQuad.Centre));
-
-            AddStep("stop hovering", () => InputManager.MoveMouseTo(restingPointerPosition));
         }
 
         /// <summary>Play above remove, in a column — the destructive one keeps the bottom.</summary>
@@ -260,6 +239,13 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("hover the first card", () => InputManager.MoveMouseTo(cardOf(first)));
             AddUntilStep("the row is hovered", () => first.IsHovered);
             AddUntilStep("the handle faded in", () => handleOf(first).Alpha == 1);
+
+            // The list asks IsDraggableAt before starting a drag: it must say yes over the handle
+            // and no over the rest of the card, or the whole row becomes a drag target.
+            AddAssert("the list will start a drag from the handle",
+                () => first.CanBeDraggedAt(handleOf(first).ScreenSpaceDrawQuad.Centre));
+            AddAssert("but not from the middle of the card",
+                () => !first.CanBeDraggedAt(cardOf(first).ScreenSpaceDrawQuad.Centre));
 
             AddStep("press on the handle", () =>
             {
