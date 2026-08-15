@@ -101,6 +101,8 @@ public partial class ToastOverlay : CompositeDrawable
     /// rather than done inline — several of the callers (import results, mirror failures) originate
     /// on background tasks.
     /// </summary>
+    /// <param name="message">The line to show. Displayed verbatim on one truncating line — a toast
+    /// is a glance, not a report, so callers keep it to a phrase.</param>
     /// <param name="accent">Bar/icon colour. Defaults to <see cref="Theme.Error"/> so a failure is
     /// unmistakably red without every call site having to remember to say so; informational toasts
     /// pass <see cref="Theme.Accent"/>.</param>
@@ -143,7 +145,7 @@ public partial class ToastOverlay : CompositeDrawable
         var toasts = stack.Children;
 
         for (int i = 0; i < toasts.Count; i++)
-            toasts[i].MoveToSlot(-(toasts.Count - 1 - i) * (Toast.Height + stack_spacing));
+            toasts[i].MoveToSlot(-(toasts.Count - 1 - i) * (Toast.FixedHeight + stack_spacing));
     }
 
     /// <summary>
@@ -153,8 +155,19 @@ public partial class ToastOverlay : CompositeDrawable
     /// </summary>
     public partial class Toast : Container
     {
-        public const float Width = 360;
-        public const float Height = 46;
+        /// <summary>
+        /// The fixed footprint every toast takes, which <see cref="ToastOverlay.updateLayout"/>
+        /// counts slots in. Named apart from <see cref="Drawable.Width"/>/<see cref="Drawable.Height"/>
+        /// rather than shadowing them: as plain <c>Width</c>/<c>Height</c> these hid the base
+        /// properties, which made <c>someToast.Width</c> a compile error (a const cannot be reached
+        /// through an instance, and the derived name wins the lookup) and left two same-named things
+        /// on one type meaning different things. The constructor assigns them to the real
+        /// <see cref="Drawable.Size"/>, so the drawable's own size has always agreed with these —
+        /// the collision was a readability trap, not a behavioural one.
+        /// </summary>
+        public const float FixedWidth = 360;
+
+        public const float FixedHeight = 46;
 
         /// <summary>How long a toast sits at rest before dismissing itself.</summary>
         public const double Dwell = 4000;
@@ -196,7 +209,7 @@ public partial class ToastOverlay : CompositeDrawable
 
             Anchor = Anchor.BottomRight;
             Origin = Anchor.BottomRight;
-            Size = new Vector2(Width, Height);
+            Size = new Vector2(FixedWidth, FixedHeight);
 
             Alpha = 0;
             Masking = true;
