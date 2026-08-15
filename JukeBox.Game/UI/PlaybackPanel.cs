@@ -6,8 +6,10 @@ using osu.Framework.Allocation;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Sprites;
+using osu.Game.Graphics;
 using osu.Game.Graphics.Containers;
 using osu.Game.Graphics.Cursor;
+using osu.Game.Graphics.Sprites;
 using osu.Game.Overlays;
 using osu.Game.Overlays.Settings;
 using osuTK;
@@ -63,7 +65,7 @@ public partial class PlaybackPanel : CompositeDrawable
     private QueuePanel queuePanel = null!;
     private QueueSection queueSection = null!;
     private OsuScrollContainer scroll = null!;
-    private SettingsSlider<double> playbackRateRow = null!;
+    private PlaybackSpeedSlider playbackRateRow = null!;
 
     /// <summary>Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the tab's pieces,
     /// so tests can assert what this section contains without depending on its internal layout.</summary>
@@ -71,14 +73,14 @@ public partial class PlaybackPanel : CompositeDrawable
 
     internal QueuePanel Queue => queuePanel;
 
-    internal SettingsSlider<double> PlaybackRateSlider => playbackRateRow;
+    internal PlaybackSpeedSlider PlaybackRateSlider => playbackRateRow;
 
     [BackgroundDependencyLoader]
     private void load()
     {
         RelativeSizeAxes = Axes.Both;
 
-        playbackRateRow = new SettingsSlider<double> { LabelText = "Playback speed", KeyboardStep = 0.05f };
+        playbackRateRow = new PlaybackSpeedSlider { LabelText = "Playback speed", KeyboardStep = 0.05f };
 
         InternalChild = new OsuTooltipContainer(null!)
         {
@@ -107,7 +109,9 @@ public partial class PlaybackPanel : CompositeDrawable
                             // Lazer's settings rows inset their own content by CONTENT_MARGINS on
                             // both sides (they're built for a panel that pads its header the same
                             // way). Pulling that back out here is what keeps the label/slider flush
-                            // with the Theme-styled content stacked above them.
+                            // with the Theme-styled content stacked above them — and what forces the
+                            // revert arrow onto the right instead of into the left gutter that
+                            // cancellation moves off-panel (see PlaybackRateSlider).
                             Padding = new MarginPadding { Horizontal = -SettingsPanel.CONTENT_MARGINS },
                             Child = playbackRateRow,
                         },
@@ -133,6 +137,72 @@ public partial class PlaybackPanel : CompositeDrawable
 
         // Session-only, like lazer's replay playback control (deliberately not persisted).
         playbackRateRow.Current = playback.PlaybackRate;
+    }
+
+    /// <summary>
+    /// The playback-speed row: lazer's <see cref="SettingsSlider{T}"/> with the live rate ("1.25×")
+    /// and a revert-to-default arrow pinned to the right end of its label line.
+    ///
+    /// <para>
+    /// Lazer parks its revert arrow in a 20px gutter to the LEFT of every settings label
+    /// (<see cref="SettingsItem{T}.ShowsDefaultIndicator"/>), which is unreachable here: this row
+    /// cancels the settings content margins (see its wrapper in <see cref="load"/>) so its label and
+    /// slider sit flush with the <see cref="Theme"/>-styled content stacked above it in the tab, and
+    /// that same cancellation pushes the gutter off the panel's left edge. So the built-in indicator
+    /// is switched off and lazer's own <see cref="RevertToDefaultButton{T}"/> — same drawable, same
+    /// self-managed "visible only when off-default" fade — is re-hosted on the right instead, beside
+    /// the value it reverts.
+    /// </para>
+    /// </summary>
+    internal partial class PlaybackSpeedSlider : SettingsSlider<double>
+    {
+        private readonly OsuSpriteText valueText;
+        private readonly RevertToDefaultButton<double> revertButton;
+
+        /// <summary>Test-only access (JukeBox.Game.Tests has InternalsVisibleTo).</summary>
+        internal OsuSpriteText ValueText => valueText;
+
+        internal RevertToDefaultButton<double> RevertButton => revertButton;
+
+        public PlaybackSpeedSlider()
+        {
+            ShowsDefaultIndicator = false;
+
+            AddInternal(new FillFlowContainer
+            {
+                Anchor = Anchor.TopRight,
+                Origin = Anchor.TopRight,
+                AutoSizeAxes = Axes.Both,
+                Direction = FillDirection.Horizontal,
+                Spacing = new Vector2(6, 0),
+                Children = new Drawable[]
+                {
+                    revertButton = new RevertToDefaultButton<double>
+                    {
+                        Anchor = Anchor.CentreLeft,
+                        Origin = Anchor.CentreLeft,
+                    },
+                    valueText = new OsuSpriteText
+                    {
+                        Anchor = Anchor.CentreLeft,
+                        Origin = Anchor.CentreLeft,
+                        Font = OsuFont.Default.With(size: 14, weight: FontWeight.SemiBold),
+                    },
+                },
+            });
+        }
+
+        protected override void LoadComplete()
+        {
+            base.LoadComplete();
+
+            revertButton.Current = Current;
+
+            // Two decimals unconditionally ("1.00×", not "1×"): the label is pinned to the panel's
+            // right edge, so a width that changed with the digit count would visibly shuffle it
+            // every step of a drag.
+            Current.BindValueChanged(e => valueText.Text = $"{e.NewValue:0.00}×", true);
+        }
     }
 
     private static SpriteText sectionHeader(string text) => new SpriteText
