@@ -4,6 +4,7 @@ using System;
 using System.IO;
 using System.Threading.Tasks;
 using JukeBox.Game.Beatmaps;
+using JukeBox.Game.Configuration;
 using JukeBox.Game.Playback;
 using osu.Framework.Allocation;
 using osu.Framework.Bindables;
@@ -45,6 +46,9 @@ public partial class DroppedFileImporter : Component
 
     [Resolved]
     private Jukebox jukebox { get; set; } = null!;
+
+    [Resolved]
+    private JukeBoxConfigManager config { get; set; } = null!;
 
     private IWindow? subscribedWindow;
 
@@ -89,12 +93,16 @@ public partial class DroppedFileImporter : Component
                     await importBeatmapArchiveAsync(path).ConfigureAwait(false);
                     break;
 
+                case DroppedFileKind.SkinArchive:
+                    await importSkinArchiveAsync(path).ConfigureAwait(false);
+                    break;
+
                 case DroppedFileKind.Unsupported:
                     Notify($"Can't import {Path.GetFileName(path)} — drop a .osz, .osk or .osr", isError: true);
                     break;
 
                 default:
-                    // Phases 2-3 fill these in; every kind that reaches here is one the classifier
+                    // Phase 3 fills this in; every kind that reaches here is one the classifier
                     // recognises but nothing handles yet.
                     Notify($"Nothing handles {kind} yet", isError: true);
                     break;
@@ -121,6 +129,32 @@ public partial class DroppedFileImporter : Component
         await onUpdateThread(() => jukebox.EnqueueAndMaybePlayAsync(set, announce: false)).ConfigureAwait(false);
 
         Notify($"Added: {(set.DisplayTitle.Length > 0 ? set.DisplayTitle : Path.GetFileName(path))}", isError: false);
+    }
+
+    /// <summary>
+    /// Extracts a dropped .osk into the app's <c>skins/</c> storage and selects it immediately.
+    /// The selection is two config writes — the imported folder name, then
+    /// <see cref="JukeBoxSkin.Custom"/> — which persist like any other setting, so the skin is
+    /// still active after a restart. <see cref="LazerPlayer.SkinSelection"/> turns those into a
+    /// live chart-layer rebuild.
+    /// </summary>
+    private async Task importSkinArchiveAsync(string path)
+    {
+        string name = SkinArchive.SanitiseName(Path.GetFileNameWithoutExtension(path));
+        string skinsRoot = host.Storage.GetFullPath("skins");
+
+        await Task.Run(() => SkinArchive.Extract(path, skinsRoot, name)).ConfigureAwait(false);
+
+        await onUpdateThread(() =>
+        {
+            // Folder name first: writing Skin=Custom while CustomSkinPath still points at the
+            // PREVIOUS import would briefly build the old skin.
+            config.SetValue(JukeBoxSetting.CustomSkinPath, name);
+            config.SetValue(JukeBoxSetting.Skin, JukeBoxSkin.Custom);
+            return Task.CompletedTask;
+        }).ConfigureAwait(false);
+
+        Notify($"Skin applied: {name}", isError: false);
     }
 
     /// <summary>
