@@ -103,6 +103,10 @@ public partial class SettingsOverlay : FocusedOverlayContainer
     // card to pop, and its PopIn/PopOut are both guarded no-ops (see their own comments below).
     private Container? panelCard;
 
+    // Likewise floating-only: the docked presentation deliberately paints no ground of its own (see
+    // load()), so this stays null there.
+    private Box? cardBackground;
+
     private OsuScrollContainer scroll = null!;
 
     // ---- our settings ----
@@ -203,6 +207,11 @@ public partial class SettingsOverlay : FocusedOverlayContainer
     internal SettingsCheckbox DetachPlayerCheckbox => detachPlayerCheckbox;
     internal SettingsCheckbox PlayOnMainCheckbox => playOnMainCheckbox;
 
+    /// <summary>Test-only: the panel's own background surface — non-null only for the floating
+    /// card, which is a card in its own right over a scrim. The docked presentation paints none, so
+    /// its sections sit on the hosting column's single surface (see load()).</summary>
+    internal Box? CardBackground => cardBackground;
+
     /// <summary>Test-only: scrolls a control into view (instantly, so the very next test step's
     /// mouse coordinates are already final) so real mouse input can reach it.</summary>
     internal void ScrollControlIntoView(Drawable control) => scroll.ScrollIntoView(control, animated: false);
@@ -225,15 +234,16 @@ public partial class SettingsOverlay : FocusedOverlayContainer
             Children = docked
                 ? new Drawable[]
                 {
-                    // No scrim, no floating card, no fixed width — this is inline tab-body content
-                    // inside the three-column layout's right panel. The backdrop matches lazer's
-                    // settings panel ground (Background4 of the shared purple scheme) so the lazer
-                    // controls sit on their intended surface.
-                    new Box
-                    {
-                        RelativeSizeAxes = Axes.Both,
-                        Colour = colourProvider.Background4,
-                    },
+                    // No scrim, no floating card, no fixed width AND no backdrop of its own — this
+                    // is inline tab-body content inside the three-column layout's right panel, which
+                    // already paints an opaque Theme.PanelSurface behind the whole tab. Painting a
+                    // second (lighter) ground here stacked a card on that card, and lazer's own
+                    // SettingsSection separators then read as the edges of per-section sub-cards
+                    // rather than as dividers. Sections sit directly on the column's one surface, in
+                    // lazer's own arrangement: one ground, sections told apart by their separators
+                    // and header spacing. (The floating presentation below is a real card in its own
+                    // right, over a scrim, so it keeps lazer's Background4 ground.) The same
+                    // reasoning QueuePanel's docked branch already follows.
                     scroll = new OsuScrollContainer
                     {
                         RelativeSizeAxes = Axes.Both,
@@ -260,7 +270,7 @@ public partial class SettingsOverlay : FocusedOverlayContainer
                         EdgeEffect = Theme.PanelShadow,
                         Children = new Drawable[]
                         {
-                            new Box
+                            cardBackground = new Box
                             {
                                 RelativeSizeAxes = Axes.Both,
                                 Colour = colourProvider.Background4,
