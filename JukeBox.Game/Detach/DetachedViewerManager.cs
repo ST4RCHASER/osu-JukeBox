@@ -197,13 +197,36 @@ public partial class DetachedViewerManager : Component
         if (stdin == null)
             return;
 
+        var state = BuildState();
+
+        try
+        {
+            stdin.WriteLine(state.ToJson());
+            stdin.Flush();
+        }
+        catch (Exception e) when (e is IOException or ObjectDisposedException)
+        {
+            // Dead pipe: the Exited handler owns the setting transition; just stop writing.
+            viewerStdin = null;
+        }
+    }
+
+    /// <summary>
+    /// The snapshot as it stands right now. Separate from <see cref="sendState"/> so a test can
+    /// assert on what would be SENT without a viewer process to send it to — under a test host
+    /// none can be spawned (see <see cref="StartViewerProcess"/>), which would otherwise leave the
+    /// entire sending half of the protocol unexercised. Internal: JukeBox.Game.Tests has
+    /// InternalsVisibleTo.
+    /// </summary>
+    internal ViewerSyncState BuildState()
+    {
         var set = current.Value;
 
         // The replay for the difficulty currently selected — the same lookup the rendering side
         // does, so the viewer plays back a real play exactly when the main window does.
         var replay = replays.ForOsuFile(selectedOsuFile.Value);
 
-        var state = new ViewerSyncState
+        return new ViewerSyncState
         {
             SetId = set?.SetId ?? 0,
             SetDirectory = set?.Directory,
@@ -219,17 +242,6 @@ public partial class DetachedViewerManager : Component
             CustomSkinDirectory = skinSelection.CustomSkinDirectory,
             BeatmapAudioOffset = offsets.CurrentOffset.Value,
         };
-
-        try
-        {
-            stdin.WriteLine(state.ToJson());
-            stdin.Flush();
-        }
-        catch (Exception e) when (e is IOException or ObjectDisposedException)
-        {
-            // Dead pipe: the Exited handler owns the setting transition; just stop writing.
-            viewerStdin = null;
-        }
     }
 
     protected override void Dispose(bool isDisposing)

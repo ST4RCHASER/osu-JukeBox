@@ -168,6 +168,15 @@ namespace JukeBox.Game.Tests.Visual
                 var after = mirror.Capture();
                 return after.Count == before.Count && before.All(pair => after[pair.Key] == pair.Value);
             });
+
+            // Asserted against the SETTINGS, not just against a second capture: an encoding that
+            // truncated (a double written as an integer, say) would round-trip perfectly against
+            // itself while quietly rounding the user's value on every hop.
+            AddAssert("and the values themselves are intact", () =>
+                config.Get<double>(JukeBoxSetting.BackgroundDim) == 0.123456789
+                && config.Get<JukeBox.Game.LazerPlayer.ChartConversionTarget>(JukeBoxSetting.ConvertToRuleset) == JukeBox.Game.LazerPlayer.ChartConversionTarget.Mania
+                && maniaRulesetConfig()?.Get<ManiaScrollingDirection>(ManiaRulesetSetting.ScrollDirection) == ManiaScrollingDirection.Up
+                && osuRulesetConfig()?.Get<int>(OsuRulesetSetting.ReplayAnalysisDisplayLength) == 1234);
         }
 
         /// <summary>
