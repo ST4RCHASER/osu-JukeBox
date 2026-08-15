@@ -50,4 +50,31 @@ public class SearchRequest
     public double? MaxStars;
 
     public bool HasStarRange => MinStars.HasValue || MaxStars.HasValue;
+
+    // ---- Official-API-only fields (OfficialBeatmapSearch); the mirrors ignore all of these -----
+
+    /// <summary>
+    /// osu-web genre id (lazer's <c>SearchGenre</c> values), null = any. Only
+    /// <see cref="OfficialBeatmapSearch"/> can express this as a real parameter — on the mirror path
+    /// the same choice is applied client-side to already-loaded results instead (see
+    /// <see cref="BeatmapSearchEngine.MatchesClientFilters"/>), which is why the mirror listing
+    /// doesn't offer the row at all.
+    /// </summary>
+    public int? GenreId;
+
+    /// <summary>osu-web language id (lazer's <c>SearchLanguage</c> values), null = any. See
+    /// <see cref="GenreId"/> for why this is official-only.</summary>
+    public int? LanguageId;
+
+    /// <summary>
+    /// The official endpoint's opaque next-page marker (its <c>cursor_string</c>), null for the
+    /// first page. The official path pages by cursor rather than by <see cref="Page"/>.
+    /// </summary>
+    public string? Cursor;
+
+    /// <summary>
+    /// Whether explicit sets are included. Sent on every official request rather than left to the
+    /// server default, which for a user-less (client-credentials) token means "hide".
+    /// </summary>
+    public bool IncludeNsfw;
 }
