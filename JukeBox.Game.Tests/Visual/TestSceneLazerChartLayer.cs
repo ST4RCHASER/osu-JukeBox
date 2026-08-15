@@ -1,6 +1,7 @@
 #nullable enable
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using JukeBox.Game.LazerPlayer;
@@ -256,6 +257,75 @@ namespace JukeBox.Game.Tests.Visual
                       && layer.PlayableBeatmap!.HitObjects[0].StartTime == 1000);
 
             AddStep("remove layer", () => Remove(host, true));
+        }
+
+        // Regression guard for a real crash: the chart layer is rebuilt often (difficulty switch,
+        // skin change, toggling the chart off and on), and every rebuild handed the SAME decoded
+        // mod instances — stored once on the queue item — to a brand new DrawableRuleset.
+        // ModWithVisibilityAdjustment (HD and friends) binds config bindables in ReadFromConfig,
+        // and binding an already-bound bindable throws, so the second build aborted the app with
+        // "An already bound bindable cannot be bound again."
+        [Test]
+        public void RebuildingWithTheSameReplayDoesNotReuseModInstances()
+        {
+            Score replay = null!;
+            string osu = null!;
+
+            AddStep("decode a replay with a config-binding mod (HD)", () =>
+            {
+                manual.CurrentTime = 0;
+
+                osu = Path.Combine(dir, "rebuilt [0].osu");
+                File.WriteAllText(osu, beatmapForMode(0));
+
+                var ruleset = LazerChartLayer.CreateRuleset(0);
+
+                replay = new Score
+                {
+                    Replay = new Replay { Frames = { new OsuReplayFrame(0, new osuTK.Vector2(64, 96)) } },
+                    ScoreInfo = new ScoreInfo
+                    {
+                        Ruleset = ruleset.RulesetInfo,
+                        Mods = ruleset.ConvertFromLegacyMods((LegacyMods)(8 | 16 | 64)).ToArray(),
+                    },
+                };
+            });
+
+            var modsSeenByEachBuild = new List<Mod[]>();
+
+            // Three builds off the one decoded score, the way a diff switch then a skin change
+            // would: the crash landed on the second.
+            for (int build = 1; build <= 3; build++)
+            {
+                int number = build;
+
+                AddStep($"build chart layer #{number}", () => Add(host = new Container
+                {
+                    RelativeSizeAxes = Axes.Both,
+                    Clock = new FramedClock(manual),
+                    Child = layer = new LazerChartLayer(new FlatWorkingBeatmap(osu), osu, replay),
+                }));
+
+                AddUntilStep($"layer #{number} loaded and rendering", () => layer.IsLoaded && layer.DrawableRuleset != null);
+
+                AddStep($"record layer #{number}'s mods", () => modsSeenByEachBuild.Add(layer.DrawableRuleset!.Mods.ToArray()));
+
+                AddAssert($"layer #{number} kept every replay mod", () => layer.DrawableRuleset!.Mods.Select(m => m.Acronym).ToHashSet()
+                                                                              .SetEquals(replay.ScoreInfo.Mods.Select(m => m.Acronym)));
+                AddAssert($"layer #{number} is replay-driven", () => layer.UsingUserReplay);
+
+                AddStep($"remove layer #{number}", () => Remove(host, true));
+            }
+
+            // The mods are equal in every way that matters and different in the one that caused the
+            // crash: identity. Each build must get its own instances, and none of them may be the
+            // stored score's — those are the master copy that outlives every rebuild.
+            AddAssert("no build reused another build's instances", () =>
+                modsSeenByEachBuild.SelectMany(m => m).Distinct(ReferenceEqualityComparer.Instance).Count()
+                == modsSeenByEachBuild.Sum(m => m.Length));
+
+            AddAssert("no build was handed the stored score's own instances", () =>
+                !modsSeenByEachBuild.SelectMany(m => m).Any(handed => replay.ScoreInfo.Mods.Any(stored => ReferenceEquals(handed, stored))));
         }
 
         private float firstObjectY()

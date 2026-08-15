@@ -20,12 +20,23 @@ public static class ReplayMods
     /// never in a real replay anyway, but would fight the replay for the input handler if it were.
     ///
     /// <para>
-    /// Rate-changing mods (DT/NC/HT/DC) ARE included, unlike the difficulty-affecting ones they sit
+    /// Rate-changing mods (DT/NC/HT/DC) ARE included. Unlike the difficulty-affecting ones they sit
     /// beside they change nothing about the rendered playfield: lazer applies them to the TRACK
     /// (<see cref="IApplicableToTrack"/>), which in this app is <see cref="Playback.PlaybackController"/>'s
     /// job (see <see cref="RateFor"/>). Keeping them in the list is what makes the score's own mod
     /// list — and therefore the "HD HR DT" the UI shows — the truth about the play rather than an
     /// edited version of it.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Every call returns FRESH instances</b> (<see cref="Mod.DeepClone"/>, settings included).
+    /// Mods are stateful: <c>ModWithVisibilityAdjustment</c> (HD and friends) binds game config
+    /// bindables in its <c>ReadFromConfig</c>, which <c>DrawableRuleset</c> calls on load — and
+    /// binding an already-bound bindable throws. A dropped replay's decoded score is stored once on
+    /// the queue item and outlives many chart rebuilds (difficulty switch, skin change, toggling
+    /// the chart off and on), so handing the same instances out twice crashed the app outright.
+    /// lazer clones mods per gameplay session for exactly this reason. The stored score's own mods
+    /// are therefore never handed to a ruleset — they are the master copy the clones come from.
     /// </para>
     /// </summary>
     public static IReadOnlyList<Mod> ForGameplay(Score? score)
@@ -33,7 +44,7 @@ public static class ReplayMods
         if (score == null)
             return Array.Empty<Mod>();
 
-        return score.ScoreInfo.Mods.Where(m => m is not ModAutoplay).ToArray();
+        return score.ScoreInfo.Mods.Where(m => m is not ModAutoplay).Select(m => m.DeepClone()).ToArray();
     }
 
     /// <summary>
