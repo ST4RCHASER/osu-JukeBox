@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using JukeBox.Game.Configuration;
 using osu.Framework.Allocation;
 using osu.Framework.Bindables;
 using osu.Framework.Graphics;
@@ -16,19 +17,34 @@ namespace JukeBox.Game.Online;
 /// The beatmap-search state machine shared by both listing presentations (the compact sidebar
 /// <see cref="UI.BeatmapListingOverlay"/>, which only renders results, and the
 /// <see cref="UI.FullscreenListingOverlay"/> the user actually searches and filters in):
-/// a 300ms-debounced keyword search against
-/// <see cref="IBeatmapMirror"/>, refined by the filter bindables below and paginated with
+/// a debounced keyword search refined by the filter bindables below and paginated with
 /// infinite-scroll semantics. Extracted from the (previously monolithic) listing overlay so the two
 /// presentations are pure views over one engine — their filter chips bind the same bindables (so
 /// selections stay in sync across views), their card grids rebuild off the same
 /// <see cref="ResultsChanged"/> event, and no search logic is duplicated.
 ///
-/// Mode/category/extras/sort/stars are server-side parameters — changing them restarts the search
-/// at page 0. <see cref="GenreId"/>/<see cref="LanguageId"/> are CLIENT-SIDE filters over the
-/// already-loaded results (the legacy mirror API can't express them): flipping them never issues a
-/// request directly, but if the filtered results leave a view's viewport underfilled (possibly
-/// empty) while more pages exist, further pages are auto-chained via <see cref="UpdatePaging"/>,
-/// bounded by <see cref="max_auto_chain_pages"/> per user action.
+/// TWO BACKENDS, picked by <see cref="Api"/> (the user's "Search API" setting), differing in what
+/// they can express and therefore in how they page:
+///
+/// <list type="bullet">
+/// <item><see cref="SearchApi.Mirror"/> (the default) — <see cref="IBeatmapMirror"/>'s legacy
+/// search, paged by <see cref="currentPage"/>. It cannot express genre or language, so
+/// <see cref="GenreId"/>/<see cref="LanguageId"/> are applied CLIENT-SIDE over the already-loaded
+/// results: flipping them never issues a request directly, but if the filtered results leave a
+/// view's viewport underfilled (possibly empty) while more pages exist, further pages are
+/// auto-chained via <see cref="UpdatePaging"/>, bounded by <see cref="max_auto_chain_pages"/> per
+/// user action.</item>
+/// <item><see cref="SearchApi.Official"/> — <see cref="OfficialBeatmapSearch"/>, paged by the
+/// endpoint's own cursor. Every filter is a real server-side parameter, so there is no client-side
+/// sieve and no auto-chaining on this path at all, <see cref="HasMore"/> is exact rather than
+/// guessed from a short page, and <see cref="TotalResults"/> is real. A failure here (missing or
+/// rejected credentials, rate limit, network) never dead-ends the listing: the same request is
+/// re-run against the mirror and the reason is surfaced through <see cref="Status"/> and
+/// <see cref="LastError"/>.</item>
+/// </list>
+///
+/// Every other filter (query, mode, category, extras, sort, stars) is a server-side parameter on
+/// both paths — changing any of them restarts the search from the first page.
 ///
 /// A slower, older search response can never overwrite a newer one (<see cref="searchSequence"/>
 /// guard). A <see cref="Component"/> so the debounce runs on this drawable's own scheduler —
@@ -39,7 +55,17 @@ namespace JukeBox.Game.Online;
 /// </summary>
 public partial class BeatmapSearchEngine : Component
 {
-    private const double debounce_ms = 300;
+    /// <summary>Keystroke debounce on the mirror path — the mirrors publish no rate policy.</summary>
+    private const double mirror_debounce_ms = 300;
+
+    /// <summary>
+    /// Keystroke debounce on the official path. osu!'s terms ask for no more than roughly one
+    /// request per second (the enforced ceiling is far higher, but exceeding the stated limit is
+    /// grounds for revoking a token), so 300ms — which a fast typist beats — is not an acceptable
+    /// floor there.
+    /// </summary>
+    private const double official_debounce_ms = 500;
+
     internal const int PAGE_SIZE = 30;
 
     /// <summary>
@@ -48,17 +74,28 @@ public partial class BeatmapSearchEngine : Component
     /// fewer cards than fill the viewport, possibly zero). Bounded per user action so an
     /// all-filtered result stream can't hammer the mirror indefinitely; the budget refreshes
     /// whenever content becomes scrollable again or the user changes the search/filters.
+    /// The client-side sieve it exists for is mirror-only, but the bound applies to both backends:
+    /// any stream of pages too short to fill a viewport would otherwise be fetched without limit.
     /// </summary>
     private const int max_auto_chain_pages = 5;
 
-    // ---- Query + server-side filters (any change restarts the search at page 0) --------------
+    // ---- Backend -----------------------------------------------------------------------------
+
+    /// <summary>
+    /// Which backend answers searches. Bound to the persisted setting when a config manager is in
+    /// DI (the app); left free-standing in bare test scenes. Changing it restarts the search.
+    /// </summary>
+    public readonly Bindable<SearchApi> Api = new Bindable<SearchApi>(SearchApi.Mirror);
+
+    // ---- Query + server-side filters (any change restarts the search) --------------------------
 
     public readonly Bindable<string> Query = new Bindable<string>(string.Empty);
 
-    /// <summary>NeriNyan `m`: "o"/"t"/"c"/"m", null = any.</summary>
+    /// <summary>Ruleset filter as the mirrors' letter ("o"/"t"/"c"/"m"), null = any. The official
+    /// backend re-encodes it as osu!'s ruleset int (see <see cref="OfficialBeatmapSearch.ModeInt"/>).</summary>
     public readonly Bindable<string?> Mode = new Bindable<string?>();
 
-    /// <summary>NeriNyan `s`.</summary>
+    /// <summary>Status filter, in the mirrors' spelling ("all" for any).</summary>
     public readonly Bindable<string> Category = new Bindable<string>("ranked");
 
     public readonly BindableBool HasVideo = new BindableBool();
@@ -72,7 +109,7 @@ public partial class BeatmapSearchEngine : Component
     public readonly BindableDouble MinStars = new BindableDouble { MinValue = 0, MaxValue = 10, Precision = 0.1 };
     public readonly BindableDouble MaxStars = new BindableDouble(10) { MinValue = 0, MaxValue = 10, Precision = 0.1 };
 
-    // ---- Client-side filters (re-filter loaded results, never issue a request) ----------------
+    // ---- Genre/language: server-side on the official path, client-side on the mirror path -------
 
     public readonly Bindable<int?> GenreId = new Bindable<int?>();
     public readonly Bindable<int?> LanguageId = new Bindable<int?>();
@@ -84,8 +121,15 @@ public partial class BeatmapSearchEngine : Component
     /// <summary>Every set loaded so far, unfiltered.</summary>
     public IReadOnlyList<BeatmapSetInfo> LoadedSets => loadedSets;
 
-    /// <summary>The loaded sets passing the client-side genre/language filters — what views render.</summary>
-    public IEnumerable<BeatmapSetInfo> VisibleSets => loadedSets.Where(s => MatchesClientFilters(s, GenreId.Value, LanguageId.Value));
+    /// <summary>
+    /// What views render: the loaded sets, passed through the client-side genre/language filters
+    /// only when the loaded results came from a MIRROR (which can't express those filters). Keyed
+    /// on where the results actually came from rather than on <see cref="Api"/>, so a fallback to
+    /// the mirror still gets its filtering.
+    /// </summary>
+    public IEnumerable<BeatmapSetInfo> VisibleSets => loadedFromOfficial
+        ? loadedSets
+        : loadedSets.Where(s => MatchesClientFilters(s, GenreId.Value, LanguageId.Value));
 
     /// <summary>
     /// True while a request is in flight. A bindable (rather than a plain flag) because every view
@@ -95,17 +139,30 @@ public partial class BeatmapSearchEngine : Component
     public readonly BindableBool IsLoading = new BindableBool();
 
     /// <summary>
-    /// True while the in-flight request is a FRESH search (page 0) rather than a "load more" page
-    /// append. Views cover their whole result area for a fresh search (everything is about to be
-    /// replaced) but only show a footer spinner while appending (the existing cards stay valid).
+    /// True while the in-flight request is a FRESH search (first page) rather than a "load more"
+    /// page append. Views cover their whole result area for a fresh search (everything is about to
+    /// be replaced) but only show a footer spinner while appending (the existing cards stay valid).
     /// </summary>
     public readonly BindableBool LoadingFresh = new BindableBool();
 
     public bool HasMore { get; private set; }
 
+    /// <summary>
+    /// Total upstream matches for the current search, or null when the backend doesn't report one
+    /// (the mirrors don't — a page is all they say).
+    /// </summary>
+    public int? TotalResults { get; private set; }
+
     /// <summary>Human-readable search lifecycle line ("no results", …), shown by every view's
     /// status text. Deliberately says nothing about being busy — that's the spinners' job.</summary>
     public readonly Bindable<string> Status = new Bindable<string>(string.Empty);
+
+    /// <summary>
+    /// Set to the reason the OFFICIAL backend failed each time a search falls back to the mirror,
+    /// so the app can raise a toast for something the user has to act on (bad credentials) rather
+    /// than leaving it in a status line they may not be looking at. Null while nothing has failed.
+    /// </summary>
+    public readonly Bindable<string?> LastError = new Bindable<string?>();
 
     /// <summary>
     /// The rendered result set changed — fired on the update thread. The argument is true for a
@@ -117,6 +174,14 @@ public partial class BeatmapSearchEngine : Component
     [Resolved]
     private IBeatmapMirror mirror { get; set; } = null!;
 
+    // Absent in bare test scenes (and in any build with no credentials wired) — the official path
+    // then behaves exactly as it does on a failure: it falls back to the mirror and says why.
+    [Resolved(canBeNull: true)]
+    private OfficialBeatmapSearch? officialSearch { get; set; }
+
+    [Resolved(canBeNull: true)]
+    private JukeBoxConfigManager? config { get; set; }
+
     private ScheduledDelegate? debounceDelegate;
 
     // Guards against a slower, older search response overwriting the results of a newer one that
@@ -126,9 +191,30 @@ public partial class BeatmapSearchEngine : Component
 
     private int currentPage;
 
+    /// <summary>The official endpoint's next-page cursor; null when there is no next page.</summary>
+    private string? nextCursor;
+
+    /// <summary>
+    /// Whether <see cref="loadedSets"/> came from the official backend. Distinct from
+    /// <c>Api.Value == Official</c>, which only says what was ASKED for — a fallback leaves the
+    /// setting on Official while the loaded results are the mirror's, and those still need the
+    /// client-side genre/language filtering the mirror can't do.
+    /// </summary>
+    private bool loadedFromOfficial;
+
     /// <summary>Auto-chained fetches consumed since the last user action — see
     /// <see cref="max_auto_chain_pages"/>.</summary>
     private int autoChainedPages;
+
+    /// <summary>The keystroke debounce currently in force — longer on the official backend, whose
+    /// terms of use ask for roughly one request per second. Internal so tests can assert the two
+    /// values without waiting them out in real time.</summary>
+    internal double DebounceMs => Api.Value == SearchApi.Official ? official_debounce_ms : mirror_debounce_ms;
+
+    /// <summary>Test-only view of where the currently loaded results came from — see
+    /// <see cref="loadedFromOfficial"/>, which is what distinguishes a successful official search
+    /// from one that silently fell back to the mirror.</summary>
+    internal bool LoadedFromOfficial => loadedFromOfficial;
 
     // Subscriptions live in load() (synchronous with being added to the tree), NOT LoadComplete:
     // a floating listing starts hidden, and a hidden (non-present) parent defers its children's
@@ -138,6 +224,13 @@ public partial class BeatmapSearchEngine : Component
     [BackgroundDependencyLoader]
     private void load()
     {
+        // Bound BEFORE the subscription below so adopting the persisted value at startup isn't
+        // itself treated as the user switching backends.
+        if (config != null)
+            Api.BindTo(config.GetBindable<SearchApi>(JukeBoxSetting.SearchApi));
+
+        Api.BindValueChanged(_ => ScheduleSearch());
+
         Query.BindValueChanged(_ => ScheduleSearch());
         Mode.BindValueChanged(_ => ScheduleSearch());
         Category.BindValueChanged(_ => ScheduleSearch());
@@ -148,18 +241,18 @@ public partial class BeatmapSearchEngine : Component
         MinStars.BindValueChanged(_ => ScheduleSearch());
         MaxStars.BindValueChanged(_ => ScheduleSearch());
 
-        // Genre/language changed — a user action: reset the auto-chain budget and let the views
-        // re-filter the loaded results. If the new filter leaves a viewport underfilled (or empty)
-        // with more pages available, UpdatePaging auto-chains further fetches.
-        GenreId.BindValueChanged(_ => applyClientFilterChange());
-        LanguageId.BindValueChanged(_ => applyClientFilterChange());
+        // Genre/language: a real search parameter on the official backend, a filter over loaded
+        // results on the mirror one (which can't express it) — see the class summary.
+        GenreId.BindValueChanged(_ => applyGenreOrLanguageChange());
+        LanguageId.BindValueChanged(_ => applyGenreOrLanguageChange());
     }
 
-    /// <summary>Kicks off a debounced fresh search (page 0), superseding any pending one.</summary>
+    /// <summary>Kicks off a debounced fresh search, superseding any pending one. The debounce is
+    /// longer on the official backend — see <see cref="official_debounce_ms"/>.</summary>
     public void ScheduleSearch()
     {
         debounceDelegate?.Cancel();
-        debounceDelegate = Scheduler.AddDelayed(() => { _ = runSearchAsync(fresh: true); }, debounce_ms);
+        debounceDelegate = Scheduler.AddDelayed(() => { _ = runSearchAsync(fresh: true); }, DebounceMs);
     }
 
     /// <summary>Cancels a pending debounced search — called when a floating view closes, so the
@@ -169,9 +262,11 @@ public partial class BeatmapSearchEngine : Component
     /// <summary>
     /// Per-frame paging driver, called from a visible view's Update with its own scroll geometry.
     /// When content overflows the viewport, further paging is user-driven (infinite scroll:
-    /// <paramref name="nearEnd"/>) and the auto-chain budget refreshes; when it underfills (the
-    /// client-side filter possibly reduced every loaded page to nothing) the next page is chained
-    /// automatically, bounded by <see cref="max_auto_chain_pages"/> per user action.
+    /// <paramref name="nearEnd"/>) and the auto-chain budget refreshes; when it underfills, the
+    /// next page is chained automatically, bounded by <see cref="max_auto_chain_pages"/> per user
+    /// action. On the mirror path an underfilled viewport usually means the client-side
+    /// genre/language filter thinned the loaded pages — which is what exhausting the budget
+    /// reports; on the official path it just means a viewport taller than one page.
     /// </summary>
     public void UpdatePaging(bool contentOverflows, bool nearEnd)
     {
@@ -192,13 +287,15 @@ public partial class BeatmapSearchEngine : Component
             autoChainedPages++;
             _ = runSearchAsync(fresh: false);
         }
-        else if (!VisibleSets.Any())
+        else if (!loadedFromOfficial && !VisibleSets.Any())
         {
+            // Mirror-only wording: it names the client-side sieve as the thing to loosen, which is
+            // the only reason a page of loaded results can render as nothing on that path.
             Status.Value = $"no matches in the first {loadedSets.Count} loaded results — refine the filters or keywords";
         }
     }
 
-    internal SearchRequest BuildRequest(int page)
+    internal SearchRequest BuildRequest(int page, string? cursor = null)
     {
         double? min = MinStars.Value > 0 ? MinStars.Value : null;
         double? max = MaxStars.Value < 10 ? MaxStars.Value : null;
@@ -222,6 +319,13 @@ public partial class BeatmapSearchEngine : Component
                 : SearchExtra.None,
             MinStars = min,
             MaxStars = max,
+            GenreId = GenreId.Value,
+            LanguageId = LanguageId.Value,
+            Cursor = cursor,
+            // Matching the mirrors, which apply no explicit-content filter of their own: the
+            // official default for a user-less token would otherwise silently hide sets the mirror
+            // backend shows, making the two backends disagree for no reason the user can see.
+            IncludeNsfw = true,
         };
     }
 
@@ -229,6 +333,7 @@ public partial class BeatmapSearchEngine : Component
     {
         int mySequence = ++searchSequence;
         int page = fresh ? 0 : currentPage + 1;
+        string? cursor = fresh ? null : nextCursor;
 
         IsLoading.Value = true;
         LoadingFresh.Value = fresh;
@@ -237,18 +342,43 @@ public partial class BeatmapSearchEngine : Component
         // stale "no results" left showing underneath it would contradict it.
         Schedule(() => Status.Value = string.Empty);
 
-        var request = BuildRequest(page);
+        var request = BuildRequest(page, cursor);
 
         List<BeatmapSetInfo> results;
+        string? resultCursor = null;
+        int? total = null;
+        string? error = null;
+        bool fromOfficial = false;
 
-        try
+        if (Api.Value == SearchApi.Official)
         {
-            results = await mirror.SearchAsync(request).ConfigureAwait(false);
+            try
+            {
+                if (officialSearch == null)
+                    throw new OfficialSearchException("official osu! API search is unavailable in this session");
+
+                var official = await officialSearch.SearchAsync(request).ConfigureAwait(false);
+
+                results = official.Sets;
+                resultCursor = official.CursorString;
+                total = official.Total;
+                fromOfficial = true;
+            }
+            catch (Exception ex)
+            {
+                // Every official failure is recoverable by simply asking the mirrors the same
+                // question, so the listing never dead-ends — but it IS logged and surfaced, since
+                // silently serving worse results would be indistinguishable from the setting doing
+                // nothing at all.
+                error = ex is OfficialSearchException ? ex.Message : "official osu! API search failed";
+                Logger.Log($"Official osu! search failed ({ex.Message}) — falling back to the beatmap mirror.", level: LogLevel.Important);
+
+                results = await mirrorSearchAsync(request).ConfigureAwait(false);
+            }
         }
-        catch (Exception ex)
+        else
         {
-            Logger.Error(ex, "Beatmap search failed");
-            results = new List<BeatmapSetInfo>();
+            results = await mirrorSearchAsync(request).ConfigureAwait(false);
         }
 
         Schedule(() =>
@@ -260,7 +390,13 @@ public partial class BeatmapSearchEngine : Component
 
             IsLoading.Value = false;
             currentPage = page;
-            HasMore = results.Count >= PAGE_SIZE;
+            nextCursor = resultCursor;
+            loadedFromOfficial = fromOfficial;
+            TotalResults = total;
+
+            // Exact on the official path (the cursor IS the "is there more" answer); a guess on the
+            // mirror one, where a full page is the only hint that another may exist.
+            HasMore = fromOfficial ? resultCursor != null : results.Count >= PAGE_SIZE;
 
             if (fresh)
             {
@@ -271,32 +407,69 @@ public partial class BeatmapSearchEngine : Component
             }
 
             loadedSets.AddRange(results);
-            updateStatus();
+            updateStatus(error);
+            LastError.Value = error;
             ResultsChanged?.Invoke(fresh);
         });
     }
 
-    private void applyClientFilterChange()
+    private async Task<List<BeatmapSetInfo>> mirrorSearchAsync(SearchRequest request)
     {
+        try
+        {
+            return await mirror.SearchAsync(request).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Logger.Error(ex, "Beatmap search failed");
+            return new List<BeatmapSetInfo>();
+        }
+    }
+
+    /// <summary>
+    /// Genre/language changed. On the official backend they are real parameters, so this is an
+    /// ordinary (debounced) search; on the mirror backend nothing is requested — the loaded results
+    /// are re-filtered in place, and the auto-chain budget resets because this is a user action.
+    /// </summary>
+    private void applyGenreOrLanguageChange()
+    {
+        if (Api.Value == SearchApi.Official)
+        {
+            ScheduleSearch();
+            return;
+        }
+
         autoChainedPages = 0;
-        updateStatus();
+        updateStatus(null);
         ResultsChanged?.Invoke(false);
     }
 
-    private void updateStatus()
+    private void updateStatus(string? error)
     {
+        if (error != null)
+        {
+            Status.Value = $"{error} — showing mirror results";
+            return;
+        }
+
         if (!VisibleSets.Any())
+        {
             Status.Value = loadedSets.Count == 0 ? "no results" : "no results (client-side genre/language filter)";
-        else
-            Status.Value = string.Empty;
+            return;
+        }
+
+        // Only the official backend reports a real total; the mirrors say nothing beyond the page
+        // they served, so their listing keeps the status line empty on success as before.
+        Status.Value = TotalResults is int count ? $"{count:N0} results" : string.Empty;
     }
 
     /// <summary>
     /// Whether <paramref name="set"/> passes the client-side genre/language filters — the legacy
-    /// mirror search can't express either, so they're applied to loaded results instead. A set
-    /// with no genre/language assigned (NeriNyan serves nulls) only passes the "Any" filter.
+    /// mirror search can't express either, so on THAT backend they're applied to loaded results
+    /// instead (the official backend filters server-side and never reaches this). A set with no
+    /// genre/language assigned (NeriNyan serves nulls) only passes the "Any" filter.
     /// </summary>
     internal static bool MatchesClientFilters(BeatmapSetInfo set, int? genreId, int? languageId)
-        => (genreId == null || set.Genre?.Id == genreId)
-           && (languageId == null || set.Language?.Id == languageId);
+        => (genreId == null || set.GenreIdOrNull == genreId)
+           && (languageId == null || set.LanguageIdOrNull == languageId);
 }

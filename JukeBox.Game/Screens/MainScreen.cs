@@ -119,6 +119,10 @@ public partial class MainScreen : Screen
     /// reasons) as <see cref="lastError"/>.</summary>
     private readonly Bindable<DropNotification?> dropNotification = new Bindable<DropNotification?>();
 
+    /// <summary>Why the official search backend last fell back to a mirror, bound the same way (and
+    /// for the same lifetime reasons) as <see cref="lastError"/>.</summary>
+    private readonly Bindable<string?> searchError = new Bindable<string?>();
+
     private Bindable<UiLayout> uiLayout = null!;
     private Bindable<double> playfieldZoom = null!;
     private Bindable<bool> detachPlayer = null!;
@@ -465,6 +469,16 @@ public partial class MainScreen : Screen
         });
 
         jukebox.Enqueued += onEnqueued;
+
+        // The official search backend falling back to a mirror is silent in the results themselves
+        // (there are still cards) — the listing's own status line says why, but a user who picked
+        // that backend in settings and typed a query is looking at the cards, not the status line.
+        searchError.BindTo(searchEngine.LastError);
+        searchError.BindValueChanged(e =>
+        {
+            if (e.NewValue != null)
+                showToast(e.NewValue);
+        });
 
         dropNotification.BindTo(fileImporter.Notification);
         dropNotification.BindValueChanged(e =>
