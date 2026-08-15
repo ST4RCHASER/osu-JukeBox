@@ -167,7 +167,7 @@ namespace JukeBox.Game.Tests.Visual
                 return Sets.Where(s => s.Id.ToString() == request.Query).ToList();
             }
 
-            public Task DownloadAsync(int setId, bool noVideo, Stream destination, CancellationToken ct = default)
+            public Task DownloadAsync(int setId, bool noVideo, Stream destination, CancellationToken ct = default, DownloadProgressCallback? progress = null)
                 => throw new NotSupportedException("not exercised by this test scene");
         }
     }

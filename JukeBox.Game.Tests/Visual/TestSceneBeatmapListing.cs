@@ -470,7 +470,7 @@ namespace JukeBox.Game.Tests.Visual
                 return Task.FromResult(PageFactory?.Invoke(request.Page) ?? new List<BeatmapSetInfo>(Sets));
             }
 
-            public Task DownloadAsync(int setId, bool noVideo, Stream destination, CancellationToken ct = default)
+            public Task DownloadAsync(int setId, bool noVideo, Stream destination, CancellationToken ct = default, DownloadProgressCallback? progress = null)
                 => throw new NotSupportedException("not exercised by this test scene");
         }
     }

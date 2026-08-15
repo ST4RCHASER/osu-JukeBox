@@ -36,8 +36,8 @@ namespace JukeBox.Game.Online
         public Task<List<BeatmapSetInfo>> SearchAsync(SearchRequest request, CancellationToken ct = default)
             => buildChain().SearchAsync(request, ct);
 
-        public Task DownloadAsync(int setId, bool noVideo, Stream destination, CancellationToken ct = default)
-            => buildChain().DownloadAsync(setId, noVideo, destination, ct);
+        public Task DownloadAsync(int setId, bool noVideo, Stream destination, CancellationToken ct = default, DownloadProgressCallback? progress = null)
+            => buildChain().DownloadAsync(setId, noVideo, destination, ct, progress);
 
         private MirrorChain buildChain()
         {

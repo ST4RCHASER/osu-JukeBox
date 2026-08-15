@@ -29,7 +29,7 @@ namespace JukeBox.Game.Tests.Online
             throw new IOException("down");
         }
 
-        public Task DownloadAsync(int setId, bool noVideo, Stream destination, CancellationToken ct = default)
+        public Task DownloadAsync(int setId, bool noVideo, Stream destination, CancellationToken ct = default, DownloadProgressCallback progress = null)
         {
             callOrder.Add(Name);
             throw new IOException("down");

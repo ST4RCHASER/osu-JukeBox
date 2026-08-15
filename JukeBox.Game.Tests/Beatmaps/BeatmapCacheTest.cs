@@ -130,7 +130,7 @@ namespace JukeBox.Game.Tests.Beatmaps
         public string Name => "file";
         public System.Threading.Tasks.Task<System.Collections.Generic.List<BeatmapSetInfo>> SearchAsync(SearchRequest r, System.Threading.CancellationToken ct = default)
             => System.Threading.Tasks.Task.FromResult(new System.Collections.Generic.List<BeatmapSetInfo>());
-        public async System.Threading.Tasks.Task DownloadAsync(int setId, bool noVideo, Stream destination, System.Threading.CancellationToken ct = default)
+        public async System.Threading.Tasks.Task DownloadAsync(int setId, bool noVideo, Stream destination, System.Threading.CancellationToken ct = default, DownloadProgressCallback progress = null)
         {
             using var fs = File.OpenRead(path);
             await fs.CopyToAsync(destination, ct);
