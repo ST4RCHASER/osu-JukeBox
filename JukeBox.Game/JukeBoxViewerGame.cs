@@ -40,8 +40,10 @@ namespace JukeBox.Game
         {
             base.LoadComplete();
 
+            // Belt and braces alongside the host's FriendlyGameName (see JukeBoxHost): a viewer
+            // launched by anything that didn't pass those options still titles its window.
             if (Host.Window != null)
-                Host.Window.Title = "osu!JukeBox — Player";
+                Host.Window.Title = JukeBoxHost.VIEWER_WINDOW_TITLE;
 
             // Audio lives in the main process only. The viewer never starts a track, but
             // BeatmapVisuals carries lazer-native audio (storyboard keysounds, chart hitsounds)
