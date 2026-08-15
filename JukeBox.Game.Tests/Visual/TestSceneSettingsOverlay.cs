@@ -9,8 +9,10 @@ using NUnit.Framework;
 using osu.Framework.Allocation;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
+using osu.Framework.Graphics.Shapes;
 using osu.Framework.Platform;
 using osu.Framework.Testing;
+using osu.Game.Overlays.Settings;
 using osuTK.Input;
 
 namespace JukeBox.Game.Tests.Visual
@@ -349,6 +351,56 @@ namespace JukeBox.Game.Tests.Visual
                 config.SetValue(JukeBoxSetting.DetachPlayer, false);
                 config.SetValue(JukeBoxSetting.DetachPlayOnMain, false);
             });
+        }
+
+        // The docked presentation is inline tab-body content: the right column has already painted
+        // an opaque surface behind the whole tab, so painting a second ground here stacked a card on
+        // that card and turned lazer's section separators into the edges of per-section sub-cards.
+        // Structural form of "one surface layer behind a section header": walk from each section up
+        // to the overlay and count the full-size opaque boxes drawn behind it on the way.
+        [Test]
+        public void DockedSectionsSitOnASingleSurface()
+        {
+            SettingsOverlay docked = null!;
+
+            AddStep("create docked overlay", () => Child = docked = new SettingsOverlay(docked: true));
+            AddUntilStep("sections built", () => docked.ChildrenOfType<SettingsSection>().Any());
+
+            AddAssert("docked paints no ground of its own", () => docked.CardBackground == null);
+            AddAssert("no surface stacked behind any section",
+                () => docked.ChildrenOfType<SettingsSection>().All(s => surfacesBehind(s, docked) == 0));
+
+            // The floating modal IS a card in its own right, over a scrim — it keeps lazer's ground,
+            // so this assert is what stops the fix above from being "delete all backgrounds".
+            AddAssert("the floating card still has one", () => overlay.CardBackground != null);
+        }
+
+        /// <summary>
+        /// How many full-size opaque <see cref="Box"/>es are painted between <paramref name="child"/>
+        /// and <paramref name="root"/> — i.e. surfaces the child is drawn on top of. Only siblings
+        /// EARLIER in each ancestor's child list count: later ones are drawn over the child, not
+        /// behind it.
+        /// </summary>
+        private static int surfacesBehind(Drawable child, Drawable root)
+        {
+            int count = 0;
+
+            for (var current = child; current != null && current != root; current = current.Parent)
+            {
+                if (current.Parent is not Container<Drawable> parent)
+                    continue;
+
+                foreach (var sibling in parent)
+                {
+                    if (sibling == current)
+                        break;
+
+                    if (sibling is Box box && box.RelativeSizeAxes == Axes.Both && box.Alpha > 0)
+                        count++;
+                }
+            }
+
+            return count;
         }
     }
 }
