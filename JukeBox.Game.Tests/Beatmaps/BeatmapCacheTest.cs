@@ -33,6 +33,102 @@ namespace JukeBox.Game.Tests.Beatmaps
             return osz;
         }
 
+        // One caller giving up must not take the download away from the others. This is the case
+        // that made per-caller tokens necessary: an advance abandoning a set it no longer needs
+        // used to cancel the SHARED task, so a prefetch of that same set for something still queued
+        // died with it — the first caller in owned everyone's cancellation.
+        [Test]
+        public async Task OneCallerCancellingDoesNotTakeTheDownloadFromAnother()
+        {
+            var mirror = new GatedMirror(makeOsz());
+            var cache = new BeatmapCache(Path.Combine(tmp, "cache"), mirror);
+
+            using var giveUp = new System.Threading.CancellationTokenSource();
+
+            var abandons = cache.GetAsync(42, giveUp.Token);
+            var persists = cache.GetAsync(42);
+
+            await waitUntil(() => mirror.Started > 0, "the download to start");
+
+            giveUp.Cancel();
+
+            Assert.That(async () => await abandons, Throws.InstanceOf<OperationCanceledException>(),
+                "the caller that gave up sees its own cancellation");
+            Assert.That(mirror.Cancelled, Is.Zero, "but the request itself keeps running for the other caller");
+
+            mirror.Release();
+
+            var set = await persists;
+
+            Assert.That(set.SetId, Is.EqualTo(42));
+            Assert.That(cache.IsCached(42), Is.True);
+            Assert.That(mirror.Started, Is.EqualTo(1), "and they shared one download rather than racing two");
+        }
+
+        // …and when the LAST caller lets go, the request really is aborted rather than left running
+        // detached, burning bandwidth the current song needs.
+        [Test]
+        public async Task TheLastCallerLettingGoActuallyAbortsTheRequest()
+        {
+            var mirror = new GatedMirror(makeOsz());
+            var cache = new BeatmapCache(Path.Combine(tmp, "cache"), mirror);
+
+            using var giveUp = new System.Threading.CancellationTokenSource();
+
+            var only = cache.GetAsync(42, giveUp.Token);
+            await waitUntil(() => mirror.Started > 0, "the download to start");
+
+            giveUp.Cancel();
+
+            Assert.That(async () => await only, Throws.InstanceOf<OperationCanceledException>());
+            await waitUntil(() => mirror.Cancelled > 0, "the mirror request to be cancelled");
+
+            Assert.That(cache.IsCached(42), Is.False);
+            Assert.That(cache.IsDownloading(42), Is.False, "and nothing is left claiming to be in flight");
+        }
+
+        // An abandoned download must leave nothing behind that a later attempt trips over — neither
+        // a sticky in-flight entry nor a partial file that looks like progress.
+        [Test]
+        public async Task AnAbandonedSetDownloadsCleanlyOnALaterRequest()
+        {
+            string osz = makeOsz();
+            var mirror = new GatedMirror(osz);
+            var cache = new BeatmapCache(Path.Combine(tmp, "cache"), mirror);
+
+            using (var giveUp = new System.Threading.CancellationTokenSource())
+            {
+                var abandoned = cache.GetAsync(42, giveUp.Token);
+                await waitUntil(() => mirror.Started > 0, "the first download to start");
+                giveUp.Cancel();
+                Assert.That(async () => await abandoned, Throws.InstanceOf<OperationCanceledException>());
+                await waitUntil(() => mirror.Cancelled > 0, "the first attempt to abort");
+            }
+
+            Assert.That(Directory.GetFiles(Path.Combine(tmp, "cache"), "*.osz.part"), Is.Empty,
+                "no half-written archive survives the abort");
+            Assert.That(Directory.GetDirectories(Path.Combine(tmp, "cache"), "*.extracting"), Is.Empty,
+                "nor a half-populated extract directory");
+
+            // Same cache, same set, no leftover state: it simply downloads.
+            var retry = new GatedMirror(osz);
+            var retried = new BeatmapCache(Path.Combine(tmp, "cache"), retry);
+            retry.Release();
+
+            var set = await retried.GetAsync(42);
+
+            Assert.That(set.SetId, Is.EqualTo(42));
+            Assert.That(retried.IsCached(42), Is.True);
+        }
+
+        private static async Task waitUntil(Func<bool> condition, string what)
+        {
+            for (int i = 0; i < 200 && !condition(); i++)
+                await Task.Delay(25);
+
+            Assert.That(condition(), Is.True, $"timed out waiting for {what}");
+        }
+
         [Test]
         public void ScannerReadsGeneralAndEvents()
         {
@@ -120,6 +216,48 @@ namespace JukeBox.Game.Tests.Beatmaps
             File.WriteAllBytes(Path.Combine(dir, "data.bin"), new byte[sizeBytes]);
             Directory.SetLastWriteTimeUtc(dir, mtimeUtc);
             return dir;
+        }
+    }
+
+    /// <summary>
+    /// Serves the same bytes as <see cref="FileMirror"/> but only once released, so a test can hold
+    /// a download open and act while it is in flight. Records what actually reached the mirror —
+    /// how many downloads were started and how many were cancelled — because "the caller stopped
+    /// waiting" and "the request was actually aborted" are different claims.
+    /// </summary>
+    public class GatedMirror : IBeatmapMirror
+    {
+        private readonly string path;
+        private readonly TaskCompletionSource<bool> gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public GatedMirror(string path) => this.path = path;
+
+        public string Name => "gated";
+
+        public int Started;
+        public int Cancelled;
+
+        public void Release() => gate.TrySetResult(true);
+
+        public Task<System.Collections.Generic.List<BeatmapSetInfo>> SearchAsync(SearchRequest r, System.Threading.CancellationToken ct = default)
+            => Task.FromResult(new System.Collections.Generic.List<BeatmapSetInfo>());
+
+        public async Task DownloadAsync(int setId, bool noVideo, Stream destination, System.Threading.CancellationToken ct = default, DownloadProgressCallback progress = null)
+        {
+            System.Threading.Interlocked.Increment(ref Started);
+
+            try
+            {
+                await gate.Task.WaitAsync(ct);
+            }
+            catch (OperationCanceledException)
+            {
+                System.Threading.Interlocked.Increment(ref Cancelled);
+                throw;
+            }
+
+            using var fs = File.OpenRead(path);
+            await fs.CopyToAsync(destination, ct);
         }
     }
 
