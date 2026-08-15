@@ -115,7 +115,6 @@ public partial class SettingsOverlay : FocusedOverlayContainer
     private SettingsSlider<double> uiScaleRow = null!;
     private SettingsSlider<double> playfieldZoomRow = null!;
     private SettingsEnumDropdown<MirrorSource> mirrorDropdown = null!;
-    private SettingsEnumDropdown<SearchStyle> searchStyleDropdown = null!;
     private SettingsCheckbox detachPlayerCheckbox = null!;
     private SettingsCheckbox playOnMainCheckbox = null!;
 
@@ -193,7 +192,6 @@ public partial class SettingsOverlay : FocusedOverlayContainer
     internal SettingsCheckbox HardwareAccelerationCheckbox => hardwareAccelerationCheckbox;
 
     internal SettingsDropdown<MirrorSource> MirrorDropdown => mirrorDropdown;
-    internal SettingsDropdown<SearchStyle> SearchStyleDropdown => searchStyleDropdown;
     internal SettingsCheckbox RenderChartCheckbox => renderChartCheckbox;
     internal SettingsCheckbox PlayHitSoundsCheckbox => playHitSoundsCheckbox;
     internal SettingsSlider<double> BackgroundDimSlider => backgroundDimRow;
@@ -457,7 +455,6 @@ public partial class SettingsOverlay : FocusedOverlayContainer
             Children = new Drawable[]
             {
                 mirrorDropdown = new SettingsEnumDropdown<MirrorSource> { LabelText = "Beatmap mirror" },
-                searchStyleDropdown = new SettingsEnumDropdown<SearchStyle> { LabelText = "Beatmap search style" },
             },
         });
 
@@ -487,7 +484,6 @@ public partial class SettingsOverlay : FocusedOverlayContainer
         uiScaleRow.Current = config.GetBindable<double>(JukeBoxSetting.UiScale);
         globalOffsetRow.Current = config.GetBindable<double>(JukeBoxSetting.GlobalAudioOffset);
         mirrorDropdown.Current = config.GetBindable<MirrorSource>(JukeBoxSetting.PreferredMirror);
-        searchStyleDropdown.Current = config.GetBindable<SearchStyle>(JukeBoxSetting.SearchStyle);
         detachPlayerCheckbox.Current = config.GetBindable<bool>(JukeBoxSetting.DetachPlayer);
 
         // "Play on main window too" only means something while the player IS detached; while it

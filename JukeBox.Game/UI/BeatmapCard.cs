@@ -58,12 +58,10 @@ public partial class BeatmapCard : ClickableContainer
     public BeatmapSetInfo Set { get; }
 
     /// <summary>
-    /// The dense row layout used by the compact search style
-    /// (<see cref="Configuration.SearchStyle.Compact"/>): a small square thumbnail on the left
-    /// (<see cref="compact_thumb_size"/>) with tightly-spaced title/artist text and mini
-    /// difficulty dots beside it, at half the regular card's height — instead of the full
-    /// cover-backed card. Fixed at construction; the owning listing rebuilds its cards when the
-    /// style setting changes.
+    /// The dense row layout the sidebar (<see cref="BeatmapListingOverlay"/>) always uses: a small
+    /// square thumbnail on the left (<see cref="compact_thumb_size"/>) with tightly-spaced
+    /// title/artist text and mini difficulty dots beside it, at half the regular card's height —
+    /// instead of the full cover-backed card. Fixed at construction.
     /// </summary>
     public bool Compact { get; }
 

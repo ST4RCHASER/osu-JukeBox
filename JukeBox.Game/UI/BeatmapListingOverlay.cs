@@ -3,85 +3,79 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using JukeBox.Game.Configuration;
 using JukeBox.Game.Online;
 using osu.Framework.Allocation;
-using osu.Framework.Bindables;
 using osu.Framework.Extensions.Color4Extensions;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Shapes;
 using osu.Framework.Graphics.Sprites;
-using osu.Framework.Graphics.UserInterface;
 using osu.Framework.Input.Events;
+using osu.Game.Graphics.UserInterface;
 using osuTK;
 using osuTK.Input;
 
 namespace JukeBox.Game.UI;
 
 /// <summary>
-/// osu!-web-style beatmap listing — the docked/compact presentation. All search state (debounced
-/// keyword search, server-side filters, client-side genre/language filters, pagination,
-/// stale-response guard) lives in the owned <see cref="BeatmapSearchEngine"/>; this class is a
-/// VIEW over it: a keyword box and collapsible chip filter rows driving the engine's bindables,
-/// and a scrollable grid of <see cref="BeatmapCard"/>s (two columns when wide enough, one when
-/// narrow — see <see cref="two_column_threshold"/>) rebuilt off the engine's results, with
-/// infinite scroll. The fullscreen search style's <see cref="FullscreenListingOverlay"/> is a
-/// second view over the SAME engine (see <see cref="Engine"/>), so filters/query stay in sync
-/// across presentations with no duplicated search logic.
+/// The compact beatmap-results sidebar — a RESULTS-ONLY view over the shared
+/// <see cref="BeatmapSearchEngine"/>. There is exactly one search model in the app: searching and
+/// filtering happen in <see cref="FullscreenListingOverlay"/>, and this column shows whatever that
+/// engine last produced. It therefore carries no keyword box and no filter section at all; its top
+/// row is just two buttons — a wide <see cref="SearchButton"/> that asks the host to open the
+/// fullscreen listing (<see cref="SearchOpenRequested"/>) and a narrow "#" button that opens the
+/// manual ID/link dialog (<see cref="MapIdRequested"/>) — above a scrollable list of dense
+/// <see cref="BeatmapCard"/> rows.
 ///
-/// Interaction contract (kept from the old SearchOverlay): typing anywhere opens it seeded with
-/// the char (<see cref="ShowWithInitialChar"/>); Up/Down move the highlighted card; Enter fires
-/// <see cref="SetPicked"/> with the selected card (falling back to the first) and closes the
-/// overlay; Escape closes it. Clicking a card fires <see cref="SetPicked"/> but keeps the listing
-/// open, so several sets can be queued in one browsing session. Download-disabled sets are dimmed
-/// and non-clickable (<see cref="ClickableContainer.Action"/> stays null).
+/// Because the engine is shared and outlives any one view, closing the fullscreen listing leaves
+/// this column still showing that search's results; nothing is re-fetched and nothing is cleared.
+///
+/// Interaction contract (unchanged from when this class also hosted the search box): Up/Down move
+/// the highlighted card; Enter fires <see cref="SetPicked"/> with the selected card (falling back
+/// to the first); clicking a card fires <see cref="SetPicked"/> but keeps the listing open, so
+/// several sets can be queued in one browsing session. Download-disabled sets are dimmed and
+/// non-clickable (<see cref="ClickableContainer.Action"/> stays null). Results render in two
+/// columns when the host is wide enough and single-file when narrow (see
+/// <see cref="two_column_threshold"/> — the real ~380px docked column is always single-file).
 ///
 /// <para>
 /// Also usable <b>docked</b> (see the constructor) — the three-column layout's permanent left
-/// column embeds this same content instead of a dismissable overlay. Docked mode is shown once at
-/// load and never hidden again: <see cref="ShowWithInitialChar"/> only focuses and seeds the
-/// keyword box (no popping in/out), Escape blurs the keyword box instead of closing anything, and
-/// confirming a selection with Enter no longer closes the (non-existent, in this mode) overlay.
+/// column embeds this instead of a dismissable overlay. Docked mode is shown once at load and
+/// never hidden again: Escape is swallowed (rather than closing anything), and confirming a
+/// selection with Enter no longer closes the (non-existent, in this mode) overlay.
 /// </para>
 ///
 /// <para>
-/// Presentation density follows <see cref="JukeBoxSetting.SearchStyle"/> live:
-/// <see cref="SearchStyle.Compact"/> renders dense half-height card rows
-/// (<see cref="BeatmapCard.Compact"/>), smaller chips and a filters section that DEFAULTS to
-/// collapsed; <see cref="SearchStyle.Fullscreen"/> keeps the roomier original presentation here
-/// (the big listing overlay is opened by <see cref="Screens.MainScreen"/> on top).
-/// </para>
-///
-/// <para>
-/// The keyword box also carries an inline "#" button docked at its right edge, firing
-/// <see cref="MapIdRequested"/> to open <c>MapIdOverlay</c> for queueing a set directly by
-/// beatmapset ID — moved here (from a top-right corner button) so it sits with the rest of the
-/// search affordances rather than floating separately.
+/// Fetches are shown as real lazer spinners, never as text: a <see cref="LoadingLayer"/> covers
+/// the whole result area while a FRESH search is in flight (its contents are about to be replaced
+/// wholesale) and a footer <see cref="LoadingSpinner"/> appears while a further page is appended
+/// (the cards already on screen stay valid).
 /// </para>
 /// </summary>
 public partial class BeatmapListingOverlay : FocusedOverlayContainer
 {
     /// <summary>Columns render single-file below this content width — the docked left column
     /// (~380px minus panel padding) never reaches the two-column threshold, matching the "grid ->
-    /// 1-col in narrow width" contract; the wider standalone/full-visuals overlay still gets two.</summary>
+    /// 1-col in narrow width" contract; a wider standalone host still gets two.</summary>
     private const float two_column_threshold = 560;
+
+    /// <summary>Height of the search/"#" button row.</summary>
+    private const float button_row_height = 44;
+
+    /// <summary>Share of the button row's width taken by the "#" button — the rest goes to the
+    /// search button, giving the ~80/20 split the row is designed around.</summary>
+    private const float map_id_button_width_ratio = 0.2f;
 
     /// <summary>Whether this instance is permanently embedded (three-column layout's left column)
     /// rather than a dismissable floating overlay. See the class summary.</summary>
     private readonly bool docked;
 
-    private Container filtersBody = null!;
-    private bool filtersExpanded = true;
-    private SpriteText filtersToggleText = null!;
-
     /// <summary>
     /// The search state machine this view renders. Self-owned by default (created at construction,
     /// added as an internal child so its debounce scheduler ticks with this drawable) — or
     /// EXTERNALLY owned when the constructor is given one: <see cref="Screens.MainScreen"/> hosts
-    /// the engine itself (so it keeps ticking even while this listing is hidden behind the
-    /// fullscreen style's icon rail) and hands the same instance to both this view and
-    /// <see cref="FullscreenListingOverlay"/>.
+    /// the engine itself and hands the same instance to both this view and
+    /// <see cref="FullscreenListingOverlay"/>, which is what keeps the two in sync.
     /// </summary>
     public BeatmapSearchEngine Engine { get; }
 
@@ -111,66 +105,27 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
     /// is requested.</summary>
     private const float scroll_load_threshold = 200;
 
-    private const float label_width = 92;
-
     public event Action<BeatmapSetInfo>? SetPicked;
 
     /// <summary>
-    /// Fired when the inline "#" button docked at the right edge of the search box is clicked —
-    /// the caller (<see cref="Screens.MainScreen"/>) opens <see cref="MapIdOverlay"/> in response.
-    /// Kept as an event (rather than this overlay owning a <see cref="MapIdOverlay"/> itself) so
-    /// there's still exactly one overlay instance shared across layout modes, same as before this
-    /// button lived in a corner pill instead of here.
+    /// Fired when the "#" button is clicked — the caller (<see cref="Screens.MainScreen"/>) opens
+    /// <see cref="MapIdOverlay"/> in response. Kept as an event (rather than this overlay owning a
+    /// <see cref="MapIdOverlay"/> itself) so there's still exactly one overlay instance shared
+    /// across the app.
     /// </summary>
     public event Action? MapIdRequested;
 
     /// <summary>
-    /// Fired when the keyword box gains keyboard focus — under the fullscreen search style,
-    /// <see cref="Screens.MainScreen"/> responds by presenting <see cref="FullscreenListingOverlay"/>
-    /// ("opening search" covers both type-anywhere and focusing the docked box).
-    /// </summary>
-    public event Action? SearchBoxFocused;
-
-    /// <summary>
-    /// Fired by the dedicated search-opener icon button docked in the keyword box (next to the
-    /// "#" button) — <see cref="Screens.MainScreen"/> presents <see cref="FullscreenListingOverlay"/>
-    /// under the fullscreen style, or focuses this keyword box (<see cref="FocusSearch"/>) under
-    /// compact.
+    /// Fired by the big search button — <see cref="Screens.MainScreen"/> responds by presenting
+    /// <see cref="FullscreenListingOverlay"/>, the one place search and filters live.
     /// </summary>
     public event Action? SearchOpenRequested;
 
-    [Resolved(canBeNull: true)]
-    private JukeBoxConfigManager? config { get; set; }
-
-    private ListingSearchBox searchBox = null!;
     private FillFlowContainer<BeatmapCard> cardsFlow = null!;
     private BasicScrollContainer scroll = null!;
     private SpriteText statusText = null!;
-
-    private Bindable<SearchStyle> searchStyle = null!;
-
-    /// <summary>Every filter chip in the section, kept so <see cref="applyStyle"/> can flip their
-    /// density live when the style setting changes.</summary>
-    private readonly List<FilterChip> allChips = new List<FilterChip>();
-
-    private bool compactDensity;
-
-    /// <summary>
-    /// Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the keyword text box, to
-    /// assert its seeded text/focus state (e.g. after <see cref="ShowWithInitialChar"/>) without
-    /// depending on this panel's internal layout. Exposed as the public base type — <see
-    /// cref="ListingSearchBox"/> itself is an internal type.
-    /// </summary>
-    internal AccentTextBox SearchBox => searchBox;
-
-    /// <summary>Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to whether the
-    /// "Filters" section is currently expanded.</summary>
-    internal bool FiltersExpanded => filtersExpanded;
-
-    /// <summary>Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the animated
-    /// Alpha of the "Filters" section's expand/collapse, to assert the animation itself actually
-    /// completes rather than only the instant <see cref="FiltersExpanded"/> flag.</summary>
-    internal float FiltersBodyAlpha => filtersBody.Alpha;
+    private LoadingLayer freshLoadingLayer = null!;
+    private LoadingSpinner appendSpinner = null!;
 
     private int selectedIndex = -1;
 
@@ -212,15 +167,35 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
                         new Drawable[] { createHeader() },
                         new Drawable[]
                         {
-                            scroll = new BasicScrollContainer
+                            new Container
                             {
                                 RelativeSizeAxes = Axes.Both,
                                 Padding = new MarginPadding { Top = Theme.SectionSpacing },
-                                Child = cardsFlow = new FillFlowContainer<BeatmapCard>
+                                Children = new Drawable[]
                                 {
-                                    RelativeSizeAxes = Axes.X,
-                                    AutoSizeAxes = Axes.Y,
-                                    Direction = FillDirection.Full,
+                                    scroll = new BasicScrollContainer
+                                    {
+                                        RelativeSizeAxes = Axes.Both,
+                                        Child = cardsFlow = new FillFlowContainer<BeatmapCard>
+                                        {
+                                            RelativeSizeAxes = Axes.X,
+                                            AutoSizeAxes = Axes.Y,
+                                            Direction = FillDirection.Full,
+                                        },
+                                    },
+                                    // "Load more" is an append: the cards already rendered stay
+                                    // valid, so only a small footer spinner appears rather than
+                                    // anything covering them.
+                                    appendSpinner = new LoadingSpinner
+                                    {
+                                        Anchor = Anchor.BottomCentre,
+                                        Origin = Anchor.BottomCentre,
+                                        Margin = new MarginPadding { Bottom = Theme.RowSpacing },
+                                        Size = new Vector2(24),
+                                    },
+                                    // A fresh search replaces everything below, so the whole
+                                    // result area is covered while it's in flight.
+                                    freshLoadingLayer = new LoadingLayer(dimBackground: true),
                                 },
                             },
                         },
@@ -229,20 +204,15 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
             },
         };
 
-        // A self-owned engine ticks with this drawable (preserving the floating overlay's
-        // "debounce only runs while visible" behaviour); an externally-owned one is hosted by its
+        // A self-owned engine ticks with this drawable; an externally-owned one is hosted by its
         // owner instead — see the Engine property.
         if (ownsEngine)
             AddInternal(Engine);
-
-        searchBox.Current = Engine.Query;
     }
 
     protected override void LoadComplete()
     {
         base.LoadComplete();
-
-        searchBox.OnCommit += (_, _) => confirmSelection();
 
         Engine.ResultsChanged += fresh =>
         {
@@ -254,12 +224,8 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
 
         Engine.Status.BindValueChanged(e => statusText.Text = e.NewValue, true);
 
-        // Presentation density (and the filters section's expand default) follows the style
-        // setting live — see the class summary. Standalone construction without a config manager
-        // (bare test scenes) just stays on the Compact default.
-        searchStyle = config?.GetBindable<SearchStyle>(JukeBoxSetting.SearchStyle)
-                      ?? new Bindable<SearchStyle>(SearchStyle.Compact);
-        searchStyle.BindValueChanged(e => applyStyle(e.NewValue), true);
+        Engine.IsLoading.BindValueChanged(_ => updateLoadingSpinners(), true);
+        Engine.LoadingFresh.BindValueChanged(_ => updateLoadingSpinners(), true);
 
         // Docked instances are the three-column layout's permanent left column: shown once here
         // and never hidden again (see the class summary and the docked guards throughout).
@@ -267,34 +233,21 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
             Show();
     }
 
-    /// <summary>
-    /// Applies the style's density: compact flips the chips dense, collapses the filters section
-    /// (its default state — the user can still expand it) and rebuilds the cards as dense rows;
-    /// fullscreen restores the roomier original presentation.
-    /// </summary>
-    private void applyStyle(SearchStyle style)
+    private void updateLoadingSpinners()
     {
-        compactDensity = style == SearchStyle.Compact;
+        bool loading = Engine.IsLoading.Value;
+        bool fresh = Engine.LoadingFresh.Value;
 
-        foreach (var chip in allChips)
-            chip.Compact = compactDensity;
+        if (loading && fresh)
+            freshLoadingLayer.Show();
+        else
+            freshLoadingLayer.Hide();
 
-        filtersExpanded = !compactDensity;
-        updateFiltersExpanded();
-
-        // The initial application (the immediate BindValueChanged callback at LoadComplete) must
-        // land instantly — a compact-style listing shouldn't open with its filter section
-        // visibly fading away.
-        if (!styleInitialised)
-        {
-            styleInitialised = true;
-            filtersBody.FinishTransforms();
-        }
-
-        rebuildCards();
+        if (loading && !fresh)
+            appendSpinner.Show();
+        else
+            appendSpinner.Hide();
     }
-
-    private bool styleInitialised;
 
     private Drawable createHeader()
     {
@@ -304,120 +257,50 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
             AutoSizeAxes = Axes.Y,
             Direction = FillDirection.Vertical,
             Spacing = new Vector2(0, Theme.RowSpacing),
-            // Animates the reflow when filtersBody's presence toggles (see updateFiltersExpanded)
-            // so the "Filters" section reads as an expand/collapse rather than an instant jump.
-            LayoutDuration = (float)Theme.DurationNormal,
-            LayoutEasing = Theme.EaseEnter,
             Children = new Drawable[]
             {
                 new Container
                 {
                     RelativeSizeAxes = Axes.X,
-                    Height = 44,
-                    // A grid — NOT the old "full-width textbox with Right padding + overlaid
-                    // buttons" pattern: Padding on a TextBox only shrinks its internal content
-                    // (background included), while its BOUNDS — and therefore its own text mask —
-                    // still spanned the button area, so long text drew straight across/under the
-                    // buttons. With the textbox's bounds ending before the buttons, its masking
-                    // clips the text exactly at the visible input edge.
+                    Height = button_row_height,
+                    // The two buttons split the row's full width (~80/20). Each sits inside its
+                    // own padded cell rather than carrying a Margin: a Margin on a
+                    // relatively-sized child offsets it without shrinking it, which would leave
+                    // the pair overlapping by the gutter width.
                     Child = new GridContainer
                     {
                         RelativeSizeAxes = Axes.Both,
                         ColumnDimensions = new[]
                         {
                             new Dimension(),
-                            new Dimension(GridSizeMode.AutoSize),
-                            new Dimension(GridSizeMode.AutoSize),
+                            new Dimension(GridSizeMode.Relative, size: map_id_button_width_ratio),
                         },
                         Content = new[]
                         {
                             new Drawable[]
                             {
-                                searchBox = new ListingSearchBox
+                                new Container
                                 {
                                     RelativeSizeAxes = Axes.Both,
-                                    PlaceholderText = "type in keywords…",
-                                    Exit = docked ? unfocusSearch : Hide,
-                                    Focused = () => SearchBoxFocused?.Invoke(),
+                                    Padding = new MarginPadding { Right = Theme.RowSpacing / 2 },
+                                    Child = new SearchButton
+                                    {
+                                        RelativeSizeAxes = Axes.Both,
+                                        Action = () => SearchOpenRequested?.Invoke(),
+                                    },
                                 },
-                                // Dedicated search opener (see SearchOpenRequested) — under the
-                                // fullscreen style this is the mouse-driven way to present the
-                                // big listing.
-                                new IconButton
+                                new Container
                                 {
-                                    Anchor = Anchor.CentreLeft,
-                                    Origin = Anchor.CentreLeft,
-                                    Margin = new MarginPadding { Left = 4 },
-                                    Size = new Vector2(40),
-                                    Icon = FontAwesome.Solid.Search,
-                                    Action = () => SearchOpenRequested?.Invoke(),
-                                },
-                                new IconButton
-                                {
-                                    Anchor = Anchor.CentreLeft,
-                                    Origin = Anchor.CentreLeft,
-                                    Margin = new MarginPadding { Left = 4 },
-                                    Size = new Vector2(40),
-                                    Icon = FontAwesome.Solid.Hashtag,
-                                    Action = () => MapIdRequested?.Invoke(),
+                                    RelativeSizeAxes = Axes.Both,
+                                    Padding = new MarginPadding { Left = Theme.RowSpacing / 2 },
+                                    Child = new IconButton
+                                    {
+                                        RelativeSizeAxes = Axes.Both,
+                                        Icon = FontAwesome.Solid.Hashtag,
+                                        Action = () => MapIdRequested?.Invoke(),
+                                    },
                                 },
                             },
-                        },
-                    },
-                },
-                createFiltersToggle(),
-                // Wrapping the chip rows in their own FillFlowContainer (rather than flattening
-                // them into the outer one) lets collapsing reclaim their vertical space for free:
-                // a FillFlowContainer skips non-IsPresent children (Alpha 0, no AlwaysPresent) when
-                // flowing, so hiding this single child collapses the whole section instead of
-                // leaving a blank gap the size of every individual row.
-                filtersBody = new Container
-                {
-                    RelativeSizeAxes = Axes.X,
-                    AutoSizeAxes = Axes.Y,
-                    Child = new FillFlowContainer
-                    {
-                        RelativeSizeAxes = Axes.X,
-                        AutoSizeAxes = Axes.Y,
-                        Direction = FillDirection.Vertical,
-                        Spacing = new Vector2(0, Theme.RowSpacing),
-                        Children = new[]
-                        {
-                            chipRow("Mode", null, ListingFilterRows.SingleSelect(new (string, string?)[]
-                            {
-                                ("Any", null), ("osu!", "o"), ("taiko", "t"), ("catch", "c"), ("mania", "m"),
-                            }, Engine.Mode)),
-                            chipRow("Categories", null, ListingFilterRows.SingleSelect(new (string, string)[]
-                            {
-                                ("Any", "all"), ("Ranked", "ranked"), ("Qualified", "qualified"), ("Loved", "loved"),
-                                ("Pending", "pending"), ("WIP", "wip"), ("Graveyard", "graveyard"),
-                            }, Engine.Category)),
-                            chipRow("Genre", "filters loaded results", ListingFilterRows.SingleSelect(new (string, int?)[]
-                            {
-                                ("Any", null), ("Video Game", 2), ("Anime", 3), ("Rock", 4), ("Pop", 5), ("Other", 6),
-                                ("Novelty", 7), ("Hip Hop", 9), ("Electronic", 10), ("Metal", 11), ("Classical", 12),
-                                ("Folk", 13), ("Jazz", 14),
-                            }, Engine.GenreId)),
-                            chipRow("Language", "filters loaded results", ListingFilterRows.SingleSelect(new (string, int?)[]
-                            {
-                                ("Any", null), ("English", 2), ("Japanese", 3), ("Chinese", 4), ("Korean", 6),
-                                ("Instrumental", 5), ("German", 8), ("French", 7), ("Italian", 11), ("Spanish", 10),
-                                ("Swedish", 9), ("Russian", 12), ("Polish", 13), ("Other", 14),
-                            }, Engine.LanguageId)),
-                            chipRow("Extra", null, new[]
-                            {
-                                ListingFilterRows.Toggle("Has Video", Engine.HasVideo),
-                                ListingFilterRows.Toggle("Has Storyboard", Engine.HasStoryboard),
-                            }),
-                            chipRow("Sort", null, ListingFilterRows.SingleSelect(new (string, string)[]
-                            {
-                                ("Ranked", "ranked"), ("Plays", "plays"), ("Favourites", "favourites"),
-                                ("Difficulty", "difficulty"), ("Updated", "updated"), ("Title", "title"),
-                            }, Engine.SortKey).Concat(ListingFilterRows.SingleSelect(new (string, bool)[]
-                            {
-                                ("desc", true), ("asc", false),
-                            }, Engine.SortDescending)).ToArray()),
-                            createStarsRow(),
                         },
                     },
                 },
@@ -430,149 +313,8 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
         };
     }
 
-    /// <summary>Builds one labelled chip row via the shared factory, remembering the chips for
-    /// live density switching (<see cref="applyStyle"/>).</summary>
-    private Drawable chipRow(string label, string? note, FilterChip[] chips)
-    {
-        allChips.AddRange(chips);
-        // ReSharper disable once CoVariantArrayConversion
-        return ListingFilterRows.CreateChipRow(label, note, label_width, chips);
-    }
-
-    /// <summary>
-    /// The "Filters" expander header — a clickable row toggling <see cref="filtersBody"/> between
-    /// shown and collapsed, to save vertical room for the results list in the narrow docked column
-    /// (the wide standalone overlay has room to spare, but stays collapsible there too for
-    /// consistency — one behaviour, not a docked-only special case).
-    /// </summary>
-    private Drawable createFiltersToggle()
-    {
-        var toggle = new FiltersToggleButton
-        {
-            RelativeSizeAxes = Axes.X,
-            AutoSizeAxes = Axes.Y,
-            Child = new FillFlowContainer
-            {
-                AutoSizeAxes = Axes.Both,
-                Direction = FillDirection.Horizontal,
-                Spacing = new Vector2(6, 0),
-                Children = new Drawable[]
-                {
-                    filtersToggleText = new SpriteText
-                    {
-                        Font = FontUsage.Default.With(size: Theme.RowSecondaryTextSize),
-                        Colour = Theme.TextSecondary,
-                    },
-                },
-            },
-        };
-
-        toggle.Action = () =>
-        {
-            filtersExpanded = !filtersExpanded;
-            updateFiltersExpanded();
-        };
-
-        return toggle;
-    }
-
-    private void updateFiltersExpanded()
-    {
-        // filtersBody deliberately has no AlwaysPresent (see its construction comment — a
-        // FillFlowContainer skips non-present children when flowing, which is what makes the
-        // collapsed state reclaim its space). But that same not-present state also throttles the
-        // drawable's own Update()/transform ticking, so re-expanding via a fade starting exactly
-        // at Alpha 0 would never progress — nudging it to a barely-nonzero value first restores
-        // presence (and ticking) immediately, with no visible difference from 0.
-        if (filtersExpanded && filtersBody.Alpha <= 0)
-            filtersBody.Alpha = 0.0001f;
-
-        filtersBody.FadeTo(filtersExpanded ? 1 : 0, Theme.DurationNormal, filtersExpanded ? Theme.EaseEnter : Theme.EaseExit);
-        filtersToggleText.Text = filtersExpanded ? "▾ Filters" : "▸ Filters";
-    }
-
-    private void unfocusSearch() => GetContainingFocusManager()?.ChangeFocus(null);
-
-    private Drawable createStarsRow()
-    {
-        SpriteText minText, maxText;
-
-        var row = new FillFlowContainer
-        {
-            RelativeSizeAxes = Axes.X,
-            AutoSizeAxes = Axes.Y,
-            Direction = FillDirection.Full,
-            Spacing = new Vector2(6, 6),
-            Children = new[]
-            {
-                ListingFilterRows.CreateRowLabel("Stars", label_width),
-                new BasicSliderBar<double>
-                {
-                    Size = new Vector2(130, 16),
-                    Current = Engine.MinStars,
-                    BackgroundColour = Theme.ElevatedSurface,
-                    SelectionColour = Theme.AccentDim,
-                },
-                minText = new SpriteText
-                {
-                    Font = FontUsage.Default.With(size: Theme.RowSecondaryTextSize),
-                    Colour = Theme.TextSecondary,
-                    Margin = new MarginPadding { Top = 1 },
-                },
-                new BasicSliderBar<double>
-                {
-                    Size = new Vector2(130, 16),
-                    Current = Engine.MaxStars,
-                    BackgroundColour = Theme.ElevatedSurface,
-                    SelectionColour = Theme.AccentDim,
-                },
-                maxText = new SpriteText
-                {
-                    Font = FontUsage.Default.With(size: Theme.RowSecondaryTextSize),
-                    Colour = Theme.TextSecondary,
-                    Margin = new MarginPadding { Top = 1 },
-                },
-            },
-        };
-
-        // "any" at the rails (0 for min, 10 for max) — matching how the engine's BuildRequest
-        // omits the bound.
-        Engine.MinStars.BindValueChanged(e => minText.Text = e.NewValue > 0 ? $"min {e.NewValue:0.0}★" : "min any", true);
-        Engine.MaxStars.BindValueChanged(e => maxText.Text = e.NewValue < 10 ? $"max {e.NewValue:0.0}★" : "max any", true);
-
-        return row;
-    }
-
-    /// <summary>
-    /// Seeds the keyword box with <paramref name="c"/> (kicking off the first debounced search)
-    /// and gives it keyboard focus — the "type anywhere to search" entry point. When docked, the
-    /// column is already permanently visible, so this only focuses+seeds; when floating, it also
-    /// pops the overlay in (<c>Show()</c> is a no-op if already visible either way).
-    /// </summary>
-    public void ShowWithInitialChar(char c)
-    {
-        Show();
-        searchBox.Text = c.ToString();
-        scheduleFocus();
-    }
-
-    /// <summary>Focuses the keyword box without seeding it — the compact-style response to the
-    /// search-opener icon (<see cref="SearchOpenRequested"/>).</summary>
-    public void FocusSearch()
-    {
-        Show();
-        scheduleFocus();
-    }
-
-    // FocusedOverlayContainer.UpdateState schedules its own focus-contention pass (which
-    // unconditionally clears whatever is currently focused, including a synchronous focus
-    // grab made right here) whenever State flips to Visible — see UpdateState/PopIn. Scheduling
-    // this call too means it runs after that pass instead of getting immediately wiped by it,
-    // so the text box (not the overlay itself) ends up with focus.
-    private void scheduleFocus() => Schedule(() => GetContainingFocusManager()?.ChangeFocus(searchBox));
-
-    // Deliberately instant (no fade animation): PopIn() must leave every descendant (searchBox
-    // in particular) IsPresent synchronously, since focus can only land on a present drawable.
+    // Deliberately instant (no fade animation): PopIn() must leave every descendant IsPresent
+    // synchronously, since focus can only land on a present drawable.
     protected override void PopIn() => Alpha = 1;
 
     protected override void PopOut()
@@ -592,11 +334,10 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
         switch (e.Key)
         {
             case Key.Escape:
-                // Docked: never hides the column — just clears keyboard focus off the search box
-                // (the "clears/unfocuses search" contract). Floating: closes as before.
-                if (docked)
-                    unfocusSearch();
-                else
+                // Docked: swallowed on purpose. This is a permanent column with nothing to close,
+                // and letting Escape go unhandled would reach the input manager's own
+                // "clear focus" fallback — which, on a FocusedOverlayContainer, hides the overlay.
+                if (!docked)
                     Hide();
                 return true;
 
@@ -610,8 +351,6 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
 
             case Key.Enter:
             case Key.KeypadEnter:
-                // Also handled via searchBox.OnCommit when the text box itself has focus; kept
-                // here too as a fallback for whenever the overlay itself is focused instead.
                 confirmSelection();
                 return true;
         }
@@ -637,9 +376,9 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
     }
 
     /// <summary>
-    /// Enter was pressed (via the text box's commit) — queues the highlighted card, falling back
-    /// to the first, then closes the listing (the quick keyboard flow; mouse clicks keep it open).
-    /// Docked instances have no overlay to close, so they just queue and stay put.
+    /// Enter — queues the highlighted card, falling back to the first, then closes the listing
+    /// (the quick keyboard flow; mouse clicks keep it open). Docked instances have no overlay to
+    /// close, so they just queue and stay put.
     /// </summary>
     private void confirmSelection()
     {
@@ -702,10 +441,15 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
 
     private float lastCardWidth;
 
-    /// <summary>A dedicated (rather than anonymous) type for the "Filters" expander header purely
-    /// so tests can locate it via <c>ChildrenOfType&lt;FiltersToggleButton&gt;</c>.</summary>
-    private partial class FiltersToggleButton : ClickableContainer
+    /// <summary>The sidebar's primary affordance: opens the fullscreen listing (see
+    /// <see cref="SearchOpenRequested"/>). A dedicated type purely so tests can locate it without
+    /// depending on this panel's internal layout.</summary>
+    internal partial class SearchButton : TextButton
     {
+        public SearchButton()
+            : base("Search…", FontAwesome.Solid.Search)
+        {
+        }
     }
 
     private void rebuildCards()
@@ -726,7 +470,9 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
 
         foreach (var set in visible)
         {
-            var card = new BeatmapCard(set, compactDensity);
+            // Always the dense variant: this column is the compact presentation, full stop — the
+            // roomy cards live in the fullscreen listing.
+            var card = new BeatmapCard(set, compact: true);
 
             if (lastCardWidth > 0)
                 card.Width = lastCardWidth;
