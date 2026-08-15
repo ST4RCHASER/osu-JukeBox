@@ -46,33 +46,37 @@ public partial class PlaybackController : Component
     public readonly BindableDouble PlaybackRate = new(1) { MinValue = 0.1, MaxValue = 2.5, Precision = 0.05 };
 
     /// <summary>
-    /// Speed forced by the rate-changing mods of a replay being watched — 1.5 under DT/NC, 0.75
-    /// under HT/DC, 1 whenever no replay (or a no-rate-mod one) is playing. Set by
-    /// <see cref="Jukebox"/> for each track it starts; see <see cref="Replays.ReplayAttachment.Rate"/>.
+    /// Speed forced by the rate-changing mods of a replay being watched, split into its
+    /// pitch-preserving half (<see cref="ReplayTempo"/>, DoubleTime/HalfTime) and its
+    /// pitch-shifting half (<see cref="ReplayFrequency"/>, Nightcore/Daycore). Both sit at 1
+    /// whenever no replay — or a replay with no rate mod — is playing. Set by <see cref="Jukebox"/>
+    /// for each track it starts, from <see cref="Replays.ReplayMods.TrackAdjustmentsFor"/>.
     ///
     /// <para>
-    /// This is what keeps a replay in sync rather than just looking fast: in osu! a rate mod speeds
-    /// up the TRACK, and gameplay follows the track's clock — which is exactly this app's
-    /// arrangement too (<see cref="PlaybackClock"/> sources from the track, and the storyboard and
-    /// chart run off it). Speeding the chart up on its own would have desynced it from music that
-    /// never changed.
+    /// The split is not cosmetic: osu!'s rate mods disagree about pitch. DoubleTime keeps it and
+    /// Nightcore raises it; HalfTime keeps it and Daycore lowers it. Driving everything through
+    /// frequency made DT sound chipmunked, which it never does in the real game.
     /// </para>
     ///
     /// <para>
-    /// Deliberately a SEPARATE adjustment from <see cref="PlaybackRate"/>, not a replacement for it:
-    /// the two multiply, so the user's own speed slider keeps working while a replay plays (a 1.5×
-    /// DT replay at slider 0.5× runs at 0.75×) and is never moved or clobbered behind their back.
-    /// The slider is "how fast do I want to watch this"; this is "how fast the play actually was".
+    /// Either way this is what keeps a replay in sync rather than just looking fast: in osu! a rate
+    /// mod moves the TRACK, and gameplay follows the track's clock — exactly this app's arrangement
+    /// too (<see cref="PlaybackClock"/> sources from the track, and the storyboard and chart run off
+    /// it). Both tempo and frequency move the track, so the clock follows either way; speeding the
+    /// chart up on its own would have desynced it from music that never changed.
     /// </para>
     ///
     /// <para>
-    /// Applied as <see cref="AdjustableProperty.Frequency"/> — pitch shifts with speed — while the
-    /// slider stays on <see cref="AdjustableProperty.Tempo"/>. A .osr is a stable replay and every
-    /// stable rate mod is a frequency change (DT/NC play higher, HT/DC lower), so this is what the
-    /// play actually sounded like; see <see cref="Replays.ReplayMods.ShiftsPitch"/>.
+    /// Both are SEPARATE adjustments from <see cref="PlaybackRate"/>, not replacements for it: they
+    /// multiply, so the user's own speed slider keeps working while a replay plays (a 1.5× DT replay
+    /// at slider 0.5× runs at 0.75×) and is never moved or clobbered behind their back. The slider is
+    /// "how fast do I want to watch this"; these are "how fast the play actually was".
     /// </para>
     /// </summary>
-    public readonly BindableDouble ReplayRate = new(1) { MinValue = 0.1, MaxValue = 3 };
+    public readonly BindableDouble ReplayTempo = new(1) { MinValue = 0.1, MaxValue = 3 };
+
+    /// <summary>The pitch-shifting half of the replay's rate — see <see cref="ReplayTempo"/>.</summary>
+    public readonly BindableDouble ReplayFrequency = new(1) { MinValue = 0.1, MaxValue = 3 };
 
     // Stable across the controller's lifetime: consumers hold onto this reference while the
     // underlying track (the actual clock source) is swapped out on every PlayAsync.
@@ -178,7 +182,8 @@ public partial class PlaybackController : Component
             // change, including immediately — no separate initial-value assignment needed.
             track.AddAdjustment(AdjustableProperty.Volume, Volume);
             track.AddAdjustment(AdjustableProperty.Tempo, PlaybackRate);
-            track.AddAdjustment(AdjustableProperty.Frequency, ReplayRate);
+            track.AddAdjustment(AdjustableProperty.Tempo, ReplayTempo);
+            track.AddAdjustment(AdjustableProperty.Frequency, ReplayFrequency);
             track.Completed += () => Schedule(() => TrackCompleted?.Invoke());
 
             decoupledClock.ChangeSource(track);
@@ -273,7 +278,8 @@ public partial class PlaybackController : Component
 
             track.AddAdjustment(AdjustableProperty.Volume, Volume);
             track.AddAdjustment(AdjustableProperty.Tempo, PlaybackRate);
-            track.AddAdjustment(AdjustableProperty.Frequency, ReplayRate);
+            track.AddAdjustment(AdjustableProperty.Tempo, ReplayTempo);
+            track.AddAdjustment(AdjustableProperty.Frequency, ReplayFrequency);
             track.Completed += () => Schedule(() => TrackCompleted?.Invoke());
 
             decoupledClock.ChangeSource(track);

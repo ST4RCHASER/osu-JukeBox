@@ -303,8 +303,9 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
     /// (HR's flipped playfield, EZ/HR's altered approach and size, mania key mods), the visual ones
     /// (HD's fades, FL's flashlight), AND the rate-changing ones, which reach the ruleset for
     /// completeness even though they change nothing here: lazer applies those to the TRACK, which
-    /// in this app is <see cref="Playback.PlaybackController.ReplayRate"/>'s job. Only autoplay is
-    /// dropped, since it would fight the replay for the input handler.
+    /// in this app is <see cref="Playback.PlaybackController.ReplayTempo"/> and
+    /// <see cref="Playback.PlaybackController.ReplayFrequency"/>'s job. Only autoplay is dropped,
+    /// since it would fight the replay for the input handler.
     ///
     /// <para>
     /// Applying the real mod list is what makes the replay's cursor line up with the objects it was
