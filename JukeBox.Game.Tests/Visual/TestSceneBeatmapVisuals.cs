@@ -1473,13 +1473,22 @@ namespace JukeBox.Game.Tests.Visual
         // upstream's own @2x detection) looking correct regardless of the texture's exact
         // proportions — removing it exposes whatever raw, unfit geometry that Sprite actually has.
         // Locks in that Masking must stay enabled (guards against reintroducing exactly this
-        // mistake) and separately verifies the plausible root cause raised alongside it — that our
-        // BeatmapFolderSkin might not replicate lazer's own "@2x"-suffixed high-resolution texture
-        // detection (LegacySkin.GetTexture: an "x@2x.png" sibling halves the DISPLAYED size of a
-        // higher-resolution asset) — by asserting a real @2x pair actually gets displayed at its
-        // 1x sibling's size, not its own raw (larger) pixel size.
+        // mistake) and separately asserts that, with a 64px file and a 128px "@2x" sibling both
+        // present, the drum's sprite ends up displayed at 64 rather than 128.
+        //
+        // NOTE on what that second assertion does and does not show. It was originally written to
+        // check the theory that our BeatmapFolderSkin fails to replicate lazer's "@2x"
+        // high-resolution texture detection (LegacySkin.GetTexture: an "x@2x.png" sibling is served
+        // in place of "x" at ScaleAdjust 2, halving its displayed size). It cannot actually
+        // distinguish that: 64px at ScaleAdjust 1 and 128px at ScaleAdjust 2 both display at 64, so
+        // the assertion holds either way. It has since turned out that lazer's beatmap skins
+        // deliberately DISABLE that detection (LegacyBeatmapSkin.AllowHighResolutionSprites =>
+        // false — @2x is a skin convention, not a beatmap one), and BeatmapFolderSkin now mirrors
+        // that. The assertion below is still worth keeping as a display-size regression guard, but
+        // the behaviour it was aimed at is pinned properly, on the RAW texture, in
+        // TestSceneBeatmapFolderSkin.
         [Test]
-        public void TaikoDrumFlashMaskingStaysEnabledAndBeatmapSkinRespectsAt2xTextures()
+        public void TaikoDrumFlashMaskingStaysEnabledAndAnAt2xPairDisplaysAtOneXSize()
         {
             BeatmapVisuals visuals = null!;
             var manual = new osu.Framework.Timing.ManualClock();
