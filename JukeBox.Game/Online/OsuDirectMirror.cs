@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -25,12 +27,12 @@ namespace JukeBox.Game.Online
             return parseSets(json);
         }
 
-        public async Task DownloadAsync(int setId, bool noVideo, Stream destination, CancellationToken ct = default)
+        public async Task DownloadAsync(int setId, bool noVideo, Stream destination, CancellationToken ct = default, DownloadProgressCallback? progress = null)
         {
             string url = $"{DL_BASE}/{setId}";
             using var response = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
             response.EnsureSuccessStatusCode();
-            await response.Content.CopyToAsync(destination, ct).ConfigureAwait(false);
+            await MirrorDownload.CopyAsync(response, destination, progress, ct).ConfigureAwait(false);
         }
 
         private static List<BeatmapSetInfo> parseSets(string json)

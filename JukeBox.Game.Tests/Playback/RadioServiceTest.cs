@@ -24,7 +24,7 @@ namespace JukeBox.Game.Tests.Playback
             return Task.FromResult(items);
         }
 
-        public Task DownloadAsync(int setId, bool noVideo, Stream destination, CancellationToken ct = default)
+        public Task DownloadAsync(int setId, bool noVideo, Stream destination, CancellationToken ct = default, DownloadProgressCallback progress = null)
             => throw new System.NotSupportedException();
     }
 

@@ -507,7 +507,7 @@ namespace JukeBox.Game.Tests.Visual
             public Task<List<BeatmapSetInfo>> SearchAsync(SearchRequest request, CancellationToken ct = default)
                 => Task.FromResult(new List<BeatmapSetInfo>(Sets));
 
-            public Task DownloadAsync(int setId, bool noVideo, Stream destination, CancellationToken ct = default)
+            public Task DownloadAsync(int setId, bool noVideo, Stream destination, CancellationToken ct = default, DownloadProgressCallback? progress = null)
                 => throw new NotSupportedException("not exercised by this test scene");
         }
     }
