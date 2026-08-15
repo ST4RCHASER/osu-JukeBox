@@ -2,6 +2,7 @@
 
 using System;
 using JukeBox.Game.Configuration;
+using JukeBox.Game.Import;
 using JukeBox.Game.Online;
 using JukeBox.Game.Playback;
 using JukeBox.Game.UI;
@@ -101,6 +102,9 @@ public partial class MainScreen : Screen
     [Resolved]
     private JukeBoxConfigManager config { get; set; } = null!;
 
+    [Resolved]
+    private DroppedFileImporter fileImporter { get; set; } = null!;
+
     /// <summary>
     /// A bound COPY of <see cref="Jukebox.LastError"/> rather than a subscription straight onto
     /// the jukebox's own bindable. The jukebox long outlives any one screen, so a direct
@@ -110,6 +114,10 @@ public partial class MainScreen : Screen
     /// automatically when this drawable is disposed, so the callback can't outlive the screen.
     /// </summary>
     private readonly Bindable<string?> lastError = new Bindable<string?>();
+
+    /// <summary>Drag-and-drop import outcomes, bound the same way (and for the same lifetime
+    /// reasons) as <see cref="lastError"/>.</summary>
+    private readonly Bindable<DropNotification?> dropNotification = new Bindable<DropNotification?>();
 
     private Bindable<UiLayout> uiLayout = null!;
     private Bindable<double> playfieldZoom = null!;
@@ -446,6 +454,13 @@ public partial class MainScreen : Screen
         });
 
         jukebox.Enqueued += onEnqueued;
+
+        dropNotification.BindTo(fileImporter.Notification);
+        dropNotification.BindValueChanged(e =>
+        {
+            if (e.NewValue is { } drop)
+                showToast(drop.Message, drop.IsError ? Theme.Error : Theme.Accent);
+        });
     }
 
     private void onEnqueued(BeatmapSetInfo set) => showToast($"Added to queue: {set.DisplayTitle}", Theme.Accent);
