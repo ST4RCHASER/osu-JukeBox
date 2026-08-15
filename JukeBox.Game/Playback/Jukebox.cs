@@ -197,6 +197,44 @@ public partial class Jukebox : Component
     /// </summary>
     public void SkipCurrent() => AdvanceAsync();
 
+    /// <summary>
+    /// Jumps straight to <paramref name="set"/>, which must already be queued: it starts now, and
+    /// the queue carries on from WHERE IT SAT rather than from the front. Everything that was ahead
+    /// of it is dropped — the user skipped past those, exactly as if they had pressed next until
+    /// they got here. This is a queue, not a playlist with a cursor; entries leave it as they play
+    /// (see <see cref="MusicQueue.PopNext"/>), so "the ones you jumped over" have nowhere to wait.
+    ///
+    /// <para>
+    /// Deliberately NOT "move this to the front": that would keep the skipped-over entries and play
+    /// them straight after, which is the opposite of what clicking play on the fifth row means.
+    /// </para>
+    ///
+    /// <para>
+    /// Implemented as a queue edit plus an ordinary advance rather than a second play path, so it
+    /// inherits everything a normal round already does — download with progress, cache eviction,
+    /// failure fallback — and so the coalescing guard arbitrates it against an advance that is
+    /// already running instead of the two racing to start different songs.
+    /// </para>
+    /// </summary>
+    /// <remarks>Update thread only, same contract as <see cref="EnqueueAndMaybePlayAsync"/> and
+    /// <see cref="SkipCurrent"/>: it touches <see cref="queue"/> directly.</remarks>
+    /// <returns>Whether <paramref name="set"/> was queued and is now starting.</returns>
+    public bool PlayNow(BeatmapSetInfo set)
+    {
+        int index = queue.Items.IndexOf(set);
+
+        if (index < 0)
+            return false;
+
+        // Leaves `set` itself at the head for the advance round below to pop, so the entry is
+        // consumed exactly once and by the usual path.
+        if (index > 0)
+            queue.Items.RemoveRange(0, index);
+
+        AdvanceAsync();
+        return true;
+    }
+
     private void onTrackCompleted() => AdvanceAsync();
 
     /// <summary>

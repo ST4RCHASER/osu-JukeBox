@@ -130,7 +130,19 @@ namespace JukeBox.Game.Tests.Visual
                         Width = column_content_width,
                         Child = nowPlaying = new NowPlayingPanel(),
                     },
-                    queuePanel = new QueuePanel(),
+                    // Docked, on screen, at the width it ships at — the same presentation
+                    // TestSceneQueueDownloadProgress uses, and the ONLY one the app builds (see
+                    // PlaybackPanel). This used to be the floating drawer, which parks itself
+                    // entirely past the right edge until toggled: rows there are never on screen, so
+                    // the list could never finish adding them, and the tests below were quietly
+                    // asserting against a presentation nothing ships.
+                    new Container
+                    {
+                        RelativeSizeAxes = Axes.Y,
+                        Width = column_content_width,
+                        X = column_content_width + 20,
+                        Child = queuePanel = new QueuePanel(docked: true),
+                    },
                 };
             });
         }
@@ -1198,15 +1210,115 @@ namespace JukeBox.Game.Tests.Visual
                 queue.Enqueue(new BeatmapSetInfo { Id = 2, Title = "Two", Artist = "Artist Two" });
             });
 
-            AddAssert("2 rows shown", () => queuePanel.RowCount == 2);
+            // Polled: a queued set becomes a visible row on the frame after the queue changed
+            // (the list adds it from a scheduled callback — see QueueList.CreateOsuDrawable). A row
+            // that never appears still fails, on the poll's timeout.
+            AddUntilStep("2 rows shown", () => queuePanel.RowCount == 2);
             AddAssert("header shows 2", () => queuePanel.HeaderText == "Queue (2)");
 
             AddStep("remove first row via its ✕ button", () => queuePanel.TriggerRemoveAt(0));
             AddAssert("removed set is gone from the queue itself", () => queue.Items.All(i => i.Id != 1));
 
-            // The removed row fades + collapses out (QueueRow.AnimateOut) rather than vanishing
-            // instantly, so RowCount only drops once that animation finishes and the row expires.
             AddUntilStep("1 row left", () => queuePanel.RowCount == 1);
+        }
+
+        /// <summary>Queues <paramref name="titles"/> in order and waits for their rows.</summary>
+        private void enqueueSets(params string[] titles)
+        {
+            AddStep($"enqueue {titles.Length} sets", () =>
+            {
+                for (int i = 0; i < titles.Length; i++)
+                    queue.Enqueue(new BeatmapSetInfo { Id = 500 + i, Title = titles[i], Artist = "A" });
+            });
+
+            AddUntilStep("rows shown", () => queuePanel.RowCount == titles.Length);
+        }
+
+        private string[] queuedTitles() => queue.Items.Select(i => i.DisplayTitle).ToArray();
+
+        private string[] listedTitles() => queuePanel.ListedOrder.Select(i => i.DisplayTitle).ToArray();
+
+        // Dragging a row moves it in the QUEUE, not just on screen — the list and the queue are two
+        // collections, and the whole point of the feature is that the next song comes off the order
+        // the user just arranged.
+        [Test]
+        public void DraggingARowReordersTheQueueItself()
+        {
+            enqueueSets("A", "B", "C", "D");
+
+            AddStep("drag the last row to the front", () => queuePanel.TriggerReorder(3, 0));
+
+            AddAssert("the list shows the new order", () => listedTitles().SequenceEqual(new[] { "D", "A", "B", "C" }));
+            AddUntilStep("and the queue agrees", () => queuedTitles().SequenceEqual(new[] { "D", "A", "B", "C" }));
+        }
+
+        // The consequence that matters: whatever the jukebox plays next comes off the REORDERED
+        // queue. Asserting on the popped set (rather than just on list order) is what would catch a
+        // reorder that only moved rows around.
+        [Test]
+        public void TheNextSongComesOffTheReorderedQueue()
+        {
+            enqueueSets("A", "B", "C");
+
+            AddStep("drag C to the front", () => queuePanel.TriggerReorder(2, 0));
+            AddUntilStep("queue reordered", () => queuedTitles().SequenceEqual(new[] { "C", "A", "B" }));
+
+            BeatmapSetInfo? popped = null;
+            AddStep("advance", () => popped = queue.PopNext());
+
+            AddAssert("C is what plays next", () => popped?.DisplayTitle == "C");
+            AddAssert("and the rest keep the arranged order", () => queuedTitles().SequenceEqual(new[] { "A", "B" }));
+        }
+
+        // Reordering must not disturb what is already playing. The playing set has been POPPED off
+        // the queue (see MusicQueue.PopNext), so it isn't a row at all — this pins that, because a
+        // "playlist with a cursor" implementation would have made it one and could restart it.
+        [Test]
+        public void ReorderingWhilePlayingDoesNotTouchTheCurrentSong()
+        {
+            AddStep("play a set", () => playback.PlayAsync(fixtureSetLong));
+            AddUntilStep("playing", () => playback.Current.Value?.SetId == fixtureSetLong.SetId);
+
+            enqueueSets("A", "B", "C");
+
+            double timeBefore = 0;
+            AddStep("note the playback position", () => timeBefore = playback.CurrentTimeMs);
+            AddStep("reorder the queue underneath it", () => queuePanel.TriggerReorder(0, 2));
+
+            AddUntilStep("queue reordered", () => queuedTitles().SequenceEqual(new[] { "B", "C", "A" }));
+            AddAssert("same set still playing", () => playback.Current.Value?.SetId == fixtureSetLong.SetId);
+            AddAssert("and it did not restart", () => playback.CurrentTimeMs >= timeBefore);
+            AddAssert("the playing set is not a queue row", () => queuePanel.ListedOrder.All(i => i.Id != fixtureSetLong.SetId));
+        }
+
+        // ▶ jumps straight to that entry: it plays, and the queue carries on from where it sat
+        // rather than from the front. The entries it was behind are consumed — the user skipped
+        // them, exactly as if they had pressed next until they got there.
+        [Test]
+        public void PlayNowStartsThatEntryAndContinuesFromItsPosition()
+        {
+            enqueueSets("A", "B", "C", "D");
+
+            AddStep("press ▶ on the third row", () => queuePanel.TriggerPlayNowAt(2));
+
+            AddUntilStep("C is playing", () => jukebox.NowPlaying.Value?.DisplayTitle == "C");
+            AddUntilStep("A and B were skipped past, D still waits",
+                () => queuedTitles().SequenceEqual(new[] { "D" }));
+        }
+
+        // The two buttons sit side by side, so the destructive one must still do its own job — and
+        // still be the one on the right, where it has always been.
+        [Test]
+        public void RemoveStillWorksBesideTheNewPlayButton()
+        {
+            enqueueSets("A", "B", "C");
+
+            AddAssert("every row offers both buttons", () => queuePanel.RowCount == 3 && queuePanel.EveryRowHasPlayNow);
+
+            AddStep("remove the middle row", () => queuePanel.TriggerRemoveAt(1));
+
+            AddUntilStep("only B is gone", () => queuedTitles().SequenceEqual(new[] { "A", "C" }));
+            AddUntilStep("and its row went with it", () => listedTitles().SequenceEqual(new[] { "A", "C" }));
         }
 
         // Regression test for a production crash: MusicQueue.Items is a BindableList that
@@ -1228,7 +1340,10 @@ namespace JukeBox.Game.Tests.Visual
                 queue.Enqueue(new BeatmapSetInfo { Id = 1, Title = "One", Artist = "Artist One" });
                 queue.Enqueue(new BeatmapSetInfo { Id = 2, Title = "Two", Artist = "Artist Two" });
             });
-            AddAssert("2 rows shown", () => queuePanel.RowCount == 2);
+            // Polled: a queued set becomes a visible row on the frame after the queue changed
+            // (the list adds it from a scheduled callback — see QueueList.CreateOsuDrawable). A row
+            // that never appears still fails, on the poll's timeout.
+            AddUntilStep("2 rows shown", () => queuePanel.RowCount == 2);
 
             Exception? caught = null;
 

@@ -1,6 +1,8 @@
 #nullable enable
 
+using System;
 using System.Collections.Generic;
+using System.Collections.Specialized;
 using System.Linq;
 using JukeBox.Game.Beatmaps;
 using JukeBox.Game.Online;
@@ -11,6 +13,7 @@ using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Shapes;
 using osu.Framework.Graphics.Sprites;
 using osu.Framework.Input.Events;
+using osu.Game.Graphics.Containers;
 using osu.Game.Graphics.UserInterface;
 using osuTK;
 
@@ -53,17 +56,23 @@ public partial class QueuePanel : CompositeDrawable
     [Resolved(canBeNull: true)]
     private BeatmapCache? cache { get; set; }
 
+    // canBeNull for the same reason as `cache`: a scene that only exercises the list's contents
+    // needs no jukebox at all. Without one the play-now button simply isn't built (see QueueRow) —
+    // there is nothing it could do.
+    [Resolved(canBeNull: true)]
+    private Jukebox? jukebox { get; set; }
+
     private SpriteText headerText = null!;
     private FillFlowContainer contentFlow = null!;
-    private FillFlowContainer rowsFlow = null!;
+    private QueueList rowsList = null!;
 
     private bool shown;
 
-    /// <summary>Live rows keyed by their set (reference identity — matches how removal itself is
-    /// keyed via <c>queue.Items.Remove(set)</c>), so <see cref="rebuildRows"/> can diff against
-    /// <see cref="MusicQueue.Items"/> instead of tearing down and recreating every row on every
-    /// mutation — needed so only the row that actually changed animates.</summary>
-    private readonly Dictionary<BeatmapSetInfo, QueueRow> rows = new();
+    /// <summary>
+    /// Guards <see cref="syncListFromQueue"/>'s own writes to the list from being read back as user
+    /// drags — see <see cref="LoadComplete"/>, where the two directions are wired.
+    /// </summary>
+    private bool syncingFromQueue;
 
     public QueuePanel(bool docked = false)
     {
@@ -75,7 +84,9 @@ public partial class QueuePanel : CompositeDrawable
     /// currently rendered, and to the header text, without depending on <see cref="QueueRow"/>
     /// (a private nested type not reachable from outside this class even with InternalsVisibleTo).
     /// </summary>
-    internal int RowCount => rowsFlow.Count;
+    /// <summary>Rows that are actually built and laid out — NOT the item count, which the list
+    /// takes on the instant a set is queued, a frame or more before the row drawable exists.</summary>
+    internal int RowCount => rowsList.LoadedRowCount;
 
     internal string HeaderText => headerText.Text.ToString();
 
@@ -93,20 +104,42 @@ public partial class QueuePanel : CompositeDrawable
     /// that row isn't downloading or its download has no known total (see
     /// <see cref="Beatmaps.DownloadProgress.Indeterminate"/>).
     /// </summary>
-    internal string ProgressTextAt(int index) => ((QueueRow)rowsFlow.Children[index]).ProgressText;
+    internal string ProgressTextAt(int index) => rowAt(index).ProgressText;
 
     /// <summary>Test-only: the 0..1 fill of the row at <paramref name="index"/>'s progress bar.</summary>
-    internal float ProgressFillAt(int index) => ((QueueRow)rowsFlow.Children[index]).ProgressFill;
+    internal float ProgressFillAt(int index) => rowAt(index).ProgressFill;
 
     /// <summary>Test-only: whether the row at <paramref name="index"/> is showing the indeterminate
     /// <see cref="LoadingSpinner"/> rather than a percentage.</summary>
-    internal bool SpinnerShownAt(int index) => ((QueueRow)rowsFlow.Children[index]).SpinnerShown;
+    internal bool SpinnerShownAt(int index) => rowAt(index).SpinnerShown;
 
     /// <summary>
     /// Test-only: clicks the ✕ button on the row at <paramref name="index"/>, exercising the same
     /// removal path a real click would.
     /// </summary>
-    internal void TriggerRemoveAt(int index) => ((QueueRow)rowsFlow.Children[index]).TriggerRemove();
+    internal void TriggerRemoveAt(int index) => rowAt(index).TriggerRemove();
+
+    /// <summary>Test-only: clicks the ▶ button on the row at <paramref name="index"/>.</summary>
+    internal void TriggerPlayNowAt(int index) => rowAt(index).TriggerPlayNow();
+
+    /// <summary>Test-only: whether every listed row actually offers a ▶.</summary>
+    internal bool EveryRowHasPlayNow => rowsList.Items.All(set => rowsList.RowFor(set).HasPlayNowButton);
+
+    /// <summary>Test-only: the queue order as the LIST currently draws it, which is the thing a
+    /// drag actually rearranges — asserting on it (rather than on the queue) is what catches the
+    /// view and the queue disagreeing.</summary>
+    internal IReadOnlyList<BeatmapSetInfo> ListedOrder => rowsList.Items.ToList();
+
+    /// <summary>Test-only: moves the row at <paramref name="from"/> to <paramref name="to"/> the
+    /// same way a completed drag does — the container rearranges its own Items and we mirror that
+    /// onto the queue, so this exercises the real reorder path without synthesising mouse motion.
+    /// </summary>
+    internal void TriggerReorder(int from, int to) => rowsList.Items.Move(from, to);
+
+    /// <summary>Rows in the order the list draws them — the container keeps its flow children in
+    /// arbitrary order and sorts by depth, so this maps back through Items rather than reading
+    /// child order.</summary>
+    private QueueRow rowAt(int index) => rowsList.RowFor(rowsList.Items[index]);
 
     [BackgroundDependencyLoader]
     private void load()
@@ -164,17 +197,9 @@ public partial class QueuePanel : CompositeDrawable
                             Font = FontUsage.Default.With(size: Theme.HeaderTextSize),
                             Colour = Theme.TextPrimary,
                         },
-                        rowsFlow = new FillFlowContainer
+                        rowsList = new QueueList(set => new QueueRow(set, cache, () => queue.Items.Remove(set), playNow(set)))
                         {
                             RelativeSizeAxes = Axes.X,
-                            AutoSizeAxes = Axes.Y,
-                            Direction = FillDirection.Vertical,
-                            Spacing = new Vector2(0, Theme.RowSpacing),
-                            // Animates the reflow as rows are added/removed around each other —
-                            // this is what actually makes a removed row's departure read as a
-                            // "collapse" rather than the remaining rows instantly snapping up.
-                            LayoutDuration = (float)Theme.DurationNormal,
-                            LayoutEasing = Theme.EaseEnter,
                         }
                     }
                 }
@@ -193,14 +218,30 @@ public partial class QueuePanel : CompositeDrawable
         if (!docked)
             X = panel_width;
 
-        // Scheduled rather than rebuilding inline: CollectionChanged fires synchronously on
-        // whatever thread mutated queue.Items, and rebuildRows() mutates rowsFlow's
-        // InternalChildren, which the framework only allows on the update thread. Every current
+        // Scheduled rather than reconciling inline: CollectionChanged fires synchronously on
+        // whatever thread mutated queue.Items, and the reconcile writes to the list container,
+        // which mutates drawables — update thread only, and its item map throws
+        // KeyNotFoundException when a change arrives for an item it never saw. Every current
         // mutator of Items is expected to already be on the update thread (see Jukebox's
         // onUpdateThread), but Schedule is safe to call from any thread and a no-op-cost
         // same-thread defer when we're already on it — this is defense-in-depth so a future or
-        // overlooked off-thread mutation degrades to a deferred rebuild instead of crashing.
-        queue.Items.BindCollectionChanged((_, _) => Schedule(rebuildRows), true);
+        // overlooked off-thread mutation degrades to a deferred sync instead of crashing.
+        //
+        // Deliberately NOT rowsList.Items.BindTo(queue.Items), which would be shorter but would
+        // deliver those changes straight onto the mutating thread and lose exactly that guard.
+        queue.Items.BindCollectionChanged((_, _) => Schedule(syncListFromQueue), true);
+
+        // The other direction. A drag is the ONLY thing that rearranges the list on its own (the
+        // container calls Items.Move as the dragged row passes its neighbours), so a Move that
+        // isn't ours is a user reorder, and the queue has to learn about it or the next song would
+        // come off a stale order. Input runs on the update thread, so this needs no marshalling.
+        rowsList.Items.BindCollectionChanged((_, e) =>
+        {
+            if (syncingFromQueue || e.Action != NotifyCollectionChangedAction.Move)
+                return;
+
+            queue.Items.Move(e.OldStartingIndex, e.NewStartingIndex);
+        });
     }
 
     /// <summary>
@@ -225,44 +266,154 @@ public partial class QueuePanel : CompositeDrawable
     }
 
     /// <summary>
-    /// Diffs against <see cref="MusicQueue.Items"/> instead of clearing and rebuilding wholesale —
-    /// a set that's still queued keeps its existing <see cref="QueueRow"/> untouched (so it never
-    /// re-flickers on an unrelated mutation elsewhere in the queue); a set that dropped out
-    /// animates its row out instead of vanishing instantly; a newly-queued set gets a fresh row
-    /// that animates in. New rows are always appended (queueing only ever adds at the end — see
-    /// <see cref="MusicQueue.Enqueue"/>), so flow order stays correct without needing to
-    /// re-sequence existing rows.
+    /// What the ▶ button on <paramref name="set"/>'s row does, or null when there is no jukebox to
+    /// ask — the row then draws no button at all rather than a dead one.
     /// </summary>
-    private void rebuildRows()
+    private System.Action? playNow(BeatmapSetInfo set) => jukebox == null ? null : () => jukebox.PlayNow(set);
+
+    /// <summary>
+    /// Brings the list in line with <see cref="MusicQueue.Items"/> by the smallest set of edits that
+    /// gets there — remove what left, insert what arrived, move what changed places — rather than
+    /// clearing and refilling. The container rebuilds a row's whole drawable for every item it is
+    /// handed, so a wholesale refill would restart every row's entrance animation and throw away
+    /// in-flight download progress on rows that never actually changed.
+    /// </summary>
+    private void syncListFromQueue()
     {
         headerText.Text = $"Queue ({queue.Items.Count})";
 
-        var current = new HashSet<BeatmapSetInfo>(queue.Items);
+        if (rowsList.Items.SequenceEqual(queue.Items))
+            return;
 
-        foreach (var (set, row) in rows.ToList())
+        syncingFromQueue = true;
+
+        try
         {
-            if (current.Contains(set))
-                continue;
+            foreach (var gone in rowsList.Items.Except(queue.Items).ToList())
+                rowsList.Items.Remove(gone);
 
-            rows.Remove(set);
+            for (int i = 0; i < queue.Items.Count; i++)
+            {
+                var set = queue.Items[i];
+                int at = rowsList.Items.IndexOf(set);
 
-            // Scheduled rather than removing inline: onComplete fires from inside the row's own
-            // transform-completion processing (itself inside that row's Update() call), so
-            // disposing it synchronously right there corrupts the in-progress update walk
-            // (ObjectDisposedException on its children later in that same frame). Scheduling
-            // defers the removal to a fresh frame, outside that call stack.
-            row.AnimateOut(() => Schedule(() => rowsFlow.Remove(row, true)));
+                if (at < 0)
+                    rowsList.Items.Insert(i, set);
+                else if (at != i)
+                    rowsList.Items.Move(at, i);
+            }
+        }
+        finally
+        {
+            syncingFromQueue = false;
+        }
+    }
+
+    /// <summary>
+    /// Lazer's own rearrangeable list (the one its playlists use), so the drag — grab handle, live
+    /// gap, drop position, auto-scroll — is the framework's rather than hand-rolled maths.
+    ///
+    /// <para>
+    /// It sizes itself to its content and its scroll is inert, because this list is NOT the thing
+    /// that scrolls: the whole Playback tab is one scroll (see <see cref="PlaybackPanel"/>), and a
+    /// second one nested inside it would make the wheel's target ambiguous exactly where the pointer
+    /// spends its time. The base class insists on a scroll container, so it gets one that declines
+    /// the wheel.
+    /// </para>
+    /// </summary>
+    private partial class QueueList : OsuRearrangeableListContainer<BeatmapSetInfo>
+    {
+        private readonly Func<BeatmapSetInfo, QueueRow> createRow;
+        private readonly Dictionary<BeatmapSetInfo, QueueRow> rows = new();
+
+        public QueueList(Func<BeatmapSetInfo, QueueRow> createRow)
+        {
+            this.createRow = createRow;
         }
 
-        foreach (var set in queue.Items)
-        {
-            if (rows.ContainsKey(set))
-                continue;
+        /// <summary>The live row drawing <paramref name="set"/> — test-only access, and only valid
+        /// once the container has built it.</summary>
+        public QueueRow RowFor(BeatmapSetInfo set) => rows[set];
 
-            var row = new QueueRow(set, cache, () => queue.Items.Remove(set));
-            rows[set] = row;
-            rowsFlow.Add(row);
-            row.AnimateIn();
+        /// <summary>See <see cref="QueuePanel.RowCount"/>.</summary>
+        public int LoadedRowCount => ListContainer.Count(r => r.IsLoaded);
+
+        /// <summary>
+        /// Builds the row AND loads it here, on the update thread, rather than leaving its load to
+        /// the <c>LoadComponentsAsync</c> the base class hands it to next.
+        ///
+        /// <para>
+        /// Left to that path the rows never appeared at all in a populated scene, however long it
+        /// was given: the framework loads components on a fixed four-thread scheduler shared across
+        /// the whole process, so a queue row queues behind everything else that is loading. A row
+        /// that never arrives is far worse than one that costs a frame, and a queue row is cheap and
+        /// layout-only — its cover fetches itself afterwards — which is exactly the shape that
+        /// belongs on the update thread. It is also what the hand-rolled flow this list replaced
+        /// did.
+        /// </para>
+        ///
+        /// <para>
+        /// The base still adds the row to the hierarchy from its own scheduled callback, so a queued
+        /// set becomes a visible row on the frame AFTER the queue changed — which is why callers
+        /// that watch for rows poll rather than assert on the very next frame.
+        /// </para>
+        /// </summary>
+        protected override OsuRearrangeableListItem<BeatmapSetInfo> CreateOsuDrawable(BeatmapSetInfo item)
+        {
+            var row = createRow(item);
+
+            // Guarded because the base class also builds drawables for items present before this
+            // container itself has loaded, when there is nothing to load them with yet — it adds
+            // those to the hierarchy directly, which loads them anyway.
+            if (LoadState >= LoadState.Loading)
+                LoadComponent(row);
+
+            return rows[item] = row;
+        }
+
+        protected override FillFlowContainer<RearrangeableListItem<BeatmapSetInfo>> CreateListFillFlowContainer()
+            => new FillFlowContainer<RearrangeableListItem<BeatmapSetInfo>>
+            {
+                Spacing = new Vector2(0, Theme.RowSpacing),
+                // The reflow as rows are added, removed or dragged past each other — the same pace
+                // as the rest of the app's card motion, and what makes a drag read as rows making
+                // room rather than snapping.
+                LayoutDuration = (float)Theme.DurationNormal,
+                LayoutEasing = Theme.EaseEnter,
+            };
+
+        protected override ScrollContainer<Drawable> CreateScrollContainer() => new InertScroll();
+
+        protected override void Update()
+        {
+            base.Update();
+
+            // Read a frame late, like every other measured height in this app: the list is a slot in
+            // the owning tab's single scrolling column, so it has to be exactly as tall as its rows.
+            Height = ListContainer.DrawHeight;
+        }
+
+        /// <summary>
+        /// A scroll container that neither scrolls nor clips: the wheel belongs to the tab's own
+        /// scroll (see the class summary), and the clip has to go with it.
+        ///
+        /// <para>
+        /// Masking is what made this list deadlock at zero height. The list sizes itself to its
+        /// rows, the rows live inside this container, and a masked container hides — and therefore
+        /// never loads — children outside its bounds. At the first frame those bounds are empty, so
+        /// the rows never loaded, never gave the list a height, and the list never grew to reveal
+        /// them. With nothing to clip against (this container is always exactly as tall as its
+        /// content) masking buys nothing anyway.
+        /// </para>
+        /// </summary>
+        private partial class InertScroll : OsuScrollContainer
+        {
+            public InertScroll()
+            {
+                Masking = false;
+            }
+
+            protected override bool OnScroll(ScrollEvent e) => false;
         }
     }
 
@@ -270,33 +421,47 @@ public partial class QueuePanel : CompositeDrawable
     /// One queued set, drawn in the same language as <see cref="BeatmapCard"/>'s compact variant —
     /// cover thumb on the left, then title / artist / "mapped by X" — minus that card's status pill
     /// and difficulty dots, which say nothing about a set you have already decided to play. The
-    /// right edge carries this row's download feedback (see <see cref="updateProgress"/>) and the ✕
-    /// that drops the set from the queue.
+    /// right edge carries this row's download feedback (see <see cref="updateProgress"/>), a ▶ that
+    /// jumps straight to this set, and the ✕ that drops it from the queue.
+    ///
+    /// <para>
+    /// A rearrangeable list item rather than a plain drawable: that is what gives it lazer's drag
+    /// handle (left of the cover, revealed on hover) and lets the container move it. The item is the
+    /// full-width row; <see cref="CreateContent"/> supplies everything right of the handle.
+    /// </para>
     /// </summary>
-    private partial class QueueRow : CompositeDrawable
+    internal partial class QueueRow : OsuRearrangeableListItem<BeatmapSetInfo>
     {
         private const float slide_offset = 16;
         private const float row_height = 56;
         private const float thumb_size = 44;
         private const float thumb_margin = 6;
 
-        /// <summary>Right inset of the text block with only the ✕ to clear.</summary>
-        private const float text_inset_idle = 34;
+        private const float button_size = 24;
+
+        /// <summary>Right inset of the text block with only the ▶ and ✕ to clear.</summary>
+        private const float text_inset_idle = 34 + button_size;
 
         /// <summary>Right inset of the text block while a percentage/spinner also sits there.</summary>
-        private const float text_inset_downloading = 82;
+        private const float text_inset_downloading = 82 + button_size;
 
         private const float progress_bar_height = 3;
 
         private readonly BeatmapSetInfo set;
         private readonly BeatmapCache? cache;
-        private readonly IconButton removeButton;
-        private readonly Box surface;
-        private readonly Container textBlock;
-        private readonly SpriteText percentText;
-        private readonly LoadingSpinner spinner;
-        private readonly Container progressBar;
-        private readonly Box progressFill;
+        private readonly System.Action onRemove;
+
+        /// <summary>Null when nothing can act on it — see <see cref="QueuePanel.playNow"/>.</summary>
+        private readonly System.Action? onPlayNow;
+
+        private IconButton removeButton = null!;
+        private IconButton? playNowButton;
+        private Box surface = null!;
+        private Container textBlock = null!;
+        private SpriteText percentText = null!;
+        private LoadingSpinner spinner = null!;
+        private Container progressBar = null!;
+        private Box progressFill = null!;
 
         private bool ready;
 
@@ -305,24 +470,29 @@ public partial class QueuePanel : CompositeDrawable
         /// <see cref="SpriteText"/> re-lays out its glyphs on every write to <c>Text</c>).</summary>
         private DownloadProgress? lastProgress;
 
-        public QueueRow(BeatmapSetInfo set, BeatmapCache? cache, System.Action onRemove)
+        public QueueRow(BeatmapSetInfo set, BeatmapCache? cache, System.Action onRemove, System.Action? onPlayNow)
+            : base(set)
         {
             this.set = set;
             this.cache = cache;
+            this.onRemove = onRemove;
+            this.onPlayNow = onPlayNow;
+        }
 
-            RelativeSizeAxes = Axes.X;
-            Height = row_height;
-
-            // AnimateIn starts this row at Alpha 0 and AnimateOut fades it back down before
-            // removal — without AlwaysPresent, osu!framework throttles Update()/Scheduler
-            // ticking for a not-IsPresent (Alpha 0) drawable, which stalls its own FadeIn/FadeOut
-            // transforms indefinitely instead of letting them progress every frame as intended.
-            AlwaysPresent = true;
-
-            Masking = true;
-            CornerRadius = Theme.CornerRadius;
-
-            InternalChildren = new Drawable[]
+        /// <summary>
+        /// Everything right of the drag handle. The row's own entrance starts it at Alpha 0 (see
+        /// <see cref="LoadComplete"/>); without AlwaysPresent, osu!framework throttles
+        /// Update()/Scheduler ticking for a not-IsPresent drawable, which stalls that fade
+        /// indefinitely instead of letting it progress every frame.
+        /// </summary>
+        protected override Drawable CreateContent() => new Container
+        {
+            RelativeSizeAxes = Axes.X,
+            Height = row_height,
+            AlwaysPresent = true,
+            Masking = true,
+            CornerRadius = Theme.CornerRadius,
+            Children = new Drawable[]
             {
                 surface = new Box
                 {
@@ -429,67 +599,74 @@ public partial class QueuePanel : CompositeDrawable
                         },
                     },
                 },
+                // ▶ sits immediately left of ✕ — the destructive action stays in the corner it has
+                // always been in, so muscle memory for "remove" survives the new neighbour.
+                playNowButton = onPlayNow == null ? null : new IconButton
+                {
+                    Anchor = Anchor.CentreRight,
+                    Origin = Anchor.CentreRight,
+                    Position = new Vector2(-4 - button_size, 0),
+                    Size = new Vector2(button_size),
+                    Icon = FontAwesome.Solid.Play,
+                    Action = onPlayNow,
+                    Alpha = 0,
+                },
                 removeButton = new IconButton
                 {
                     Anchor = Anchor.CentreRight,
                     Origin = Anchor.CentreRight,
                     Position = new Vector2(-4, 0),
-                    Size = new Vector2(24, 24),
+                    Size = new Vector2(button_size),
                     Icon = FontAwesome.Solid.Times,
                     Action = onRemove,
                     Alpha = 0,
-                }
-            };
-        }
+                },
+            }.Where(d => d != null).Select(d => d!).ToArray(),
+        };
 
         protected override void LoadComplete()
         {
             base.LoadComplete();
             ready = true;
             updateProgress();
-        }
 
-        /// <summary>Fades + slides the row in from the side — called once, right after this row
-        /// is first added to <c>rowsFlow</c> by <see cref="QueuePanel.rebuildRows"/>.</summary>
-        public void AnimateIn()
-        {
+            // The entrance, self-driven now that the container owns adding and removing rows. There
+            // is deliberately no matching exit: a leaving row is disposed the moment its set leaves
+            // the queue, because holding a departing row in the list would leave it occupying an
+            // index that reordering then has to reason around. The gap still closes smoothly — the
+            // flow's LayoutDuration animates the rows that remain (see CreateListFillFlowContainer).
             Alpha = 0;
             X = slide_offset;
             this.FadeIn(Theme.DurationNormal, Theme.EaseEnter);
             this.MoveToX(0, Theme.DurationNormal, Theme.EaseEnter);
         }
 
-        /// <summary>Fades out and collapses this row's own height (letting <c>rowsFlow</c>'s
-        /// <c>LayoutDuration</c> animate the remaining rows sliding up to fill the gap), then
-        /// invokes <paramref name="onComplete"/> — which the caller uses to actually remove this
-        /// row from its parent — once that animation finishes. Called once the owning set has
-        /// left the queue.</summary>
-        public void AnimateOut(System.Action onComplete)
-        {
-            this.FadeOut(Theme.DurationFast, Theme.EaseExit);
-            this.ResizeHeightTo(0, Theme.DurationNormal, Theme.EaseExit).OnComplete(_ => onComplete());
-        }
-
         protected override bool OnHover(HoverEvent e)
         {
             surface.FadeColour(Theme.ElevatedSurface, Theme.HoverFadeDuration);
-            fadeRemoveButton(1);
+            fadeButtons(1);
             return base.OnHover(e);
         }
 
         protected override void OnHoverLost(HoverLostEvent e)
         {
             surface.FadeColour(Theme.PanelSurface, Theme.HoverFadeDuration);
-            fadeRemoveButton(0);
+            fadeButtons(0);
             base.OnHoverLost(e);
         }
 
-        private void fadeRemoveButton(float alpha)
+        private void fadeButtons(float alpha)
         {
-            if (ready)
-                removeButton.FadeTo(alpha, Theme.HoverFadeDuration);
-            else
-                removeButton.Alpha = alpha;
+            foreach (var button in new[] { playNowButton, removeButton })
+            {
+                if (button == null)
+                    continue;
+
+                if (ready)
+                    button.FadeTo(alpha, Theme.HoverFadeDuration);
+                else
+                    button.Alpha = alpha;
+            }
         }
 
         // Polled rather than pushed: BeatmapCache reports progress from whichever thread is
@@ -558,6 +735,11 @@ public partial class QueuePanel : CompositeDrawable
                 : $"Played by {replay.PlayerName}";
 
         public void TriggerRemove() => removeButton.TriggerClick();
+
+        public void TriggerPlayNow() => playNowButton?.TriggerClick();
+
+        /// <summary>Test-only: whether this row offers a ▶ at all (it doesn't without a jukebox).</summary>
+        internal bool HasPlayNowButton => playNowButton != null;
 
         internal string ProgressText => percentText.Alpha > 0 ? percentText.Text.ToString() : string.Empty;
 
