@@ -73,13 +73,38 @@ public partial class LazerStoryboardLayer : CompositeDrawable, IBeatSyncProvider
     public bool VideoFaulted => HasVideo && this.ChildrenOfType<Video>().Any(v => v.IsFaulted);
 
     /// <summary>
+    /// Whether the storyboard declares a video whose FILE never resolved. Lazer's
+    /// <c>DrawableStoryboardVideo</c> asks the resource store for the referenced path and, on a null
+    /// stream, simply adds no child at all — so a video that isn't there produces no
+    /// <see cref="Video"/> drawable, and therefore never becomes <see cref="VideoFaulted"/> either.
+    ///
+    /// <para>
+    /// That gap is what made set 683417 a black screen: its [Events] references a ".avi" while the
+    /// .osz ships the ".mp4" osu! re-encoded it to, so nothing loaded, nothing faulted, and the
+    /// background was hidden for a video that was never going to draw. The resource store now
+    /// resolves across that mismatch, but this stays as the backstop for a video that is genuinely
+    /// absent or unreadable — the background must come back rather than leaving the user on black.
+    /// </para>
+    ///
+    /// <para>
+    /// Gated on the storyboard having LOADED: its children are built asynchronously, so before that
+    /// there are legitimately no <see cref="Video"/> drawables yet and this would otherwise report a
+    /// missing video for every set for a frame or two.
+    /// </para>
+    /// </summary>
+    public bool VideoMissing => HasVideo && drawableStoryboard?.IsLoaded == true && !this.ChildrenOfType<Video>().Any();
+
+    /// <summary>Whether the declared video is actually going to put pixels on screen.</summary>
+    public bool VideoPlayable => HasVideo && !VideoFaulted && !VideoMissing;
+
+    /// <summary>
     /// Whether our own flat background sprite should hide beneath this layer: when the storyboard
     /// explicitly draws the beatmap background as one of its own sprites
-    /// (<see cref="Storyboard.ReplacesBackground"/>), or when a (working) video plays fullscreen
-    /// behind it — matching osu!'s behaviour. Plain sprite storyboards leave the background
+    /// (<see cref="Storyboard.ReplacesBackground"/>), or when a video that can actually play covers
+    /// it fullscreen — matching osu!'s behaviour. Plain sprite storyboards leave the background
     /// visible underneath, as mappers intend.
     /// </summary>
-    public bool ShouldHideBackground => storyboard.ReplacesBackground || (HasVideo && !VideoFaulted);
+    public bool ShouldHideBackground => storyboard.ReplacesBackground || VideoPlayable;
 
     /// <summary>Test hook: frames the storyboard video has actually rendered in sync, or null with no video.</summary>
     internal int? VideoFramesProcessed => HasVideo ? this.ChildrenOfType<Video>().FirstOrDefault()?.FramesProcessed : null;
@@ -213,7 +238,16 @@ public partial class LazerStoryboardLayer : CompositeDrawable, IBeatSyncProvider
     /// </summary>
     internal class BeatmapFolderResourceStore : IResourceStore<byte[]>
     {
-        private static readonly string[] guess_extensions = { ".png", ".jpg", ".jpeg" };
+        private static readonly string[] image_extensions = { ".png", ".jpg", ".jpeg" };
+
+        /// <summary>
+        /// Video containers a beatmap may reference. osu!'s submission system re-encodes uploaded
+        /// videos — a map that shipped an .avi is served as .mp4 — but the .osu keeps referencing the
+        /// ORIGINAL name, so the reference and the file that arrives routinely disagree by extension.
+        /// (Set 683417 is one: its [Events] says "…MV.avi" and the .osz contains "…MV.mp4".)
+        /// </summary>
+        private static readonly string[] video_extensions =
+            { ".mp4", ".avi", ".flv", ".mov", ".mpg", ".mpeg", ".wmv", ".m4v", ".mkv", ".webm" };
 
         private readonly string directory;
         private readonly Dictionary<string, string> files = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -240,9 +274,35 @@ public partial class LazerStoryboardLayer : CompositeDrawable, IBeatSyncProvider
 
             if (!Path.HasExtension(key))
             {
-                foreach (string ext in guess_extensions)
+                foreach (string ext in image_extensions)
                 {
                     if (files.TryGetValue(key + ext, out path))
+                        return path;
+                }
+
+                return null;
+            }
+
+            // The reference HAS an extension but no such file arrived. Try the same base name under
+            // the other extensions of the same KIND — which is how a video referenced as .avi finds
+            // the .mp4 osu! actually served (see video_extensions). Deliberately kind-scoped: a
+            // missing sprite must never resolve to a video, and vice versa, so a genuinely absent
+            // file still reads as absent rather than silently becoming the wrong asset.
+            string extension = Path.GetExtension(key);
+            string[]? family = null;
+
+            if (video_extensions.Contains(extension, StringComparer.OrdinalIgnoreCase))
+                family = video_extensions;
+            else if (image_extensions.Contains(extension, StringComparer.OrdinalIgnoreCase))
+                family = image_extensions;
+
+            if (family != null)
+            {
+                string withoutExtension = key.Substring(0, key.Length - extension.Length);
+
+                foreach (string ext in family)
+                {
+                    if (files.TryGetValue(withoutExtension + ext, out path))
                         return path;
                 }
             }

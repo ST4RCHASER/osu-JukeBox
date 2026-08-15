@@ -159,10 +159,11 @@ public partial class BeatmapVisuals : CompositeDrawable
     internal int? VideoFramesProcessed => storyboardLayer.VideoFramesProcessed;
 
     /// <summary>
-    /// Test-only: whether a WORKING video is present (a storyboard Video event whose decoder
-    /// hasn't faulted). Faulted videos render nothing and stop counting for background auto-hide.
+    /// Test-only: whether a WORKING video is present — a storyboard Video event whose file actually
+    /// resolved and whose decoder hasn't faulted. A video that renders nothing (missing file or
+    /// faulted decoder) stops counting for background auto-hide, or the result is a black screen.
     /// </summary>
-    internal bool HasVideoLayer => storyboardLayer.HasVideo && !storyboardLayer.VideoFaulted;
+    internal bool HasVideoLayer => storyboardLayer.VideoPlayable;
 
     /// <summary>Test-only: the lazer storyboard layer.</summary>
     internal LazerStoryboardLayer StoryboardLayer => storyboardLayer;
