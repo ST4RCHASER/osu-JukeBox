@@ -109,9 +109,9 @@ public partial class MainScreen : Screen
     /// A bound COPY of <see cref="Jukebox.LastError"/> rather than a subscription straight onto
     /// the jukebox's own bindable. The jukebox long outlives any one screen, so a direct
     /// subscription keeps a dead screen's <see cref="showToast"/> callback alive on it — and that
-    /// callback does <c>AddInternal</c>, which then mutates a screen's children while the async
-    /// disposal queue is walking them on another thread. A bindable FIELD is unbound
-    /// automatically when this drawable is disposed, so the callback can't outlive the screen.
+    /// callback reaches into the screen's own drawable tree (<see cref="toastOverlay"/>), mutating
+    /// it while the async disposal queue is walking it on another thread. A bindable FIELD is
+    /// unbound automatically when this drawable is disposed, so the callback can't outlive the screen.
     /// </summary>
     private readonly Bindable<string?> lastError = new Bindable<string?>();
 
@@ -136,6 +136,7 @@ public partial class MainScreen : Screen
 
     private Container visualsHost = null!;
     private Container playerBox = null!;
+    private ToastOverlay toastOverlay = null!;
     private Container sceneContainer = null!;
     private FillFlowContainer detachedPlaceholder = null!;
     private ScreenStack visualsStack = null!;
@@ -192,6 +193,12 @@ public partial class MainScreen : Screen
     /// own bounds, however it tries to overflow internally) without depending on layout internals.
     /// </summary>
     internal Container PlayerBox => playerBox;
+
+    /// <summary>
+    /// Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the toast stack, to assert
+    /// where its toasts land relative to the player area and the side columns.
+    /// </summary>
+    internal ToastOverlay Toasts => toastOverlay;
 
     /// <summary>
     /// Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the visuals stack, to
@@ -326,6 +333,13 @@ public partial class MainScreen : Screen
                                 },
                             },
                         },
+                        // Toasts live INSIDE the player box, above the visuals — that single
+                        // choice is what keeps them permanently clear of the side columns and
+                        // their controls in the three-column layout (the box IS the centre cell),
+                        // while letting them ride the box out to full-bleed in focus mode for
+                        // free, with no layout wiring of their own. They are inset far enough
+                        // (Theme.PanelPadding) that the box's masking never reaches their shadow.
+                        toastOverlay = new ToastOverlay(),
                     },
                 },
             },
@@ -509,8 +523,8 @@ public partial class MainScreen : Screen
     /// <summary>
     /// <see cref="Jukebox.Enqueued"/> is a plain event on an object that outlives any one screen,
     /// so unlike a bindable field (see <see cref="lastError"/>) nothing detaches it automatically
-    /// — and a dead screen's handler still reaching <see cref="showToast"/> means <c>AddInternal</c>
-    /// on a screen the async disposal queue is already walking.
+    /// — and a dead screen's handler still reaching <see cref="showToast"/> means pushing into a
+    /// drawable tree the async disposal queue is already walking.
     /// </summary>
     protected override void Dispose(bool isDisposing)
     {
@@ -789,29 +803,13 @@ public partial class MainScreen : Screen
         return null;
     }
 
-    /// <summary><paramref name="colour"/> defaults to <see cref="Theme.Error"/> so failures stay
-    /// unmistakably red; informational toasts (the enqueue notification) pass the accent instead.</summary>
-    private void showToast(string message, Color4? colour = null)
-    {
-        var text = new SpriteText
-        {
-            Anchor = Anchor.TopCentre,
-            Origin = Anchor.TopCentre,
-            Y = 16,
-            Font = FontUsage.Default.With(size: 20),
-            Colour = colour ?? Theme.Error,
-            Text = message,
-            Alpha = 0,
-            Scale = new Vector2(Theme.PopScale),
-        };
-
-        AddInternal(text);
-
-        // Two parallel sequences (fade, scale) rather than one chain — both need to pop in
-        // together, sit for the same 4s dwell, then pop back out together before expiring.
-        text.FadeIn(Theme.DurationNormal, Theme.EaseEnter).Delay(4000).FadeOut(Theme.DurationSlow, Theme.EaseExit).Expire();
-        text.ScaleTo(1f, Theme.DurationNormal, Theme.EaseEnter).Delay(4000).ScaleTo(Theme.PopScale, Theme.DurationSlow, Theme.EaseExit);
-    }
+    /// <summary>
+    /// Hands a message to the bottom-right toast stack (<see cref="ToastOverlay"/>), which owns the
+    /// surface, the stacking and the animation. <paramref name="colour"/> defaults to
+    /// <see cref="Theme.Error"/> so failures stay unmistakably red; informational toasts (the
+    /// enqueue notification) pass the accent instead.
+    /// </summary>
+    private void showToast(string message, Color4? colour = null) => toastOverlay.Push(message, colour);
 
     /// <summary>
     /// One tab button in the right column's Playback/Settings strip — a rounded, flat button that
