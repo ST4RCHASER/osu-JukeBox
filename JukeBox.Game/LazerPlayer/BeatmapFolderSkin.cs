@@ -38,6 +38,24 @@ internal class BeatmapFolderSkin : LegacySkin
     }
 
     /// <summary>
+    /// Mirrors <c>LegacyBeatmapSkin</c>'s own opt-out. A beatmap folder is parsed as skin
+    /// configuration from its .osu file (see the constructor), and a .osu never carries a
+    /// <c>[Mania]</c> section — but <see cref="LegacySkin"/> does not DECLINE a mania lookup it has
+    /// no section for. Asked about a key count it doesn't know, it manufactures a default
+    /// configuration and answers from it, authoritatively.
+    ///
+    /// <para>
+    /// This skin sits at higher priority than the user's own (see LazerChartLayer's chain), so
+    /// without this the beatmap answered every mania geometry lookup with lazer's defaults and the
+    /// user's skin was never asked: a 4K stage rendered at the default 48-unit column width instead
+    /// of the skin's 102.4, roughly a third of its intended width. IMAGE lookups fell through
+    /// (a default configuration has no image entries), which is why the result was a default-sized
+    /// stage wearing the user skin's notes — the notes then far wider than the columns holding them.
+    /// </para>
+    /// </summary>
+    protected override bool AllowManiaConfigLookups => false;
+
+    /// <summary>
     /// Mirrors <c>LegacyBeatmapSkin.GetConfig</c>'s exact override for
     /// <see cref="SkinConfiguration.LegacySetting.Version"/>: always returns null, "ignoring
     /// beatmap-level versioning completely". Without this, the .osu-file-as-skin-config parse this
