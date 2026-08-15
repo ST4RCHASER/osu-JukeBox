@@ -533,6 +533,83 @@ namespace JukeBox.Game.Tests.Visual
             });
         }
 
+        /// <summary>
+        /// Changing "Convert to" has to REBUILD the chart layer, not just sit in the service: the
+        /// conversion decides which ruleset the beatmap is built for, which is settled once per
+        /// layer. Same rebuild-on-revision mechanism the mods and skin changes already use.
+        /// </summary>
+        [Test]
+        public void ChangingTheConversionTargetRebuildsTheChartLayerAsThatRuleset()
+        {
+            BeatmapVisuals visuals = null!;
+            LazerChartLayer firstBuild = null!;
+
+            AddStep("enable chart, no conversion", () =>
+            {
+                config.SetValue(JukeBoxSetting.RenderChart, true);
+                config.SetValue(JukeBoxSetting.ChartMods, string.Empty);
+                config.SetValue(JukeBoxSetting.ConvertToRuleset, ChartConversionTarget.Off);
+            });
+
+            AddStep("create visuals with an osu! difficulty", () =>
+            {
+                string osuFile = Path.Combine(tmp, "convert [x].osu");
+                File.WriteAllText(osuFile, """
+                    osu file format v14
+
+                    [General]
+                    AudioFilename: audio.mp3
+                    Mode: 0
+
+                    [Difficulty]
+                    HPDrainRate:5
+                    CircleSize:4
+                    OverallDifficulty:5
+                    ApproachRate:5
+                    SliderMultiplier:1.4
+                    SliderTickRate:1
+
+                    [TimingPoints]
+                    0,500,4,1,0,100,1,0
+
+                    [HitObjects]
+                    64,192,1000,1,0
+                    192,192,1500,1,0
+                    """);
+
+                var set = new CachedBeatmapSet
+                {
+                    SetId = 12,
+                    Directory = tmp,
+                    BackgroundFile = fixtureSetA.BackgroundFile,
+                    OsuFiles = { osuFile },
+                    PreferredOsuFile = osuFile,
+                };
+
+                Add(visuals = new BeatmapVisuals(set, playbackClock) { RelativeSizeAxes = Axes.Both });
+            });
+
+            AddUntilStep("chart loaded", () => visuals.IsLoaded && visuals.HasChartLayer && visuals.ChartRenderer?.DrawableRuleset != null);
+            AddAssert("built as osu!", () => visuals.ChartRenderer!.Ruleset?.GetType() == typeof(osu.Game.Rulesets.Osu.OsuRuleset));
+            AddStep("remember the layer instance", () => firstBuild = visuals.ChartRenderer!);
+
+            AddStep("convert to taiko", () => config.SetValue(JukeBoxSetting.ConvertToRuleset, ChartConversionTarget.Taiko));
+
+            AddUntilStep("the chart was rebuilt", () => visuals.ChartRenderer != null
+                                                       && !ReferenceEquals(visuals.ChartRenderer, firstBuild)
+                                                       && visuals.ChartRenderer.DrawableRuleset != null);
+
+            AddAssert("and the rebuild is a taiko chart",
+                () => visuals.ChartRenderer!.Ruleset?.GetType() == typeof(osu.Game.Rulesets.Taiko.TaikoRuleset));
+
+            AddStep("restore settings", () =>
+            {
+                config.SetValue(JukeBoxSetting.ConvertToRuleset, ChartConversionTarget.Off);
+                config.SetValue(JukeBoxSetting.RenderChart, false);
+                Remove(visuals, true);
+            });
+        }
+
         // clip into a hard, VISIBLE seam exactly at the scene edge, clipping fruits mid-sprite as
         // they entered from the top, and left a large dead gap below the catcher. See
         // catch_reserved_height's remarks in BeatmapVisuals for the corrected approach: catch is
