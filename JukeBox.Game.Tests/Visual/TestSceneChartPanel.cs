@@ -195,30 +195,56 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("restore default 8", () => panel.ManiaScrollSpeedSlider.Current.Value = 8);
         }
 
+        /// <summary>
+        /// The moved rows are not a section of their own any more (user request): each one is
+        /// parented INSIDE the element group for the ruleset it belongs to, so the tab has exactly
+        /// three sections. Asserting parentage rather than mere presence is the point — the rows
+        /// were already "in the tab" when they had their own section.
+        /// </summary>
         [Test]
-        public void EveryMovedRulesetRowIsInTheChartTab()
+        public void EveryMovedRulesetRowSitsInsideItsOwnRulesetsGroup()
         {
             AddUntilStep("ruleset rows bound", () => panel.ManiaScrollSpeedSlider.Current.Value >= 1);
 
-            AddAssert("all of Rulesets and Analysis came across", () =>
-            {
-                var labels = panel.ChildrenOfType<SettingsItem<bool>>().Select(i => i.LabelText.ToString())
-                                  .Concat(panel.ChildrenOfType<SettingsItem<double>>().Select(i => i.LabelText.ToString()))
-                                  .Concat(panel.ChildrenOfType<SettingsItem<int>>().Select(i => i.LabelText.ToString()))
-                                  .Concat(panel.ChildrenOfType<SettingsItem<PlayfieldBorderStyle>>().Select(i => i.LabelText.ToString()))
-                                  .Concat(panel.ChildrenOfType<SettingsItem<ManiaScrollingDirection>>().Select(i => i.LabelText.ToString()))
-                                  .ToList();
+            AddAssert("the tab has exactly three sections, and no Rulesets one",
+                () => panel.ChildrenOfType<LazerSection>().Select(s => s.Header.ToString())
+                           .SequenceEqual(new[] { "Chart", "Mods", "Playfield elements" }));
 
-                return new[]
-                {
-                    "Snaking in sliders", "Snaking out sliders", "Cursor trail", "Cursor ripples", "Playfield border style",
-                    "Scrolling direction", "Scroll speed", "Timing-based note colouring",
-                    "Show click markers", "Show frame markers", "Show cursor path", "Hide gameplay cursor", "Display length",
-                }.All(labels.Contains)
-                // "Hit animations" appears twice — once for osu!, once for osu!taiko.
-                && labels.Count(l => l == "Hit animations") == 2;
+            AddAssert("osu!'s rows are in the osu! group", () => groupHas(0,
+                "Snaking in sliders", "Snaking out sliders", "Hit animations", "Cursor trail", "Cursor ripples", "Playfield border style"));
+
+            AddAssert("its replay-analysis rows too", () => groupHas(0,
+                "Show click markers", "Show frame markers", "Show cursor path", "Hide gameplay cursor", "Display length"));
+
+            AddAssert("taiko's row is in the taiko group", () => groupHas(1, "Hit animations"));
+
+            AddAssert("mania's rows are in the mania group", () => groupHas(3,
+                "Scrolling direction", "Scroll speed", "Timing-based note colouring"));
+
+            // Parentage, not just presence: mania's scroll speed must not be sitting in osu!'s group.
+            AddAssert("and no group holds another ruleset's rows",
+                () => !groupHas(0, "Scroll speed") && !groupHas(3, "Snaking in sliders") && !groupHas(1, "Scroll speed"));
+
+            AddAssert("each group still leads with its element toggles", () =>
+            {
+                var osuGroup = labelsIn(panel.ElementGroup(0));
+                return osuGroup.IndexOf("Cursor") < osuGroup.IndexOf("Snaking in sliders");
             });
         }
+
+        private bool groupHas(int rulesetId, params string[] labels)
+        {
+            var present = labelsIn(panel.ElementGroup(rulesetId));
+            return labels.All(present.Contains);
+        }
+
+        private static List<string> labelsIn(Drawable group)
+            => group.ChildrenOfType<SettingsItem<bool>>().Select(i => i.LabelText.ToString())
+                    .Concat(group.ChildrenOfType<SettingsItem<double>>().Select(i => i.LabelText.ToString()))
+                    .Concat(group.ChildrenOfType<SettingsItem<int>>().Select(i => i.LabelText.ToString()))
+                    .Concat(group.ChildrenOfType<SettingsItem<PlayfieldBorderStyle>>().Select(i => i.LabelText.ToString()))
+                    .Concat(group.ChildrenOfType<SettingsItem<ManiaScrollingDirection>>().Select(i => i.LabelText.ToString()))
+                    .ToList();
 
         private ManiaRulesetConfigManager maniaConfig()
             => (ManiaRulesetConfigManager)rulesetConfigs.GetConfigFor(new ManiaRuleset())!;
