@@ -291,6 +291,108 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("remove visuals", () => Remove(visuals, true));
         }
 
+        // The reported bug (set 683417): the .osu's [Events] references "…MV.avi" while the .osz
+        // ships "…MV.mp4" — osu!'s re-encode keeps the ORIGINAL name in the map. Lazer's
+        // DrawableStoryboardVideo asks the store for the referenced path and, on a null stream,
+        // adds no child at all — so nothing loads AND nothing faults, VideoFaulted stayed false,
+        // the background was hidden for a video that could never draw, and the result was black.
+        //
+        // The store now resolves across that mismatch, so the real outcome is that the video PLAYS.
+        [Test]
+        public void AVideoReferencedByTheWrongExtensionStillPlays()
+        {
+            BeatmapVisuals visuals = null!;
+
+            AddStep("create visuals whose video is shipped as .mp4 but referenced as .avi", () =>
+            {
+                // A real, decodable clip under the name the set actually ships.
+                File.Copy(Path.Combine(TestContext.CurrentContext.TestDirectory, "Fixtures", "sync-test-video.mp4"),
+                    Path.Combine(tmp, "reencoded.mp4"), true);
+
+                string osuFile = Path.Combine(tmp, "extmismatch [x].osu");
+                File.WriteAllText(osuFile, """
+                    osu file format v14
+
+                    [General]
+                    AudioFilename: audio.mp3
+                    Mode: 0
+
+                    [Events]
+                    0,0,"bg.png",0,0
+                    Video,0,"reencoded.avi"
+                    """);
+
+                var set = new CachedBeatmapSet
+                {
+                    SetId = 31,
+                    Directory = tmp,
+                    BackgroundFile = fixtureSetA.BackgroundFile,
+                    OsuFiles = { osuFile },
+                    PreferredOsuFile = osuFile,
+                };
+
+                Add(visuals = new BeatmapVisuals(set, playbackClock) { RelativeSizeAxes = Axes.Both });
+            });
+
+            AddUntilStep("visuals loaded", () => visuals.IsLoaded);
+            AddAssert("the storyboard carries the video event", () => visuals.StoryboardLayer.HasVideo);
+
+            AddUntilStep("the video resolved despite the extension mismatch", () => visuals.HasVideoLayer);
+            AddAssert("so it is not reported missing", () => !visuals.StoryboardLayer.VideoMissing);
+
+            // And with a video that genuinely plays, the background hides as it always did.
+            AddUntilStep("background hidden behind the playing video", () => !visuals.BackgroundVisible);
+
+            AddStep("remove visuals", () => Remove(visuals, true));
+        }
+
+        // The backstop for whatever the resolution fix above cannot rescue — a video that is simply
+        // not in the folder under any extension. It must never leave a black screen: no Video
+        // drawable is created at all in that case (so it never "faults"), which is exactly the hole
+        // that made 683417 black.
+        [Test]
+        public void AnAbsentVideoFileLeavesTheBackgroundVisibleRatherThanBlack()
+        {
+            BeatmapVisuals visuals = null!;
+
+            AddStep("create visuals whose video file does not exist", () =>
+            {
+                string osuFile = Path.Combine(tmp, "novideofile [x].osu");
+                File.WriteAllText(osuFile, """
+                    osu file format v14
+
+                    [General]
+                    AudioFilename: audio.mp3
+                    Mode: 0
+
+                    [Events]
+                    0,0,"bg.png",0,0
+                    Video,0,"nothing-here.avi"
+                    """);
+
+                var set = new CachedBeatmapSet
+                {
+                    SetId = 32,
+                    Directory = tmp,
+                    BackgroundFile = fixtureSetA.BackgroundFile,
+                    OsuFiles = { osuFile },
+                    PreferredOsuFile = osuFile,
+                };
+
+                Add(visuals = new BeatmapVisuals(set, playbackClock) { RelativeSizeAxes = Axes.Both });
+            });
+
+            AddUntilStep("visuals loaded", () => visuals.IsLoaded);
+            AddAssert("the storyboard still carries the video event", () => visuals.StoryboardLayer.HasVideo);
+
+            AddUntilStep("the missing file is recognised as such", () => visuals.StoryboardLayer.VideoMissing);
+            AddAssert("so it does not count as a playable video", () => !visuals.HasVideoLayer);
+            AddAssert("and the background is not hidden for it", () => !visuals.StoryboardLayer.ShouldHideBackground);
+            AddUntilStep("the user sees the background, not black", () => visuals.BackgroundVisible);
+
+            AddStep("remove visuals", () => Remove(visuals, true));
+        }
+
         // Regression test for the crash-on-malformed-storyboard bug, exercised through the full
         // BeatmapVisuals stack (not just StoryboardLayer directly — see TestSceneStoryboardLayer
         // for the narrower version): a garbage .osb downloaded by Radio must not prevent the rest
