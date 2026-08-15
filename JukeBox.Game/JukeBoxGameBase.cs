@@ -147,6 +147,8 @@ namespace JukeBox.Game
         private OsuConfigManager lazerConfig = null!;
         private LazerRulesetConfigCache lazerRulesetConfigs = null!;
         private SkinSelection skinSelection = null!;
+        private ChartModSelection chartMods = null!;
+        private PlayfieldElementVisibility playfieldElements = null!;
         private osu.Game.Skinning.SkinManager skinManager = null!;
         private DroppedFileImporter fileImporter = null!;
 
@@ -335,6 +337,15 @@ namespace JukeBox.Game
 
             Add(skinSelection = new SkinSelection());
             dependencies.Cache(skinSelection);
+
+            // Chart-tab state: the mod selection applied to the autoplay chart (and, for the rate
+            // mods, to playback itself) and the per-element playfield visibility. Both are added
+            // AFTER the playback controller and jukebox above, which they resolve.
+            Add(chartMods = new ChartModSelection());
+            dependencies.Cache(chartMods);
+
+            Add(playfieldElements = new PlayfieldElementVisibility());
+            dependencies.Cache(playfieldElements);
 
             // Drag-and-drop importer. Wired here (rather than in JukeBoxGame) so the test browser
             // and visual test scenes get it too — it resolves host.Window itself and simply has no

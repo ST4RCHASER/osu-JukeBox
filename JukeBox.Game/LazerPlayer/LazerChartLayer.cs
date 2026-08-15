@@ -162,6 +162,16 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
     [Resolved(canBeNull: true)]
     private osu.Game.Configuration.OsuConfigManager? lazerConfig { get; set; }
 
+    [Resolved(canBeNull: true)]
+    private ChartModSelection? chartMods { get; set; }
+
+    [Resolved(canBeNull: true)]
+    private PlayfieldElementVisibility? elementVisibility { get; set; }
+
+    /// <summary>The playfield-element filter wrapping the ruleset, when one is in the chain (test
+    /// hook; null in bare test scenes with no visibility service cached).</summary>
+    internal PlayfieldElementFilter? ElementFilter { get; private set; }
+
     [BackgroundDependencyLoader]
     private void load(GameHost host, AudioManager audio, IStorageResourceProvider resourceProvider)
     {
@@ -176,7 +186,20 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
         {
             autoplay = ruleset.GetAutoplayMod()
                        ?? throw new InvalidOperationException($"{ruleset.ShortName} provides no autoplay mod");
-            mods = new Mod[] { autoplay };
+
+            // The user's Chart-tab mods ride ALONGSIDE autoplay — the mod list is what
+            // GetPlayableBeatmap converts against, so EZ/HR's altered difficulty and HR's mirrored
+            // playfield are baked into what autoplay then plays. Fresh instances every build (see
+            // ChartModSelection.CreateFor); a replay's own mods win outright, since a replay is a
+            // record of a play that already happened under mods of its own.
+            var selection = chartMods?.CreateFor(ruleset) ?? Array.Empty<Mod>();
+
+            mods = selection.Count > 0
+                ? new Mod[] { autoplay }.Concat(selection).ToArray()
+                : new Mod[] { autoplay };
+
+            if (selection.Count > 0)
+                osu.Framework.Logging.Logger.Log($"[LazerChartLayer] chart mods applied: {string.Join(", ", selection.Select(m => m.Acronym))}");
         }
 
         playableBeatmap = working.GetPlayableBeatmap(ruleset.RulesetInfo, mods);
@@ -249,6 +272,20 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
             RelativeSizeAxes = Axes.Both,
         };
 
+        // The per-element visibility filter is the INNERMOST link of the chain — nearest ancestor
+        // wins in lazer's skin lookup, so this is the only position from which it can answer a
+        // lookup before the real skins do. See PlayfieldElementFilter for why hiding happens here
+        // rather than by walking the ruleset's (pooled) drawables.
+        Drawable rulesetHost = drawableRuleset;
+
+        if (elementVisibility != null)
+        {
+            rulesetHost = ElementFilter = new PlayfieldElementFilter(elementVisibility)
+            {
+                Child = drawableRuleset,
+            };
+        }
+
         // The beatmap skin gets its own providing layer nested INSIDE the user-skin provider
         // (highest lookup priority, parent fallback reaching the user skins) so the three
         // "Beatmap ..." settings gate it live — mirroring lazer's BeatmapSkinProvidingContainer,
@@ -280,7 +317,7 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
             var gated = new BeatmapSkinGate(gateSources)
             {
                 RelativeSizeAxes = Axes.Both,
-                Child = drawableRuleset,
+                Child = rulesetHost,
             };
 
             if (lazerConfig != null)
@@ -293,7 +330,7 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
             skinProvider.Child = gated;
         }
         else
-            skinProvider.Child = drawableRuleset;
+            skinProvider.Child = rulesetHost;
 
         InternalChild = skinProvider;
     }

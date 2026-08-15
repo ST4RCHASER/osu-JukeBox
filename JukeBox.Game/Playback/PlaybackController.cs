@@ -79,6 +79,26 @@ public partial class PlaybackController : Component
     /// <summary>The pitch-shifting half of the replay's rate — see <see cref="ReplayTempo"/>.</summary>
     public readonly BindableDouble ReplayFrequency = new(1) { MinValue = 0.1, MaxValue = 3 };
 
+    /// <summary>
+    /// Speed forced by the rate-changing mods the user picked in the Chart tab (see
+    /// <see cref="LazerPlayer.ChartModSelection"/>), split into pitch-preserving tempo (DT/HT) and
+    /// pitch-shifting frequency (NC/DC) for exactly the reasons <see cref="ReplayTempo"/> is.
+    ///
+    /// <para>
+    /// Deliberately SEPARATE bindables from the replay pair rather than a shared "forced rate":
+    /// <see cref="Jukebox"/> rewrites the replay pair on every track it starts (so a previous
+    /// replay's rate can never leak into the next song), which would wipe a user's own DT the
+    /// moment the song changed. Being separate adjustments, all three multiply — the user's speed
+    /// slider, the replay's rate, and the mod selection's rate coexist without any of them being
+    /// clobbered. In practice the last two are mutually exclusive: while a replay drives playback
+    /// the mod selection is inert and holds both of these at 1.
+    /// </para>
+    /// </summary>
+    public readonly BindableDouble ChartModTempo = new(1) { MinValue = 0.1, MaxValue = 3 };
+
+    /// <summary>The pitch-shifting half of the chart mods' rate — see <see cref="ChartModTempo"/>.</summary>
+    public readonly BindableDouble ChartModFrequency = new(1) { MinValue = 0.1, MaxValue = 3 };
+
     // Stable across the controller's lifetime: consumers hold onto this reference while the
     // underlying track (the actual clock source) is swapped out on every PlayAsync.
     private readonly DecouplingFramedClock decoupledClock = new() { AllowDecoupling = true };
@@ -180,6 +200,8 @@ public partial class PlaybackController : Component
             track.AddAdjustment(AdjustableProperty.Tempo, PlaybackRate);
             track.AddAdjustment(AdjustableProperty.Tempo, ReplayTempo);
             track.AddAdjustment(AdjustableProperty.Frequency, ReplayFrequency);
+            track.AddAdjustment(AdjustableProperty.Tempo, ChartModTempo);
+            track.AddAdjustment(AdjustableProperty.Frequency, ChartModFrequency);
             track.Completed += () => Schedule(() => TrackCompleted?.Invoke());
 
             decoupledClock.ChangeSource(track);
@@ -322,6 +344,8 @@ public partial class PlaybackController : Component
             track.AddAdjustment(AdjustableProperty.Tempo, PlaybackRate);
             track.AddAdjustment(AdjustableProperty.Tempo, ReplayTempo);
             track.AddAdjustment(AdjustableProperty.Frequency, ReplayFrequency);
+            track.AddAdjustment(AdjustableProperty.Tempo, ChartModTempo);
+            track.AddAdjustment(AdjustableProperty.Frequency, ChartModFrequency);
             track.Completed += () => Schedule(() => TrackCompleted?.Invoke());
 
             decoupledClock.ChangeSource(track);
