@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using JukeBox.Game.Beatmaps;
 using JukeBox.Game.Configuration;
+using JukeBox.Game.LazerPlayer;
 using JukeBox.Game.Playback;
 using JukeBox.Game.Screens;
 using NUnit.Framework;
@@ -457,6 +458,81 @@ namespace JukeBox.Game.Tests.Visual
         // which required forcibly shrinking catch's playfield (dividing by 968 = lazer's
         // base_game_height + its own internal safety margin) to fit flush with zero space to
         // spare — that flush fit turned catch's own internal (normally harmless/oversized) safety
+        /// <summary>
+        /// A Chart-tab mod change has to REBUILD the chart layer, not just sit in the selection:
+        /// mods change the beatmap conversion and the autoplay replay walked over it, both of which
+        /// are built once per layer. Same rebuild-on-revision mechanism a skin change already uses.
+        /// </summary>
+        [Test]
+        public void ChangingChartModsRebuildsTheChartLayerWithThem()
+        {
+            BeatmapVisuals visuals = null!;
+            LazerChartLayer firstBuild = null!;
+
+            AddStep("enable chart, no mods", () =>
+            {
+                config.SetValue(JukeBoxSetting.RenderChart, true);
+                config.SetValue(JukeBoxSetting.ChartMods, string.Empty);
+            });
+
+            AddStep("create visuals with an osu! difficulty", () =>
+            {
+                string osuFile = Path.Combine(tmp, "mods [x].osu");
+                File.WriteAllText(osuFile, """
+                    osu file format v14
+
+                    [General]
+                    AudioFilename: audio.mp3
+                    Mode: 0
+
+                    [Difficulty]
+                    HPDrainRate:5
+                    CircleSize:4
+                    OverallDifficulty:5
+                    ApproachRate:5
+                    SliderMultiplier:1.4
+                    SliderTickRate:1
+
+                    [TimingPoints]
+                    0,500,4,1,0,100,1,0
+
+                    [HitObjects]
+                    64,192,1000,1,0
+                    192,192,1500,1,0
+                    """);
+
+                var set = new CachedBeatmapSet
+                {
+                    SetId = 11,
+                    Directory = tmp,
+                    BackgroundFile = fixtureSetA.BackgroundFile,
+                    OsuFiles = { osuFile },
+                    PreferredOsuFile = osuFile,
+                };
+
+                Add(visuals = new BeatmapVisuals(set, playbackClock) { RelativeSizeAxes = Axes.Both });
+            });
+
+            AddUntilStep("chart loaded", () => visuals.IsLoaded && visuals.HasChartLayer && visuals.ChartRenderer?.DrawableRuleset != null);
+            AddAssert("built unmodded", () => visuals.ChartRenderer!.DrawableRuleset!.Mods.All(m => m.Acronym != "HR"));
+            AddStep("remember the layer instance", () => firstBuild = visuals.ChartRenderer!);
+
+            AddStep("select HR in the Chart tab", () => config.SetValue(JukeBoxSetting.ChartMods, "HR"));
+
+            AddUntilStep("the chart was rebuilt", () => visuals.ChartRenderer != null
+                                                       && !ReferenceEquals(visuals.ChartRenderer, firstBuild)
+                                                       && visuals.ChartRenderer.DrawableRuleset != null);
+
+            AddAssert("and the rebuild carries the mod", () => visuals.ChartRenderer!.DrawableRuleset!.Mods.Any(m => m.Acronym == "HR"));
+
+            AddStep("restore settings", () =>
+            {
+                config.SetValue(JukeBoxSetting.ChartMods, string.Empty);
+                config.SetValue(JukeBoxSetting.RenderChart, false);
+                Remove(visuals, true);
+            });
+        }
+
         // clip into a hard, VISIBLE seam exactly at the scene edge, clipping fruits mid-sprite as
         // they entered from the top, and left a large dead gap below the catcher. See
         // catch_reserved_height's remarks in BeatmapVisuals for the corrected approach: catch is

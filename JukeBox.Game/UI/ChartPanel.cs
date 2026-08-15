@@ -94,7 +94,6 @@ public partial class ChartPanel : CompositeDrawable
     private readonly Dictionary<int, Drawable> elementGroups = new Dictionary<int, Drawable>();
 
     private OsuSpriteText replayModsNote = null!;
-    private Container modRows = null!;
 
     private readonly Bindable<CachedBeatmapSet?> currentSet = new Bindable<CachedBeatmapSet?>();
     private readonly Bindable<string?> selectedOsuFile = new Bindable<string?>();
@@ -118,7 +117,7 @@ public partial class ChartPanel : CompositeDrawable
     internal string ReplayModsNote => replayModsNote.Text.ToString();
 
     /// <summary>Test-only: whether the mod rows are in their locked (replay) presentation.</summary>
-    internal bool ModsLocked => modUi.Values.All(b => b.Disabled) && modRows.Alpha < 1;
+    internal bool ModsLocked => modUi.Values.All(b => b.Disabled) && modCheckboxes.Values.All(c => c.Alpha < 1);
 
     [BackgroundDependencyLoader]
     private void load()
@@ -182,37 +181,31 @@ public partial class ChartPanel : CompositeDrawable
             modCheckboxes[mod] = new SettingsCheckbox { LabelText = $"{mod.Label()} ({mod.Acronym()})" };
         }
 
+        // The rows go straight into the section rather than into a wrapper flow of their own:
+        // lazer's SettingsSection lays its own children out with the row spacing every other
+        // settings row in the app has, and nesting a plain FillFlowContainer inside it swallowed
+        // that — the mod rows came out visibly tighter than the ones above and below them.
+        // Locking therefore dims each row (see updateReplayLock) instead of one wrapper.
+        replayModsNote = new OsuSpriteText
+        {
+            // Alpha 0 (not removed) keeps it out of the flow entirely while no replay plays — a
+            // zero-alpha child isn't IsPresent, so the surrounding flow leaves no gap.
+            Alpha = 0,
+            Colour = Theme.TextTertiary,
+            Font = OsuFont.GetFont(size: 12),
+            Margin = new MarginPadding
+            {
+                Left = SettingsPanel.CONTENT_PADDING.Left,
+                Right = SettingsPanel.CONTENT_PADDING.Right,
+                Bottom = 6,
+            },
+        };
+
         return new LazerSection("Mods", FontAwesome.Solid.SlidersH)
         {
-            Children = new Drawable[]
-            {
-                // Alpha 0 (not removed) keeps it out of the flow entirely while no replay plays —
-                // a zero-alpha child isn't IsPresent, so the surrounding flow leaves no gap.
-                replayModsNote = new OsuSpriteText
-                {
-                    Alpha = 0,
-                    Colour = Theme.TextTertiary,
-                    Font = OsuFont.GetFont(size: 12),
-                    Margin = new MarginPadding
-                    {
-                        Left = SettingsPanel.CONTENT_PADDING.Left,
-                        Right = SettingsPanel.CONTENT_PADDING.Right,
-                        Bottom = 6,
-                    },
-                },
-                modRows = new Container
-                {
-                    RelativeSizeAxes = Axes.X,
-                    AutoSizeAxes = Axes.Y,
-                    Child = new FillFlowContainer
-                    {
-                        RelativeSizeAxes = Axes.X,
-                        AutoSizeAxes = Axes.Y,
-                        Direction = FillDirection.Vertical,
-                        Children = Enum.GetValues<ChartMod>().Select(m => (Drawable)modCheckboxes[m]).ToArray(),
-                    },
-                },
-            },
+            Children = new Drawable[] { replayModsNote }
+                       .Concat(Enum.GetValues<ChartMod>().Select(m => (Drawable)modCheckboxes[m]))
+                       .ToArray(),
         };
     }
 
@@ -326,7 +319,8 @@ public partial class ChartPanel : CompositeDrawable
         foreach (var ui in modUi.Values)
             ui.Disabled = locked;
 
-        modRows.FadeTo(locked ? locked_alpha : 1, Theme.HoverFadeDuration, Easing.OutQuint);
+        foreach (var row in modCheckboxes.Values)
+            row.FadeTo(locked ? locked_alpha : 1, Theme.HoverFadeDuration, Easing.OutQuint);
 
         var acronyms = replayModAcronyms.Value;
 
