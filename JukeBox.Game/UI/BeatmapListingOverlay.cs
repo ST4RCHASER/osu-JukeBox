@@ -46,10 +46,11 @@ namespace JukeBox.Game.UI;
 /// </para>
 ///
 /// <para>
-/// Fetches are shown as real lazer spinners, never as text: a <see cref="LoadingLayer"/> covers
-/// the whole result area while a FRESH search is in flight (its contents are about to be replaced
-/// wholesale) and a footer <see cref="LoadingSpinner"/> appears while a further page is appended
-/// (the cards already on screen stay valid).
+/// Fetches are shown as real lazer <see cref="LoadingSpinner"/>s, never as text, and neither
+/// spinner is ever drawn over a card. A FRESH search takes the list away (its contents are about
+/// to be replaced wholesale) and spins centred in the space it left; a page append keeps every
+/// card on screen and grows the list by one spinner ROW at its end (see
+/// <see cref="createAppendSpinnerRow"/>).
 /// </para>
 /// </summary>
 public partial class BeatmapListingOverlay : FocusedOverlayContainer
@@ -61,6 +62,10 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
 
     /// <summary>Height of the search/"#" button row.</summary>
     private const float button_row_height = 44;
+
+    /// <summary>Height the "load more" row reserves at the end of the results flow while a page
+    /// is being fetched.</summary>
+    private const float append_spinner_row_height = 44;
 
     /// <summary>Share of the button row's width taken by the "#" button — the rest goes to the
     /// search button, giving the ~80/20 split the row is designed around.</summary>
@@ -122,10 +127,27 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
     public event Action? SearchOpenRequested;
 
     private FillFlowContainer<BeatmapCard> cardsFlow = null!;
+
+    /// <summary>The scrolled column: the cards, then the "load more" row (see
+    /// <see cref="createAppendSpinnerRow"/>).</summary>
+    private FillFlowContainer resultsFlow = null!;
+
     private BasicScrollContainer scroll = null!;
     private SpriteText statusText = null!;
-    private LoadingLayer freshLoadingLayer = null!;
+    private Container appendSpinnerRow = null!;
     private LoadingSpinner appendSpinner = null!;
+    private LoadingSpinner freshSpinner = null!;
+
+    /// <summary>Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the scrolled
+    /// column, so a test can assert the "load more" row is really taking space in it rather than
+    /// floating over the cards.</summary>
+    internal FillFlowContainer ResultsFlow => resultsFlow;
+
+    /// <summary>Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the two spinners,
+    /// which are otherwise indistinguishable by type.</summary>
+    internal LoadingSpinner AppendSpinner => appendSpinner;
+
+    internal LoadingSpinner FreshSpinner => freshSpinner;
 
     private int selectedIndex = -1;
 
@@ -176,26 +198,32 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
                                     scroll = new BasicScrollContainer
                                     {
                                         RelativeSizeAxes = Axes.Both,
-                                        Child = cardsFlow = new FillFlowContainer<BeatmapCard>
+                                        Child = resultsFlow = new FillFlowContainer
                                         {
                                             RelativeSizeAxes = Axes.X,
                                             AutoSizeAxes = Axes.Y,
-                                            Direction = FillDirection.Full,
+                                            Direction = FillDirection.Vertical,
+                                            Children = new Drawable[]
+                                            {
+                                                cardsFlow = new FillFlowContainer<BeatmapCard>
+                                                {
+                                                    RelativeSizeAxes = Axes.X,
+                                                    AutoSizeAxes = Axes.Y,
+                                                    Direction = FillDirection.Full,
+                                                },
+                                                appendSpinnerRow = createAppendSpinnerRow(out appendSpinner),
+                                            },
                                         },
                                     },
-                                    // "Load more" is an append: the cards already rendered stay
-                                    // valid, so only a small footer spinner appears rather than
-                                    // anything covering them.
-                                    appendSpinner = new LoadingSpinner
+                                    // A fresh search discards everything below it, so the list is
+                                    // taken away and this sits centred in the space it left —
+                                    // there is nothing for it to cover.
+                                    freshSpinner = new LoadingSpinner
                                     {
-                                        Anchor = Anchor.BottomCentre,
-                                        Origin = Anchor.BottomCentre,
-                                        Margin = new MarginPadding { Bottom = Theme.RowSpacing },
-                                        Size = new Vector2(24),
+                                        Anchor = Anchor.Centre,
+                                        Origin = Anchor.Centre,
+                                        Size = new Vector2(32),
                                     },
-                                    // A fresh search replaces everything below, so the whole
-                                    // result area is covered while it's in flight.
-                                    freshLoadingLayer = new LoadingLayer(dimBackground: true),
                                 },
                             },
                         },
@@ -233,17 +261,48 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
             Show();
     }
 
+    /// <summary>
+    /// The "load more" footer: a real row at the END of the results flow rather than a spinner
+    /// floating over the viewport. A floating one sat wherever the viewport's bottom edge happened
+    /// to be, which — once the user had scrolled — was on top of a card. As a flow child it takes
+    /// its own height instead, so the list simply grows by a row while a page is on its way.
+    /// </summary>
+    private static Container createAppendSpinnerRow(out LoadingSpinner spinner) => new Container
+    {
+        RelativeSizeAxes = Axes.X,
+        Height = append_spinner_row_height,
+        // Not present until it's needed: a FillFlowContainer skips non-present children when
+        // flowing, so this costs no vertical space at all while nothing is loading.
+        Alpha = 0,
+        Child = spinner = new LoadingSpinner
+        {
+            Anchor = Anchor.Centre,
+            Origin = Anchor.Centre,
+            Size = new Vector2(24),
+        },
+    };
+
     private void updateLoadingSpinners()
     {
         bool loading = Engine.IsLoading.Value;
-        bool fresh = Engine.LoadingFresh.Value;
+        bool fresh = loading && Engine.LoadingFresh.Value;
+        bool appending = loading && !Engine.LoadingFresh.Value;
 
-        if (loading && fresh)
-            freshLoadingLayer.Show();
+        // The list itself goes away for a fresh search — its contents are about to be replaced
+        // wholesale, and an empty area is what lets the spinner be centred in it rather than
+        // drawn over stale cards.
+        scroll.Alpha = fresh ? 0 : 1;
+
+        if (fresh)
+            freshSpinner.Show();
         else
-            freshLoadingLayer.Hide();
+            freshSpinner.Hide();
 
-        if (loading && !fresh)
+        // Presence first, then the spinner's own entrance: a drawable inside a non-present parent
+        // doesn't tick, so a fade started before the row is present would never progress.
+        appendSpinnerRow.Alpha = appending ? 1 : 0;
+
+        if (appending)
             appendSpinner.Show();
         else
             appendSpinner.Hide();

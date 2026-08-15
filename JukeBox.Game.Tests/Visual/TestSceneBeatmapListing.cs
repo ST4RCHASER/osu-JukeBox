@@ -16,8 +16,6 @@ using osu.Framework.Graphics.Sprites;
 using osu.Framework.Graphics.UserInterface;
 using osu.Framework.Testing;
 using osuTK.Input;
-using LoadingLayer = osu.Game.Graphics.UserInterface.LoadingLayer;
-using LoadingSpinner = osu.Game.Graphics.UserInterface.LoadingSpinner;
 
 namespace JukeBox.Game.Tests.Visual
 {
@@ -209,10 +207,10 @@ namespace JukeBox.Game.Tests.Visual
             AddUntilStep("overlay hidden (keyboard flow closes it)", () => floating.State.Value == Visibility.Hidden);
         }
 
-        // Fetches are spinners now, never text: a fresh search covers the whole result area, a
-        // page append only puts a small spinner in the footer.
+        // Fetches are spinners now, never text. A fresh search takes the list away rather than
+        // spinning on top of results it is about to throw away.
         [Test]
-        public void FreshSearchShowsTheLoadingLayerUntilResultsArrive()
+        public void FreshSearchTakesTheListAwayAndSpinsInTheEmptySpace()
         {
             var gate = new TaskCompletionSource<bool>();
 
@@ -220,18 +218,24 @@ namespace JukeBox.Game.Tests.Visual
 
             search("a");
 
-            AddUntilStep("loading layer covers the results", () => loadingLayer().State.Value == Visibility.Visible);
-            AddAssert("its spinner is spinning", () => overlay.ChildrenOfType<LoadingSpinner>().Any(s => s.State.Value == Visibility.Visible));
+            AddUntilStep("fresh spinner spinning", () => overlay.FreshSpinner.State.Value == Visibility.Visible);
+            AddAssert("the list is gone, so there is nothing to spin over", () => !scroll().IsPresent);
+            AddAssert("the append row stayed out of it", () => overlay.AppendSpinner.State.Value == Visibility.Hidden);
             AddAssert("no progress TEXT — the spinner is the progress", () => overlay.Engine.Status.Value.Length == 0);
 
             AddStep("release the gate", () => gate.SetResult(true));
 
             AddUntilStep("cards shown", () => overlay.ChildrenOfType<BeatmapCard>().Count() == 3);
-            AddUntilStep("loading layer gone", () => loadingLayer().State.Value == Visibility.Hidden);
+            AddUntilStep("fresh spinner gone", () => overlay.FreshSpinner.State.Value == Visibility.Hidden);
+            AddAssert("list restored", () => scroll().IsPresent);
         }
 
+        // Regression coverage for the reported bug: the "load more" spinner used to be anchored to
+        // the bottom of the VIEWPORT, so once the user had scrolled it sat on top of whichever card
+        // happened to be there. It is a row at the end of the flow now — it takes its own height
+        // and cannot overlap anything.
         [Test]
-        public void LoadMoreShowsAFooterSpinnerRatherThanCoveringTheResults()
+        public void LoadMoreSpinnerTakesItsOwnRowAndNeverOverlapsACard()
         {
             var gate = new TaskCompletionSource<bool>();
 
@@ -245,19 +249,38 @@ namespace JukeBox.Game.Tests.Visual
             search("a");
             AddUntilStep("first page rendered", () => overlay.ChildrenOfType<BeatmapCard>().Count() == 30);
 
+            float cardsHeightBefore = 0;
+            AddStep("record the flow's height with no spinner row", () => cardsHeightBefore = overlay.ResultsFlow.DrawHeight);
+            AddAssert("no spinner row while idle", () => Math.Abs(overlay.ResultsFlow.DrawHeight - cardsFlow().DrawHeight) < 0.5f);
+
             AddStep("scroll to the bottom", () => overlay.ChildrenOfType<BasicScrollContainer>().Single().ScrollToEnd(false));
 
             AddUntilStep("page 1 requested", () => mirror.Requests.Any(r => r.Page == 1));
-            AddAssert("results are NOT covered (append, not replace)", () => loadingLayer().State.Value == Visibility.Hidden);
-            AddAssert("a footer spinner is spinning", () => overlay.ChildrenOfType<LoadingSpinner>().Any(s => s.State.Value == Visibility.Visible));
+            AddUntilStep("append spinner spinning", () => overlay.AppendSpinner.State.Value == Visibility.Visible);
+
+            AddAssert("results are NOT taken away (append, not replace)", () => scroll().IsPresent);
             AddAssert("the first page's cards are still on screen", () => overlay.ChildrenOfType<BeatmapCard>().Count() == 30);
+
+            // The bug, stated directly.
+            AddAssert("the spinner's quad intersects no card's quad", () =>
+            {
+                var spinner = overlay.AppendSpinner.ScreenSpaceDrawQuad.AABBFloat;
+                return overlay.ChildrenOfType<BeatmapCard>().All(c => !c.ScreenSpaceDrawQuad.AABBFloat.IntersectsWith(spinner));
+            });
+            AddAssert("the flow grew by the spinner's row instead", () =>
+                overlay.ResultsFlow.DrawHeight > cardsHeightBefore
+                && Math.Abs(overlay.ResultsFlow.DrawHeight - (cardsFlow().DrawHeight + overlay.AppendSpinner.Parent!.DrawHeight)) < 0.5f);
 
             AddStep("release the gate", () => gate.SetResult(true));
             AddUntilStep("second page appended", () => overlay.ChildrenOfType<BeatmapCard>().Count() >= 60);
-            AddUntilStep("footer spinner gone", () => overlay.ChildrenOfType<LoadingSpinner>().All(s => s.State.Value == Visibility.Hidden));
+            AddUntilStep("append spinner gone", () => overlay.AppendSpinner.State.Value == Visibility.Hidden);
+            AddUntilStep("its row gave the space back", () =>
+                Math.Abs(overlay.ResultsFlow.DrawHeight - cardsFlow().DrawHeight) < 0.5f);
         }
 
-        private LoadingLayer loadingLayer() => overlay.ChildrenOfType<LoadingLayer>().Single();
+        private BasicScrollContainer scroll() => overlay.ChildrenOfType<BasicScrollContainer>().Single();
+
+        private FillFlowContainer<BeatmapCard> cardsFlow() => overlay.ChildrenOfType<FillFlowContainer<BeatmapCard>>().Single();
 
         [Test]
         public void ScrollingToBottomRequestsNextPage()
