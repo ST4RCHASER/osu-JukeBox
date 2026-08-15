@@ -105,8 +105,10 @@ internal static class Theme
     /// switches, card entrances, queue rows, modal pop-in/out).</summary>
     public const double DurationNormal = 250;
 
-    /// <summary>Larger orchestrated transitions — the focus-mode layout transform, toast
-    /// dismissal.</summary>
+    /// <summary>The slow tier, for larger orchestrated transitions. Currently unclaimed: the
+    /// focus-mode layout transform was deliberately dropped to <see cref="DurationFast"/> (the user
+    /// wanted the columns to feel immediate) and the toast dismissal it used to name now uses
+    /// <see cref="DurationFast"/> too, so a message on its way out clears the stack promptly.</summary>
     public const double DurationSlow = 400;
 
     /// <summary>Standard "entering" easing — content decelerating into place.</summary>

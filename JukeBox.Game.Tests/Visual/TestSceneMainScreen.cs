@@ -16,6 +16,7 @@ using NUnit.Framework;
 using osu.Framework.Allocation;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
+using osu.Framework.Graphics.Primitives;
 using osu.Framework.Graphics.Sprites;
 using osu.Framework.Graphics.UserInterface;
 using osu.Framework.Screens;
@@ -886,7 +887,9 @@ namespace JukeBox.Game.Tests.Visual
 
         // Queueing something used to be entirely silent — with the listing overlay covering the
         // queue, a pick could look like it did nothing at all. The toast must also stay visually
-        // distinct from the error toast that shares the same presentation.
+        // distinct from the error toast that shares the same presentation: the two now differ by
+        // their accent (bar + icon) rather than by the message text's own colour, since the text is
+        // white on a surface in both cases.
         [Test]
         public void EnqueueShowsAToastDistinctFromErrorToasts()
         {
@@ -894,15 +897,71 @@ namespace JukeBox.Game.Tests.Visual
                 new BeatmapSetInfo { Id = 4242, Title = "Toasted", Artist = "Artist" }));
 
             AddUntilStep("toast names the set", () => toast("Added to queue: Toasted") != null);
-            AddAssert("toast is not error-coloured", () => toast("Added to queue: Toasted")!.Colour == Theme.Accent);
+            AddAssert("toast is not error-coloured", () => toast("Added to queue: Toasted")!.AccentColour == Theme.Accent);
 
             AddStep("report an error", () => jukebox.LastError.Value = "Something broke");
             AddUntilStep("error toast shown", () => toast("Something broke") != null);
-            AddAssert("error toast stays red", () => toast("Something broke")!.Colour == Theme.Error);
+            AddAssert("error toast stays red", () => toast("Something broke")!.AccentColour == Theme.Error);
         }
 
-        private SpriteText? toast(string message)
-            => screen.ChildrenOfType<SpriteText>().FirstOrDefault(t => t.Text.ToString() == message);
+        // The whole point of hosting the toasts inside the player box rather than at the top level:
+        // in the three-column layout they must never reach across the right column, where every
+        // transport control and the queue live. (Bottom-right anchoring within their host, and their
+        // stacking, is covered exhaustively in TestSceneToasts.)
+        [Test]
+        public void ToastsStayInsideThePlayerAreaClearOfTheSideColumns()
+        {
+            // Pushed straight at the overlay rather than through jukebox.LastError: that bindable is
+            // fixture-scoped and survives between tests, so driving it here would couple a pure
+            // geometry check to whatever the previous test happened to leave in it. The wiring from
+            // the jukebox to the toasts has its own test above.
+            AddStep("push a toast", () => screen.Toasts.Push("Stay in your lane"));
+
+            RectangleF toastBox = default;
+            RectangleF playerBox = default;
+            RectangleF leftColumn = default;
+            RectangleF rightColumn = default;
+
+            int settledFrames = 0;
+
+            // Deliberately measures whichever toast is currently NEWEST rather than the one pushed
+            // above: the fixture's jukebox keeps running its radio retries in the background across
+            // every test, so a burst of its error toasts can push (and, at the cap, evict) this
+            // test's own message while the test is still watching. Any toast makes the point.
+            //
+            // Waits on the animated properties rather than on the transform list, because a toast
+            // enters by sliding in from the right at 0.95 scale and mid-entrance it legitimately
+            // overhangs its host — and then waits for a second settled frame, because a quad read on
+            // the frame a value settles is still built from the previous frame's layout. All four
+            // rectangles are captured together, so they always describe one single frame.
+            AddUntilStep("a toast settles, and is measured against the layout", () =>
+            {
+                var t = screen.Toasts.AllToasts.LastOrDefault();
+
+                if (t is not { Alpha: >= 1, X: 0 } || t.Scale.X < 1)
+                {
+                    settledFrames = 0;
+                    return false;
+                }
+
+                if (++settledFrames < 3)
+                    return false;
+
+                toastBox = t.ScreenSpaceDrawQuad.AABBFloat;
+                playerBox = screen.PlayerBox.ScreenSpaceDrawQuad.AABBFloat;
+                leftColumn = screen.LeftColumn.ScreenSpaceDrawQuad.AABBFloat;
+                rightColumn = screen.RightColumn.ScreenSpaceDrawQuad.AABBFloat;
+                return true;
+            });
+
+            AddAssert("it lands inside the player box", () => playerBox.Contains(toastBox));
+
+            AddAssert("and therefore clear of both columns",
+                () => !toastBox.IntersectsWith(rightColumn) && !toastBox.IntersectsWith(leftColumn));
+        }
+
+        private ToastOverlay.Toast? toast(string message)
+            => screen.Toasts.AllToasts.FirstOrDefault(t => t.Message == message);
 
         // Never exercised (queue stays empty and the mirror returns no candidates, so
         // Jukebox.Start()'s automatic radio round finds nothing and just retries later) — only
