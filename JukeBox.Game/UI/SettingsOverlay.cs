@@ -115,8 +115,6 @@ public partial class SettingsOverlay : FocusedOverlayContainer
 
     // ---- our settings ----
     private SkinSettingsDropdown skinDropdown = null!;
-    private SettingsCheckbox renderChartCheckbox = null!;
-    private SettingsCheckbox playHitSoundsCheckbox = null!;
     private SettingsCheckbox showStoryboardVideoCheckbox = null!;
     private SettingsSlider<double> backgroundDimRow = null!;
     private SettingsSlider<double> backgroundBlurRow = null!;
@@ -163,7 +161,6 @@ public partial class SettingsOverlay : FocusedOverlayContainer
     private Bindable<HardwareVideoDecoder> hardwareVideoDecoderConfig = null!;
 
     // ---- lazer (OsuConfigManager) settings; only built when lazerConfig is present ----
-    private SettingsCheckbox hitLightingCheckbox = null!;
     private SettingsCheckbox beatmapSkinsCheckbox = null!;
     private SettingsCheckbox beatmapColoursCheckbox = null!;
     private SettingsCheckbox beatmapHitsoundsCheckbox = null!;
@@ -231,8 +228,6 @@ public partial class SettingsOverlay : FocusedOverlayContainer
             host.OpenUrlExternally(url);
     }
 
-    internal SettingsCheckbox RenderChartCheckbox => renderChartCheckbox;
-    internal SettingsCheckbox PlayHitSoundsCheckbox => playHitSoundsCheckbox;
     internal SettingsSlider<double> BackgroundDimSlider => backgroundDimRow;
     internal SettingsSlider<double> PlayfieldZoomSlider => playfieldZoomRow;
     internal SettingsDropdown<JukeBoxSkin> SkinDropdown => skinDropdown;
@@ -339,7 +334,7 @@ public partial class SettingsOverlay : FocusedOverlayContainer
                 Text = "Settings",
                 Margin = new MarginPadding { Left = SettingsPanel.CONTENT_PADDING.Left, Top = 18, Bottom = 4 },
             },
-            new Section("Skin", FontAwesome.Solid.PaintBrush)
+            new LazerSection("Skin", FontAwesome.Solid.PaintBrush)
             {
                 Children = new Drawable[]
                 {
@@ -353,11 +348,11 @@ public partial class SettingsOverlay : FocusedOverlayContainer
         // subsection per ruleset (same rows, same bindables as before).
         if (rulesetConfigs != null)
         {
-            sections.Add(new Section("Rulesets", FontAwesome.Solid.Gamepad)
+            sections.Add(new LazerSection("Rulesets", FontAwesome.Solid.Gamepad)
             {
                 Children = new Drawable[]
                 {
-                    new Subsection("osu!")
+                    new LazerSubsection("osu!")
                     {
                         Children = new Drawable[]
                         {
@@ -369,14 +364,14 @@ public partial class SettingsOverlay : FocusedOverlayContainer
                             playfieldBorderDropdown = new SettingsEnumDropdown<PlayfieldBorderStyle> { LabelText = "Playfield border style" },
                         },
                     },
-                    new Subsection("osu!taiko")
+                    new LazerSubsection("osu!taiko")
                     {
                         Children = new Drawable[]
                         {
                             taikoHitAnimationsCheckbox = new SettingsCheckbox { LabelText = "Hit animations" },
                         },
                     },
-                    new Subsection("osu!mania")
+                    new LazerSubsection("osu!mania")
                     {
                         Children = new Drawable[]
                         {
@@ -388,7 +383,7 @@ public partial class SettingsOverlay : FocusedOverlayContainer
                     // Replay-analysis overlays: our autoplay chart IS replay-driven, and
                     // LazerChartLayer attaches lazer's ReplayAnalysisOverlay for osu! charts,
                     // bound to these keys.
-                    new Subsection("Analysis (osu!)")
+                    new LazerSubsection("Analysis (osu!)")
                     {
                         Children = new Drawable[]
                         {
@@ -403,17 +398,17 @@ public partial class SettingsOverlay : FocusedOverlayContainer
             });
         }
 
+        // "Render chart", "Play hit sounds" and "Hit lighting" used to live here; they moved to the
+        // right column's Chart tab (see ChartPanel), which is where everything about the rendered
+        // chart — mods and per-element playfield visibility included — now lives. Moved, not copied:
+        // they bind the very same config keys there, so an existing user's values carry over and
+        // there is still exactly one control per setting.
         var gameplayRows = new List<Drawable>();
-
-        if (lazerConfig != null)
-            gameplayRows.Add(hitLightingCheckbox = new SettingsCheckbox { LabelText = "Hit lighting" });
 
         gameplayRows.Add(backgroundDimRow = new SettingsSlider<double> { LabelText = "Background dim", DisplayAsPercentage = true, KeyboardStep = 0.01f });
         gameplayRows.Add(backgroundBlurRow = new SettingsSlider<double> { LabelText = "Background blur", DisplayAsPercentage = true, KeyboardStep = 0.01f });
-        gameplayRows.Add(renderChartCheckbox = new SettingsCheckbox { LabelText = "Render chart" });
-        gameplayRows.Add(playHitSoundsCheckbox = new SettingsCheckbox { LabelText = "Play hit sounds" });
         gameplayRows.Add(playfieldZoomRow = new SettingsSlider<double> { LabelText = "Playfield zoom", DisplayAsPercentage = true, KeyboardStep = 0.01f });
-        sections.Add(new Section("Gameplay", FontAwesome.Regular.DotCircle) { Children = gameplayRows });
+        sections.Add(new LazerSection("Gameplay", FontAwesome.Regular.DotCircle) { Children = gameplayRows });
 
         var beatmapRows = new List<Drawable>();
 
@@ -429,7 +424,7 @@ public partial class SettingsOverlay : FocusedOverlayContainer
         if (lazerConfig != null)
             beatmapRows.Add(comboNormalisationRow = new SettingsSlider<float> { LabelText = "Combo colour normalisation", DisplayAsPercentage = true, KeyboardStep = 0.01f });
 
-        sections.Add(new Section("Beatmap", FontAwesome.Solid.Music) { Children = beatmapRows });
+        sections.Add(new LazerSection("Beatmap", FontAwesome.Solid.Music) { Children = beatmapRows });
 
         var audioRows = new List<Drawable>();
         audioRows.Add(audioDeviceDropdown = new DeviceSettingsDropdown { LabelText = "Output device" });
@@ -446,7 +441,7 @@ public partial class SettingsOverlay : FocusedOverlayContainer
         if (lazerConfig != null)
             audioRows.Add(positionalHitsoundsRow = new SettingsSlider<float> { LabelText = "Hitsound stereo separation", DisplayAsPercentage = true, KeyboardStep = 0.01f });
 
-        sections.Add(new Section("Audio", FontAwesome.Solid.VolumeUp) { Children = audioRows });
+        sections.Add(new LazerSection("Audio", FontAwesome.Solid.VolumeUp) { Children = audioRows });
 
         var graphicsRows = new List<Drawable>();
 
@@ -486,16 +481,16 @@ public partial class SettingsOverlay : FocusedOverlayContainer
             Padding = new MarginPadding { Left = 24 },
             Child = playOnMainCheckbox = new SettingsCheckbox { LabelText = "Play on main window too" },
         });
-        graphicsRows.Add(new Subsection("Video Playback")
+        graphicsRows.Add(new LazerSubsection("Video Playback")
         {
             Children = new Drawable[]
             {
                 hardwareAccelerationCheckbox = new SettingsCheckbox { LabelText = "Use hardware acceleration" },
             },
         });
-        sections.Add(new Section("Graphics", FontAwesome.Solid.Laptop) { Children = graphicsRows });
+        sections.Add(new LazerSection("Graphics", FontAwesome.Solid.Laptop) { Children = graphicsRows });
 
-        sections.Add(new Section("Online", FontAwesome.Solid.GlobeAsia)
+        sections.Add(new LazerSection("Online", FontAwesome.Solid.GlobeAsia)
         {
             Children = new Drawable[]
             {
@@ -563,8 +558,6 @@ public partial class SettingsOverlay : FocusedOverlayContainer
         // in test scenes that cache a config manager but no skin service.
         skinDropdown.CustomSkinName.BindTo(config.GetBindable<string>(JukeBoxSetting.CustomSkinPath));
         fpsDisplayDropdown.Current = config.GetBindable<FpsDisplayMode>(JukeBoxSetting.FpsDisplayMode);
-        renderChartCheckbox.Current = config.GetBindable<bool>(JukeBoxSetting.RenderChart);
-        playHitSoundsCheckbox.Current = config.GetBindable<bool>(JukeBoxSetting.PlayHitSounds);
         showStoryboardVideoCheckbox.Current = config.GetBindable<bool>(JukeBoxSetting.ShowStoryboardVideo);
         backgroundDimRow.Current = config.GetBindable<double>(JukeBoxSetting.BackgroundDim);
         backgroundBlurRow.Current = config.GetBindable<double>(JukeBoxSetting.BackgroundBlur);
@@ -637,7 +630,6 @@ public partial class SettingsOverlay : FocusedOverlayContainer
         // ---- lazer (OsuConfigManager) ----
         if (lazerConfig != null)
         {
-            hitLightingCheckbox.Current = lazerConfig.GetBindable<bool>(OsuSetting.HitLighting);
             beatmapSkinsCheckbox.Current = lazerConfig.GetBindable<bool>(OsuSetting.BeatmapSkins);
             beatmapColoursCheckbox.Current = lazerConfig.GetBindable<bool>(OsuSetting.BeatmapColours);
             beatmapHitsoundsCheckbox.Current = lazerConfig.GetBindable<bool>(OsuSetting.BeatmapHitsounds);
@@ -792,40 +784,6 @@ public partial class SettingsOverlay : FocusedOverlayContainer
         }
 
         return base.OnKeyDown(e);
-    }
-
-    /// <summary>
-    /// A concrete lazer <see cref="SettingsSection"/> (big TorusAlternate header, separator,
-    /// content padding). Standalone-safe: with no SettingsPanel in DI it self-selects, so the
-    /// section-dimming/scroll-to-section machinery is inert.
-    /// </summary>
-    private partial class Section : SettingsSection
-    {
-        private readonly LocalisableString header;
-        private readonly IconUsage icon;
-
-        public Section(LocalisableString header, IconUsage icon)
-        {
-            this.header = header;
-            this.icon = icon;
-        }
-
-        public override LocalisableString Header => header;
-
-        public override Drawable CreateIcon() => new SpriteIcon { Icon = icon };
-    }
-
-    /// <summary>A concrete lazer <see cref="SettingsSubsection"/> (bold subsection header).</summary>
-    private partial class Subsection : SettingsSubsection
-    {
-        private readonly LocalisableString header;
-
-        public Subsection(LocalisableString header)
-        {
-            this.header = header;
-        }
-
-        protected override LocalisableString Header => header;
     }
 
     /// <summary>

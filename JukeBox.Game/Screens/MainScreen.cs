@@ -26,7 +26,7 @@ namespace JukeBox.Game.Screens;
 /// Top-level screen: a single fixed three-column layout — a permanently-docked left search column,
 /// the <see cref="NowPlayingScreen"/> visuals as a BOXED player panel in the centre (same rounded/
 /// shadowed card language as the columns, gutters on all sides — not a full-bleed underlay) and a
-/// permanently-docked right column (tabbed Playback/Settings) — driven
+/// permanently-docked right column (tabbed Playback/Chart/Settings) — driven
 /// by <see cref="JukeBoxSetting.UiLayout"/>. Replaces the old Fullscreen/Split layout-toggle pair;
 /// see <see cref="UiLayout"/> for the config migration story.
 ///
@@ -43,11 +43,11 @@ namespace JukeBox.Game.Screens;
 /// place: <see cref="FullscreenListingOverlay"/>, opened either by the sidebar's search button
 /// (<see cref="BeatmapListingOverlay.SearchOpenRequested"/>) or by typing a printable character
 /// with no modifiers held, which seeds it via
-/// <see cref="FullscreenListingOverlay.ShowWithInitialChar"/>. The right column embeds <see cref="PlaybackPanel"/>
-/// and <see cref="SettingsOverlay"/> (also docked) side by side behind two tab buttons — both stay
-/// permanently loaded and alive, so switching tabs is a simple Alpha toggle (instant, and every
-/// component's own state — scroll position, filter selections, checkbox values — just sits there
-/// untouched while its tab isn't the active one).
+/// <see cref="FullscreenListingOverlay.ShowWithInitialChar"/>. The right column embeds <see cref="PlaybackPanel"/>,
+/// <see cref="ChartPanel"/> and <see cref="SettingsOverlay"/> (also docked) side by side behind three
+/// tab buttons — all stay permanently loaded and alive, so switching tabs is a simple Alpha toggle
+/// (instant, and every component's own state — scroll position, filter selections, checkbox values —
+/// just sits there untouched while its tab isn't the active one).
 /// </para>
 ///
 /// <para>
@@ -147,6 +147,7 @@ public partial class MainScreen : Screen
     private BeatmapListingOverlay listing = null!;
     private FullscreenListingOverlay fullscreenListing = null!;
     private PlaybackPanel playbackPanel = null!;
+    private ChartPanel chartPanel = null!;
     private SettingsOverlay settingsBody = null!;
     private MapIdOverlay mapIdOverlay = null!;
     private FileImportOverlay fileImportOverlay = null!;
@@ -160,6 +161,7 @@ public partial class MainScreen : Screen
     private BeatmapSearchEngine searchEngine = null!;
 
     private RightPanelTabButton playbackTabButton = null!;
+    private RightPanelTabButton chartTabButton = null!;
     private RightPanelTabButton settingsTabButton = null!;
 
     private RightPanelTab currentTab = RightPanelTab.Playback;
@@ -211,9 +213,14 @@ public partial class MainScreen : Screen
     /// <summary>Test-only: the "playing in detached window" placeholder's current alpha.</summary>
     internal float PlaceholderAlpha => detachedPlaceholder.Alpha;
 
+    /// <summary>
+    /// Declaration order IS the on-screen order of the tab strip (see <see cref="createTabHeader"/>):
+    /// Playback | Chart | Settings.
+    /// </summary>
     private enum RightPanelTab
     {
         Playback,
+        Chart,
         Settings,
     }
 
@@ -230,6 +237,7 @@ public partial class MainScreen : Screen
         listing = new BeatmapListingOverlay(docked: true, engine: searchEngine) { RelativeSizeAxes = Axes.Both };
         fullscreenListing = new FullscreenListingOverlay(searchEngine) { RelativeSizeAxes = Axes.Both };
         playbackPanel = new PlaybackPanel();
+        chartPanel = new ChartPanel();
         settingsBody = new SettingsOverlay(docked: true) { RelativeSizeAxes = Axes.Both };
         mapIdOverlay = new MapIdOverlay();
         fileImportOverlay = new FileImportOverlay();
@@ -376,12 +384,12 @@ public partial class MainScreen : Screen
                                     {
                                         RelativeSizeAxes = Axes.Both,
                                         Padding = new MarginPadding { Top = Theme.SectionSpacing },
-                                        // Both tabs' content stay alive simultaneously — switching
-                                        // tabs (selectTab) only toggles Alpha, so every component's
-                                        // own state (queue rows, filter/dropdown selections, scroll
-                                        // position) just persists untouched while its tab isn't
-                                        // showing, and switching back is instant.
-                                        Children = new Drawable[] { playbackPanel, settingsBody },
+                                        // All three tabs' content stay alive simultaneously —
+                                        // switching tabs (selectTab) only toggles Alpha, so every
+                                        // component's own state (queue rows, filter/dropdown
+                                        // selections, scroll position) just persists untouched while
+                                        // its tab isn't showing, and switching back is instant.
+                                        Children = new Drawable[] { playbackPanel, chartPanel, settingsBody },
                                     },
                                 },
                             },
@@ -669,9 +677,11 @@ public partial class MainScreen : Screen
         double duration = animate ? Theme.DurationNormal : 0;
 
         showTabBody(playbackPanel, tab == RightPanelTab.Playback, duration);
+        showTabBody(chartPanel, tab == RightPanelTab.Chart, duration);
         showTabBody(settingsBody, tab == RightPanelTab.Settings, duration);
 
         playbackTabButton.Active.Value = tab == RightPanelTab.Playback;
+        chartTabButton.Active.Value = tab == RightPanelTab.Chart;
         settingsTabButton.Active.Value = tab == RightPanelTab.Settings;
     }
 
@@ -702,7 +712,10 @@ public partial class MainScreen : Screen
         {
             RelativeSizeAxes = Axes.X,
             Height = tab_header_height,
-            ColumnDimensions = new[] { new Dimension(), new Dimension() },
+            // Three equal columns; Chart sits in the middle, between the two tabs that were here
+            // before it. The 3px margins keep the same 6px gap between neighbouring buttons the
+            // two-tab strip had.
+            ColumnDimensions = new[] { new Dimension(), new Dimension(), new Dimension() },
             Content = new[]
             {
                 new Drawable[]
@@ -712,6 +725,12 @@ public partial class MainScreen : Screen
                         RelativeSizeAxes = Axes.Both,
                         Margin = new MarginPadding { Right = 3 },
                         Action = () => selectTab(RightPanelTab.Playback),
+                    },
+                    chartTabButton = new RightPanelTabButton("Chart")
+                    {
+                        RelativeSizeAxes = Axes.Both,
+                        Margin = new MarginPadding { Horizontal = 3 },
+                        Action = () => selectTab(RightPanelTab.Chart),
                     },
                     settingsTabButton = new RightPanelTabButton("Settings")
                     {

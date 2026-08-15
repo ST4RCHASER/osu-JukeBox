@@ -102,12 +102,70 @@ namespace JukeBox.Game.Tests.Visual
         }
 
         // The right column's first tab is "Playback" (it was "Queue" while the queue was all it
-        // held); Settings keeps its own name and position beside it.
+        // held); Settings keeps its own name and stays last. "Chart" was added BETWEEN them — the
+        // order is the point, so this asserts the sequence rather than mere membership.
         [Test]
-        public void RightColumnTabsArePlaybackAndSettings()
+        public void RightColumnTabsArePlaybackChartAndSettings()
         {
-            AddAssert("tab headers read Playback and Settings", () => tabButtonLabels().SequenceEqual(new[] { "Playback", "Settings" }));
+            AddAssert("tab headers read Playback, Chart, Settings, in that order",
+                () => tabButtonLabels().SequenceEqual(new[] { "Playback", "Chart", "Settings" }));
+
+            AddAssert("the Chart button really sits between the other two", () =>
+            {
+                var buttons = tabButtons();
+                return buttons[0].ScreenSpaceDrawQuad.TopLeft.X < buttons[1].ScreenSpaceDrawQuad.TopLeft.X
+                       && buttons[1].ScreenSpaceDrawQuad.TopLeft.X < buttons[2].ScreenSpaceDrawQuad.TopLeft.X;
+            });
         }
+
+        // Clicking the middle tab shows the chart body and hides both neighbours — the strip is a
+        // three-way switch, not a two-way one with a spare button.
+        [Test]
+        public void ChartTabSwitchesToTheChartBody()
+        {
+            AddAssert("chart tab starts inactive", () => chartPanel().Alpha == 0);
+
+            AddStep("click the Chart tab", () =>
+            {
+                InputManager.MoveMouseTo(tabButtons()[1]);
+                InputManager.Click(MouseButton.Left);
+            });
+
+            AddUntilStep("chart body shown", () => chartPanel().Alpha == 1);
+            AddAssert("playback body hidden", () => playbackPanel().Alpha == 0);
+            AddAssert("settings body hidden", () => screen.ChildrenOfType<SettingsOverlay>().Single().Alpha == 0);
+        }
+
+        // "Render chart", "Play hit sounds" and "Hit lighting" MOVED to the Chart tab — they must be
+        // there and nowhere else. A duplicate would be two controls over one config key, which is
+        // exactly the bug this guards.
+        [Test]
+        public void ChartTabOwnsTheMovedChartRowsAndSettingsNoLongerDoes()
+        {
+            AddAssert("render chart moved into the Chart tab",
+                () => chartPanel().RenderChartCheckbox.LabelText.ToString() == "Render chart");
+            AddAssert("play hit sounds moved into the Chart tab",
+                () => chartPanel().PlayHitSoundsCheckbox.LabelText.ToString() == "Play hit sounds");
+            AddAssert("hit lighting moved into the Chart tab",
+                () => checkboxLabels(chartPanel()).Contains("Hit lighting"));
+
+            SettingsOverlay settings = null!;
+            AddStep("grab settings body", () => settings = screen.ChildrenOfType<SettingsOverlay>().Single());
+
+            AddAssert("no render chart row left in settings", () => !checkboxLabels(settings).Contains("Render chart"));
+            AddAssert("no play hit sounds row left in settings", () => !checkboxLabels(settings).Contains("Play hit sounds"));
+            AddAssert("no hit lighting row left in settings", () => !checkboxLabels(settings).Contains("Hit lighting"));
+
+            // Same key, so an existing user's value carries over rather than resetting.
+            AddStep("tick render chart in the Chart tab", () => chartPanel().RenderChartCheckbox.Current.Value = true);
+            AddAssert("it wrote the same config key it always did", () => config.Get<bool>(JukeBoxSetting.RenderChart));
+            AddStep("untick it again", () => chartPanel().RenderChartCheckbox.Current.Value = false);
+        }
+
+        private ChartPanel chartPanel() => screen.ChildrenOfType<ChartPanel>().Single();
+
+        private static List<string> checkboxLabels(Drawable panel)
+            => panel.ChildrenOfType<SettingsCheckbox>().Select(c => c.LabelText.ToString()).ToList();
 
         // Everything the deleted bottom bar carried, plus the controls that used to sit in
         // Settings → Playback, now lives in this one tab — with the queue underneath it. The
@@ -152,11 +210,13 @@ namespace JukeBox.Game.Tests.Visual
         private static List<string> settingsLabels(SettingsOverlay settings)
             => settings.ChildrenOfType<SettingsItem<double>>().Select(i => i.LabelText.ToString()).ToList();
 
-        private List<string> tabButtonLabels()
+        private List<ClickableContainer> tabButtons()
             => screen.ChildrenOfType<ClickableContainer>()
                      .Where(c => c.GetType().Name == "RightPanelTabButton")
-                     .Select(c => c.ChildrenOfType<SpriteText>().First().Text.ToString())
                      .ToList();
+
+        private List<string> tabButtonLabels()
+            => tabButtons().Select(c => c.ChildrenOfType<SpriteText>().First().Text.ToString()).ToList();
 
         // Regression coverage for a true contained player: the video/storyboard/background
         // visuals must never render outside the boxed centre panel, and never behind either side

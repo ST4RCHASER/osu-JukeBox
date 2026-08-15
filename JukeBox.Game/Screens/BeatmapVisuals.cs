@@ -100,6 +100,13 @@ public partial class BeatmapVisuals : CompositeDrawable
     // freshly-imported .osk replacing the custom skin while Custom is already selected.
     private readonly IBindable<int> skinRevision = new Bindable<int>();
 
+    // And the same trigger again for the Chart tab's mod selection. Mods can't be applied to a
+    // live DrawableRuleset: they change the beatmap CONVERSION (EZ/HR's difficulty, HR's mirrored
+    // playfield, mania's key mods) and the generated autoplay replay that is walked over it, both
+    // of which are built once per layer. Per-element visibility, by contrast, applies live — see
+    // PlayfieldElementFilter.
+    private readonly IBindable<int> chartModRevision = new Bindable<int>();
+
     // Lazer's own background-blur scale: setting 0..1 maps to a gaussian sigma of 0..25.
     private const float max_blur_sigma = 25;
 
@@ -108,6 +115,9 @@ public partial class BeatmapVisuals : CompositeDrawable
 
     [Resolved(canBeNull: true)]
     private SkinSelection? skinSelection { get; set; }
+
+    [Resolved(canBeNull: true)]
+    private ChartModSelection? chartMods { get; set; }
 
     [Resolved(canBeNull: true)]
     private BeatmapOffsetStore? offsetStore { get; set; }
@@ -404,6 +414,9 @@ public partial class BeatmapVisuals : CompositeDrawable
             skinRevision.BindTo(skinSelection.Revision);
         }
 
+        if (chartMods != null)
+            chartModRevision.BindTo(chartMods.Revision);
+
         if (offsetStore != null)
             beatmapOffset.BindTo(offsetStore.CurrentOffset);
 
@@ -469,6 +482,10 @@ public partial class BeatmapVisuals : CompositeDrawable
         // application mechanism (documented; the ruleset checkboxes by contrast apply live).
         effectiveSkin.BindValueChanged(_ => rebuildChartLayer());
         skinRevision.BindValueChanged(_ => rebuildChartLayer());
+
+        // Same mechanism for a mod-selection change — see chartModRevision's own remarks for why
+        // mods need the rebuild that element visibility doesn't.
+        chartModRevision.BindValueChanged(_ => rebuildChartLayer());
     }
 
     private void rebuildChartLayer()

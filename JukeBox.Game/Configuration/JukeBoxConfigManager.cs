@@ -124,6 +124,27 @@ public enum JukeBoxSetting
     /// credential, so it is masked in the settings UI and never written to the log.
     /// </summary>
     OsuClientSecret,
+
+    /// <summary>
+    /// The gameplay mods the Chart tab applies to the autoplay chart, as a comma-separated list of
+    /// osu! acronyms ("HD,HR,DT"). Stored as acronyms rather than one boolean key per mod so the
+    /// set can grow without churning this enum — and because an acronym is exactly how osu! itself
+    /// names a mod, which keeps the persisted value readable and stable across upgrades. Unknown
+    /// acronyms are ignored on load. Empty (the default) is no mods.
+    ///
+    /// Ignored entirely while a dropped replay is driving playback: a replay carries its OWN mods
+    /// (see <see cref="Replays.ReplayMods"/>), and the Chart tab's toggles lock in that state.
+    /// </summary>
+    ChartMods,
+
+    /// <summary>
+    /// Which playfield elements the user has switched OFF, as a comma-separated list of
+    /// <see cref="LazerPlayer.PlayfieldElement"/> names. Stored as a "hidden" list (rather than a
+    /// "shown" one) so everything a future version adds defaults to visible, and by NAME so
+    /// reordering the enum can never silently repoint a user's choices. Unknown names are ignored
+    /// on load. Empty (the default) is "everything visible".
+    /// </summary>
+    HiddenPlayfieldElements,
 }
 
 /// <summary>
@@ -254,5 +275,8 @@ public class JukeBoxConfigManager : IniConfigManager<JukeBoxSetting>
         SetDefault(JukeBoxSetting.SearchApi, SearchApi.Mirror);
         SetDefault(JukeBoxSetting.OsuClientId, string.Empty);
         SetDefault(JukeBoxSetting.OsuClientSecret, string.Empty);
+
+        SetDefault(JukeBoxSetting.ChartMods, string.Empty);
+        SetDefault(JukeBoxSetting.HiddenPlayfieldElements, string.Empty);
     }
 }
