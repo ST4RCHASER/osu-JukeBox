@@ -1,6 +1,7 @@
 #nullable enable
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -83,6 +84,19 @@ public partial class Jukebox : Component
     private readonly object advanceLock = new();
     private bool advancing;
     private bool pendingAdvance;
+
+    /// <summary>
+    /// Cancelled when a newer advance request arrives, so the round in flight stops waiting on a
+    /// download nobody wants any more and gets out of the way immediately.
+    ///
+    /// <para>
+    /// Without this a skip was only recorded, never acted on: the round kept downloading the song
+    /// being skipped, played it for a moment when it finally arrived, and only then ran the round
+    /// the user actually asked for. Guarded by <see cref="advanceLock"/> along with the two flags
+    /// above.
+    /// </para>
+    /// </summary>
+    private CancellationTokenSource? roundCancellation;
 
     // Tracks whether whatever's currently playing (per NowPlaying) came from the queue or was
     // picked by the radio fallback — written in the same Schedule callback as NowPlaying so it's
@@ -181,16 +195,54 @@ public partial class Jukebox : Component
             await AdvanceAsync().ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// The in-flight prefetches, so one can be called off when the set it was warming turns out not
+    /// to be wanted after all.
+    ///
+    /// <para>
+    /// A prefetch is an interested party in the shared download (see
+    /// <see cref="BeatmapCache.GetAsync"/>), which is exactly right while the set is still coming
+    /// up — it is what keeps a download alive when an advance abandons the same set. But it also
+    /// means an abandoned song's download cannot actually stop while its prefetch is still waiting,
+    /// so the prefetch has to be droppable too.
+    /// </para>
+    /// </summary>
+    private readonly ConcurrentDictionary<int, CancellationTokenSource> prefetches = new();
+
     private async void prefetchInBackground(int setId)
     {
+        var cancellation = new CancellationTokenSource();
+
+        // A second prefetch of the same set replaces the first; the first is already sharing that
+        // one download, so nothing is lost by letting the newer registration own the cancellation.
+        prefetches[setId] = cancellation;
+
         try
         {
-            await cache.GetAsync(setId).ConfigureAwait(false);
+            await cache.GetAsync(setId, cancellation.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Called off — see abandonPrefetch. Not a failure.
         }
         catch (Exception ex)
         {
             Logger.Error(ex, $"Jukebox: prefetch of set {setId} failed");
         }
+        finally
+        {
+            prefetches.TryRemove(new KeyValuePair<int, CancellationTokenSource>(setId, cancellation));
+            cancellation.Dispose();
+        }
+    }
+
+    /// <summary>Stops warming <paramref name="setId"/>. Called when a round gives up on a set, so
+    /// the prefetch it started is not left holding that download open for a song nobody is waiting
+    /// for any more.</summary>
+    private void abandonPrefetch(int setId)
+    {
+        if (prefetches.TryRemove(setId, out var cancellation))
+            cancellation.Cancel();
     }
 
     /// <summary>
@@ -250,8 +302,12 @@ public partial class Jukebox : Component
             if (advancing)
             {
                 // A round is already in flight — record that one more is wanted once it
-                // finishes, instead of running (or losing) this request now.
+                // finishes, instead of running (or losing) this request now…
                 pendingAdvance = true;
+
+                // …and tell that round to stop, so "once it finishes" is now rather than whenever
+                // the download it no longer needs happens to complete.
+                roundCancellation?.Cancel();
                 return Task.CompletedTask;
             }
 
@@ -339,21 +395,40 @@ public partial class Jukebox : Component
     /// </summary>
     private int statusOwner;
 
+    /// <summary>
+    /// Which round's text is on the line right now, as opposed to which round is merely the newest.
+    /// Update thread only — every read and write of it happens inside a <c>Schedule</c>.
+    ///
+    /// <para>
+    /// The two are not the same thing, and conflating them is how a stale line survived: a round
+    /// that has been superseded still has to be able to clear ITS OWN text, even though a newer
+    /// round has taken ownership by the time the release runs. Keying the release on "did I write
+    /// what is showing" instead of "am I still the newest" is what makes that work, while still
+    /// preventing a late release from wiping a newer round's line.
+    /// </para>
+    /// </summary>
+    private int statusShownBy;
+
     private void showDownloadStatus(int owner, string title, int setId) => Schedule(() =>
     {
+        // A superseded round must not announce at all — by the time this runs, the round that
+        // replaced it may already be showing its own line.
         if (owner != Volatile.Read(ref statusOwner))
             return;
 
         Status.Value = $"Downloading {title}…";
         DownloadingSetId.Value = setId;
+        statusShownBy = owner;
     });
 
-    /// <summary>Clears the status IF <paramref name="owner"/> still owns it — a superseded round
-    /// releasing late must not wipe the status the current one has already put up.</summary>
+    /// <summary>Clears the line only if <paramref name="owner"/> is what put the text there.</summary>
     private void releaseStatus(int owner) => Schedule(() =>
     {
-        if (owner == Volatile.Read(ref statusOwner))
-            clearStatus();
+        if (statusShownBy != owner)
+            return;
+
+        clearStatus();
+        statusShownBy = 0;
     });
 
     private async Task advanceRoundAsync()
@@ -368,17 +443,38 @@ public partial class Jukebox : Component
         // loop, or throwing past every handler in it.
         int owner = Interlocked.Increment(ref statusOwner);
 
+        var cancellation = new CancellationTokenSource();
+
+        lock (advanceLock)
+        {
+            roundCancellation?.Dispose();
+            roundCancellation = cancellation;
+        }
+
         try
         {
-            await advanceRoundBodyAsync(owner).ConfigureAwait(false);
+            await advanceRoundBodyAsync(owner, cancellation.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+            // Superseded by a newer request while waiting on a download. Not an error and not worth
+            // reporting: the round that request asked for runs next, immediately.
         }
         finally
         {
             releaseStatus(owner);
+
+            lock (advanceLock)
+            {
+                if (ReferenceEquals(roundCancellation, cancellation))
+                    roundCancellation = null;
+            }
+
+            cancellation.Dispose();
         }
     }
 
-    private async Task advanceRoundBodyAsync(int owner)
+    private async Task advanceRoundBodyAsync(int owner, CancellationToken ct)
     {
         while (true)
         {
@@ -412,7 +508,18 @@ public partial class Jukebox : Component
 
             try
             {
-                cached = await cache.GetAsync(next.Id).ConfigureAwait(false);
+                // The token is what makes a skip land immediately: it detaches this round from the
+                // download without disturbing anyone else waiting on that same set (a prefetch for
+                // something still queued keeps it alive — see BeatmapCache.GetAsync).
+                cached = await cache.GetAsync(next.Id, ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                // Superseded. Rethrown rather than reported: the caller's handler treats it as a
+                // clean exit, and the round the user actually asked for runs next. The prefetch
+                // goes too — while it is still waiting, the download it shares cannot stop.
+                abandonPrefetch(next.Id);
+                throw;
             }
             catch (Exception ex)
             {
@@ -420,6 +527,15 @@ public partial class Jukebox : Component
                 Schedule(() => LastError.Value = message);
                 releaseStatus(owner);
                 continue;
+            }
+
+            // Checked again after the download: a skip that arrives during the extract, or in the
+            // gap before playback starts, must still stop this song reaching the speakers. Without
+            // this the song being skipped got its moment of playback anyway.
+            if (ct.IsCancellationRequested)
+            {
+                abandonPrefetch(next.Id);
+                ct.ThrowIfCancellationRequested();
             }
 
             // Set BEFORE the track starts, and set on every round (not just replay rounds), so the
@@ -464,7 +580,12 @@ public partial class Jukebox : Component
             {
                 NowPlaying.Value = next;
                 currentIsRadio = viaRadio;
+
+                // Cleared in the same callback as NowPlaying so the two never disagree for a frame —
+                // a "downloading" line under a song that has already started reads as stuck. This
+                // round is what is showing (it just finished its own download), so it owns the line.
                 clearStatus();
+                statusShownBy = 0;
             });
 
             // Fire-and-forget prefetch of the new queue head, so it's likely already cached

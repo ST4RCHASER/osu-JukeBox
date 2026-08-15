@@ -25,7 +25,7 @@ public class BeatmapCache
     private readonly string root;
     private readonly IBeatmapMirror mirror;
     private readonly bool noVideo;
-    private readonly ConcurrentDictionary<int, Task<CachedBeatmapSet>> inflight = new();
+    private readonly ConcurrentDictionary<int, Lazy<SharedDownload>> inflight = new();
 
     /// <summary>
     /// Per-set download progress for whatever is currently in flight, written from the mirror's
@@ -69,11 +69,129 @@ public class BeatmapCache
     private static bool hasOsuFiles(string dir)
         => Directory.Exists(dir) && Directory.EnumerateFiles(dir, "*.osu", osu_enum_options).Any();
 
-    public Task<CachedBeatmapSet> GetAsync(int setId, CancellationToken ct = default)
-        => inflight.GetOrAdd(setId, id => getInternal(id, ct));
+    /// <summary>
+    /// Fetches <paramref name="setId"/>, sharing one download between everyone who asks for it at
+    /// the same time — but NOT sharing their cancellation.
+    ///
+    /// <para>
+    /// Each caller waits on the shared download through its OWN token, so giving up detaches only
+    /// that caller: the download keeps running for everyone still waiting. It is aborted (for real —
+    /// the HTTP request is cancelled) only when the LAST interested caller lets go. That asymmetry
+    /// is the point. Skipping mid-download has to abandon the song being skipped, while a prefetch
+    /// of that same set for something still queued must survive; before this, whichever caller
+    /// happened to arrive FIRST owned the cancellation for everyone.
+    /// </para>
+    ///
+    /// <para>
+    /// Abandoning is never sticky: a set whose download was aborted leaves nothing behind that a
+    /// later request would mistake for progress (see <see cref="discardPartialDownload"/>), and a
+    /// caller that finds a download already being abandoned simply starts a fresh one.
+    /// </para>
+    /// </summary>
+    public async Task<CachedBeatmapSet> GetAsync(int setId, CancellationToken ct = default)
+    {
+        while (true)
+        {
+            // Lazy so the download is started exactly once even though GetOrAdd's factory may run
+            // more than once under contention — a discarded duplicate would otherwise leave a
+            // second request running with nobody waiting on it.
+            var entry = inflight.GetOrAdd(setId, id => new Lazy<SharedDownload>(() => SharedDownload.Start(id, getInternal)));
+            var download = entry.Value;
+
+            // Interest is registered BEFORE awaiting, so a download can't be abandoned out from
+            // under a caller that has arrived but not yet reached the await.
+            if (!download.TryJoin())
+            {
+                // Down to nobody and being torn down — drop this entry and start a fresh download
+                // rather than waiting on a task that is already on its way to cancelled.
+                inflight.TryRemove(new KeyValuePair<int, Lazy<SharedDownload>>(setId, entry));
+                continue;
+            }
+
+            try
+            {
+                // WaitAsync, not a plain await: it observes MY token without touching the shared
+                // download, which is what keeps one caller's cancellation private to that caller.
+                return await download.Task.WaitAsync(ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                // Not my cancellation: the last other caller dropped out and took the download with
+                // it just as I joined. Start a fresh one.
+                continue;
+            }
+            finally
+            {
+                download.Leave();
+            }
+        }
+    }
+
+    /// <summary>
+    /// One download shared by every caller currently interested in a set, reference counted so the
+    /// underlying request outlives any individual caller giving up — but not all of them.
+    /// </summary>
+    private sealed class SharedDownload
+    {
+        public Task<CachedBeatmapSet> Task { get; private set; } = null!;
+
+        private readonly CancellationTokenSource cts = new();
+        private int interested;
+        private bool abandoned;
+
+        public static SharedDownload Start(int setId, Func<int, CancellationToken, Task<CachedBeatmapSet>> work)
+        {
+            var download = new SharedDownload();
+            download.Task = work(setId, download.cts.Token);
+
+            // A shared download can outlive everyone waiting on it — every caller may detach, and
+            // the request then fails or is aborted with nobody left to receive the exception. That
+            // would surface much later as an unhandled task exception and take the whole game down
+            // with it. Observing it here costs nothing and changes nothing for real awaiters: they
+            // await this same task and still see the exception normally.
+            _ = download.Task.ContinueWith(t => _ = t.Exception,
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+
+            return download;
+        }
+
+        /// <summary>Registers interest, or reports that this download is already being torn down.</summary>
+        public bool TryJoin()
+        {
+            lock (this)
+            {
+                if (abandoned)
+                    return false;
+
+                interested++;
+                return true;
+            }
+        }
+
+        /// <summary>Drops interest, aborting the request if this was the last caller wanting it.</summary>
+        public void Leave()
+        {
+            lock (this)
+            {
+                if (--interested > 0 || abandoned)
+                    return;
+
+                abandoned = true;
+            }
+
+            cts.Cancel();
+        }
+    }
 
     private async Task<CachedBeatmapSet> getInternal(int setId, CancellationToken ct)
     {
+        // Yielding first is what lets Start() finish wiring up the entry, and the first caller
+        // register its interest, before any of the work below — including its finally, which
+        // removes the entry — can run.
+        await Task.Yield();
+
         try
         {
             string dir = Path.Combine(root, setId.ToString());
@@ -107,10 +225,50 @@ public class BeatmapCache
             Directory.Move(tmpDir, dir);
             return LoadFromDirectory(setId, dir);
         }
+        catch
+        {
+            // Covers abandonment as well as ordinary failure: whatever this attempt wrote must not
+            // outlive it. The set stays exactly as re-requestable as it was before — see
+            // discardPartialDownload for why a leftover would be worse than nothing.
+            discardPartialDownload(setId);
+            throw;
+        }
         finally
         {
             inflight.TryRemove(setId, out _);
             downloadProgress.TryRemove(setId, out _);
+        }
+    }
+
+    /// <summary>
+    /// Removes what a failed or abandoned attempt left behind: the partial <c>.osz.part</c> and any
+    /// half-populated <c>.extracting</c> directory.
+    ///
+    /// <para>
+    /// The next attempt truncates the part file anyway, so this is not strictly required for
+    /// correctness — but leaving them means an abandoned download silently occupies disk that
+    /// <see cref="EvictToLimit"/> does not account for (it measures set directories), for a set
+    /// nobody is downloading. The <c>.extracting</c> directory matters more: it sits next to the
+    /// real cache directories, and a later attempt only deletes it if it gets far enough to extract.
+    /// </para>
+    /// </summary>
+    private void discardPartialDownload(int setId)
+    {
+        string dir = Path.Combine(root, setId.ToString());
+
+        try
+        {
+            string tmpOsz = Path.Combine(root, $"{setId}.osz.part");
+            if (File.Exists(tmpOsz)) File.Delete(tmpOsz);
+
+            string tmpDir = dir + ".extracting";
+            if (Directory.Exists(tmpDir)) Directory.Delete(tmpDir, true);
+        }
+        catch (Exception ex)
+        {
+            // Never worth failing a download (or masking the real reason it ended) over cleanup —
+            // the next attempt overwrites the part file and deletes the directory itself.
+            Logger.Error(ex, $"BeatmapCache: failed to clean up the partial download for set {setId}");
         }
     }
 

@@ -182,6 +182,87 @@ namespace JukeBox.Game.Tests.Visual
             AddUntilStep("a second round ran (guard was released, not wedged)", () => queue.Items.Count == 0);
         }
 
+        // The other half of "downloading status stuck when i skip when download": the skip itself
+        // used to do nothing visible until the download it was skipping had finished — and then the
+        // skipped song played for a moment before the advance the user asked for finally ran.
+        [Test]
+        public void SkippingMidDownloadStartsTheNextSongWithoutPlayingTheSkippedOne()
+        {
+            var everPlayed = new List<int>();
+
+            AddStep("record everything that reaches playback", () =>
+            {
+                everPlayed.Clear();
+                playback.Current.BindValueChanged(e =>
+                {
+                    if (e.NewValue != null)
+                        everPlayed.Add(e.NewValue.SetId);
+                });
+            });
+
+            AddStep("gate set1's download and start it", () =>
+            {
+                mirror.GateDownload(1);
+                jukebox.EnqueueAndMaybePlayAsync(set1);
+            });
+
+            AddUntilStep("set1's download is in flight", () => cache.IsDownloading(set1.Id));
+
+            AddStep("queue set2 and skip", () =>
+            {
+                queue.Enqueue(set2);
+                jukebox.SkipCurrent();
+            });
+
+            // set1's gate is never released: if the skip still waited for that download, this could
+            // not pass at all.
+            AddUntilStep("set2 plays without set1's download ever completing",
+                () => playback.Current.Value?.SetId == set2.Id);
+
+            AddAssert("set1's download was actually aborted", () => mirror.Cancelled > 0);
+            AddAssert("and set1 never reached playback", () => !everPlayed.Contains(set1.Id),
+                "the song being skipped must not get its moment of playback");
+        }
+
+        // Rapid skipping through several gated downloads has to settle on the last one asked for,
+        // with nothing left over.
+        [Test]
+        public void RapidSkippingThroughDownloadsSettlesOnTheLastOneAskedFor()
+        {
+            AddStep("gate the first two, leave the third free", () =>
+            {
+                mirror.GateDownload(1);
+                mirror.GateDownload(2);
+            });
+
+            AddStep("queue three and start", () =>
+            {
+                queue.Enqueue(set2);
+                queue.Enqueue(set4);
+                jukebox.EnqueueAndMaybePlayAsync(set1);
+            });
+
+            AddUntilStep("the first download is in flight", () => cache.IsDownloading(set1.Id));
+
+            AddStep("skip twice in quick succession", () =>
+            {
+                jukebox.SkipCurrent();
+                jukebox.SkipCurrent();
+            });
+
+            // Neither gate is ever released — only set4 can actually complete.
+            AddUntilStep("reaches the one that can actually play", () => playback.Current.Value?.SetId == set4.Id);
+
+            AddAssert("the downloads it skipped past were aborted", () => mirror.Cancelled > 0);
+
+            // Not "the line is empty": these fixture tracks are a fraction of a second long, so
+            // playback legitimately runs on to the next queued set — which IS downloading. What must
+            // hold is that any line showing names a download that is genuinely still in flight,
+            // rather than one of the ones skipped past.
+            AddUntilStep("any line still showing is a real download", () => jukebox.Status.Value == null
+                                                                           || jukebox.DownloadingSetId.Value is int id && cache.IsDownloading(id));
+        }
+
         // The reported bug: "downloading status stuck when i skip when download". A round writes
         // "Downloading X…" before fetching, and clears it on each of its own exits — but an
         // exception thrown ANYWHERE after that write (PlayAsync, the replay difficulty switch, the
@@ -551,10 +632,26 @@ namespace JukeBox.Game.Tests.Visual
             public Task<List<BeatmapSetInfo>> SearchAsync(SearchRequest r, CancellationToken ct = default)
                 => Task.FromResult(searchResults);
 
+            /// <summary>How many downloads were aborted rather than finishing — "the caller stopped
+            /// waiting" and "the request was actually cancelled" are different claims.</summary>
+            public int Cancelled;
+
             public async Task DownloadAsync(int setId, bool noVideo, Stream destination, CancellationToken ct = default, DownloadProgressCallback? progress = null)
             {
                 if (gates.TryGetValue(setId, out var gate))
-                    await gate.Task.ConfigureAwait(false);
+                {
+                    try
+                    {
+                        // Honours the token, so a gated download can be abandoned mid-flight the way
+                        // a real one is rather than parking forever.
+                        await gate.Task.WaitAsync(ct).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        Interlocked.Increment(ref Cancelled);
+                        throw;
+                    }
+                }
 
                 if (!paths.TryGetValue(setId, out string? path))
                     throw new IOException($"fixture mirror has no set {setId}");
