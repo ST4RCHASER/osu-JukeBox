@@ -132,6 +132,41 @@ namespace JukeBox.Game.Tests.Visual
             });
         }
 
+        // A BEATMAP folder is parsed as skin configuration (its .osu doubles as the config file),
+        // and a .osu never has a [Mania] section. lazer's own LegacyBeatmapSkin therefore declines
+        // mania config lookups outright (AllowManiaConfigLookups => false) — because LegacySkin does
+        // NOT decline them: asked for a key count it has no section for, it manufactures a default
+        // configuration and answers from it. A beatmap skin sits at HIGHER priority than the user's
+        // skin, so without that opt-out it authoritatively answers "column width 48" and the user's
+        // own 102.4 never gets asked. Image lookups fall through (the default config has no image
+        // entries), which is why the symptom was a stage at default proportions wearing the user
+        // skin's oversized notes rather than an obviously unskinned stage.
+        [Test]
+        public void ABeatmapFolderSkinDeclinesManiaConfigInsteadOfAnsweringWithDefaults()
+        {
+            BeatmapFolderSkin beatmapSkin = null!;
+
+            AddStep("create a beatmap-folder skin", () =>
+            {
+                string osu = Path.Combine(dir, "map.osu");
+                File.WriteAllText(osu, "osu file format v14\n\n[General]\nMode: 3\n\n[Metadata]\nVersion:x\n");
+                beatmapSkin = new BeatmapFolderSkin(osu, resources, host);
+            });
+
+            AddAssert("it declines column width rather than claiming the default", () =>
+                beatmapSkin.GetConfig<LegacyManiaSkinConfigurationLookup, float>(
+                    new LegacyManiaSkinConfigurationLookup(4, LegacyManiaSkinConfigurationLookups.ColumnWidth, 0)) == null);
+
+            AddAssert("and declines hit position too", () =>
+                beatmapSkin.GetConfig<LegacyManiaSkinConfigurationLookup, float>(
+                    new LegacyManiaSkinConfigurationLookup(4, LegacyManiaSkinConfigurationLookups.HitPosition)) == null);
+
+            // The user's skin is what should be answering, and it still does.
+            createSkin();
+            AddAssert("so the user skin's own column width is what survives",
+                () => number(LegacyManiaSkinConfigurationLookups.ColumnWidth, 0) == 64 * 1.6f);
+        }
+
         // A legacy skin declaring "Version: 2.1" must report it: ruleset code branches on this to
         // choose between pre- and post-2.1 calibrations, and a skin that reports the decoder's 1.0
         // default silently gets the old behaviour everywhere.
