@@ -15,6 +15,16 @@ public class CachedBeatmapSet
     public string? BackgroundFile;         // from background event, if file exists
     public string? PreferredOsuFile;       // first Mode:0 diff, else first diff
 
+    /// <summary>
+    /// This set has no music file BY DESIGN — a keysound-only beatmap, whose entire soundtrack is
+    /// per-note hitsound samples and storyboard <c>Sample</c> events (see
+    /// <see cref="OsuFileScanner.IsVirtualAudioFilename"/>). Such a set is fully playable:
+    /// <see cref="Playback.PlaybackController"/> runs it on a silent track sized from the map's
+    /// own content, and <see cref="Screens.BeatmapVisuals"/> forces chart hitsounds on so it isn't
+    /// silent. <see cref="AudioFile"/> being null WITHOUT this flag is a genuinely broken set.
+    /// </summary>
+    public bool HasVirtualAudio;
+
     /// <summary>One entry per .osu file, in <see cref="OsuFiles"/> order. Only Mode 0 (osu!std)
     /// difficulties are chart-renderable; others still play audio/storyboard fine.</summary>
     public List<DifficultyInfo> Difficulties = new();

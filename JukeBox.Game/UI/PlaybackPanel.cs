@@ -66,6 +66,7 @@ public partial class PlaybackPanel : CompositeDrawable
     private QueueSection queueSection = null!;
     private OsuScrollContainer scroll = null!;
     private PlaybackSpeedSlider playbackRateRow = null!;
+    private SpriteText virtualAudioNote = null!;
 
     /// <summary>Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the tab's pieces,
     /// so tests can assert what this section contains without depending on its internal layout.</summary>
@@ -102,6 +103,16 @@ public partial class PlaybackPanel : CompositeDrawable
                     {
                         sectionHeader("Playback"),
                         nowPlaying = new NowPlayingPanel(),
+                        // Shown only for keysound-only sets, where "no music is playing" is the
+                        // correct state rather than a fault, and where hitsounds run regardless of
+                        // the setting. Alpha 0 keeps it out of the flow entirely otherwise.
+                        virtualAudioNote = new SpriteText
+                        {
+                            Text = "Keysounded map — no music track; hitsounds forced on",
+                            Font = FontUsage.Default.With(size: Theme.CaptionTextSize),
+                            Colour = Theme.TextTertiary,
+                            Alpha = 0,
+                        },
                         new Container
                         {
                             RelativeSizeAxes = Axes.X,
@@ -137,7 +148,13 @@ public partial class PlaybackPanel : CompositeDrawable
 
         // Session-only, like lazer's replay playback control (deliberately not persisted).
         playbackRateRow.Current = playback.PlaybackRate;
+
+        playback.Current.BindValueChanged(e => virtualAudioNote.Alpha = e.NewValue?.HasVirtualAudio == true ? 1 : 0, true);
     }
+
+    /// <summary>Test-only access (JukeBox.Game.Tests has InternalsVisibleTo): whether the
+    /// keysounded-map note is showing.</summary>
+    internal bool VirtualAudioNoteVisible => virtualAudioNote.Alpha > 0;
 
     /// <summary>
     /// The playback-speed row: lazer's <see cref="SettingsSlider{T}"/> with the live rate ("1.25×")
