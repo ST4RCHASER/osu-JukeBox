@@ -50,12 +50,12 @@ namespace JukeBox.Game.UI;
 /// revert-to-default arrow. Those components resolve an <see cref="OverlayColourProvider"/> —
 /// cached for this subtree with the same purple scheme lazer's own SettingsPanel caches.
 ///
-/// Every control binds a REAL config bindable, from one of four config sources:
+/// Every control binds a REAL config bindable, from one of three config sources:
 /// <see cref="JukeBoxConfigManager"/> (ours), <see cref="FrameworkConfigManager"/> (host-cached,
-/// always present), the lazer-side <see cref="OsuConfigManager"/> and the per-ruleset config
-/// managers via <see cref="IRulesetConfigCache"/> (both cached by JukeBoxGameBase). The lazer-side
-/// sections are simply omitted when those dependencies aren't cached (bare framework test scenes)
-/// rather than rendering dead controls.
+/// always present) and the lazer-side <see cref="OsuConfigManager"/> (cached by JukeBoxGameBase).
+/// The lazer-side sections are simply omitted when that dependency isn't cached (bare framework
+/// test scenes) rather than rendering dead controls. The per-ruleset config managers are no longer
+/// among them: the sections that bound those moved to <see cref="ChartPanel"/>.
 /// </summary>
 public partial class SettingsOverlay : FocusedOverlayContainer
 {
