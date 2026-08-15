@@ -160,6 +160,10 @@ public partial class MainScreen : Screen
     /// </summary>
     private BeatmapSearchEngine searchEngine = null!;
 
+    /// <summary>Hosts all three tab bodies at once. Held onto so <see cref="showTabBody"/> can put
+    /// the incoming one in FRONT — see its own remarks.</summary>
+    private Container tabBodies = null!;
+
     private RightPanelTabButton playbackTabButton = null!;
     private RightPanelTabButton chartTabButton = null!;
     private RightPanelTabButton settingsTabButton = null!;
@@ -380,7 +384,7 @@ public partial class MainScreen : Screen
                                 new Drawable[] { createTabHeader() },
                                 new Drawable[]
                                 {
-                                    new Container
+                                    tabBodies = new Container
                                     {
                                         RelativeSizeAxes = Axes.Both,
                                         Padding = new MarginPadding { Top = Theme.SectionSpacing },
@@ -674,11 +678,16 @@ public partial class MainScreen : Screen
 
         currentTab = tab;
 
-        double duration = animate ? Theme.DurationNormal : 0;
+        // A true crossfade rather than out-then-in: the two motions overlap, so the column is never
+        // momentarily empty. The exit is the FASTER of the two (DurationFast against the entry's
+        // DurationNormal) so the outgoing body is gone well before the incoming one settles, instead
+        // of the two sitting on top of each other for the whole transition.
+        double inDuration = animate ? Theme.DurationNormal : 0;
+        double outDuration = animate ? Theme.DurationFast : 0;
 
-        showTabBody(playbackPanel, tab == RightPanelTab.Playback, duration);
-        showTabBody(chartPanel, tab == RightPanelTab.Chart, duration);
-        showTabBody(settingsBody, tab == RightPanelTab.Settings, duration);
+        showTabBody(playbackPanel, tab == RightPanelTab.Playback, inDuration, outDuration);
+        showTabBody(chartPanel, tab == RightPanelTab.Chart, inDuration, outDuration);
+        showTabBody(settingsBody, tab == RightPanelTab.Settings, inDuration, outDuration);
 
         playbackTabButton.Active.Value = tab == RightPanelTab.Playback;
         chartTabButton.Active.Value = tab == RightPanelTab.Chart;
@@ -686,23 +695,36 @@ public partial class MainScreen : Screen
     }
 
     /// <summary>
-    /// Crossfades <paramref name="body"/> to <paramref name="active"/>; the incoming body also
-    /// slides in ~20px from the right so a tab switch reads as one directional motion rather than
-    /// a flat alpha cut.
+    /// Crossfades <paramref name="body"/> to <paramref name="active"/> as ONE panel replacing
+    /// another: the incoming slides in from the right (+<see cref="tab_slide_offset"/> → 0) while
+    /// the outgoing leaves to the left (0 → -<see cref="tab_slide_offset"/>) and fades. Both move
+    /// the same way, so the transition reads as the content travelling leftward rather than a new
+    /// panel arriving on top of one that never left.
+    ///
+    /// <para>
+    /// The incoming body is also brought to the FRONT. All three bodies live in one container, and
+    /// without this they are drawn in declaration order — so switching to a tab declared earlier
+    /// (Settings → Playback) put the arriving body UNDERNEATH the departing one, which is what made
+    /// the two look stacked mid-transition however they were faded. Depth 0 for the incoming and 1
+    /// for the rest is enough: exactly one body is ever incoming.
+    /// </para>
     /// </summary>
-    private static void showTabBody(Drawable body, bool active, double duration)
+    private void showTabBody(Drawable body, bool active, double inDuration, double outDuration)
     {
+        tabBodies.ChangeChildDepth(body, active ? 0 : 1);
+
         if (active)
         {
-            if (duration > 0)
+            if (inDuration > 0)
                 body.X = tab_slide_offset;
 
-            body.FadeIn(duration, Theme.EaseEnter);
-            body.MoveToX(0, duration, Theme.EaseEnter);
+            body.FadeIn(inDuration, Theme.EaseEnter);
+            body.MoveToX(0, inDuration, Theme.EaseEnter);
         }
         else
         {
-            body.FadeOut(duration, Theme.EaseExit);
+            body.FadeOut(outDuration, Theme.EaseExit);
+            body.MoveToX(-tab_slide_offset, outDuration, Theme.EaseExit);
         }
     }
 
