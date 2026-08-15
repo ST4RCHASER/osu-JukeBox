@@ -102,12 +102,17 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
     private Box scrim = null!;
     private Container panel = null!;
 
-    // Fetches read as real lazer spinners, never as text: the layer covers the grid while a FRESH
-    // search is in flight (everything below is about to be replaced), the footer spinner appears
-    // while a further page is appended (the cards on screen stay valid). Same split as the
-    // sidebar's.
-    private LoadingLayer freshLoadingLayer = null!;
+    // Fetches read as real lazer spinners, never as text, and neither is ever drawn over a card
+    // (see BeatmapListingOverlay for the same split): a FRESH search takes the grid away and spins
+    // centred in the space it left, a page append grows the grid by one spinner ROW at its end.
+    private FillFlowContainer resultsFlow = null!;
+    private Container appendSpinnerRow = null!;
     private LoadingSpinner appendSpinner = null!;
+    private LoadingSpinner freshSpinner = null!;
+
+    /// <summary>Height the "load more" row reserves at the end of the grid while a page is being
+    /// fetched.</summary>
+    private const float append_spinner_row_height = 52;
 
     // Lazer's REAL beatmap-listing filter rows (label-left + horizontal text tab items) — wired
     // both ways to the shared engine's raw bindables in LoadComplete, so selections here and the
@@ -146,6 +151,15 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
     /// listing panel, to assert the slide-up entrance / slide-down exit (its Y is offscreen-bottom
     /// while closed and 0 once the entrance settles).</summary>
     internal Container SlidePanel => panel;
+
+    /// <summary>Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the scrolled
+    /// column and the two spinners, so a test can assert the "load more" row really takes space
+    /// in the grid rather than floating over the cards.</summary>
+    internal FillFlowContainer ResultsFlow => resultsFlow;
+
+    internal LoadingSpinner AppendSpinner => appendSpinner;
+
+    internal LoadingSpinner FreshSpinner => freshSpinner;
 
     /// <summary>Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the currently
     /// expanded card (null when nothing is expanded) — there can only ever be one.</summary>
@@ -242,21 +256,40 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
                                                 scroll = new BasicScrollContainer
                                                 {
                                                     RelativeSizeAxes = Axes.Both,
-                                                    Child = cardsFlow = new CardFlow
+                                                    Child = resultsFlow = new FillFlowContainer
                                                     {
                                                         RelativeSizeAxes = Axes.X,
                                                         AutoSizeAxes = Axes.Y,
-                                                        Direction = FillDirection.Full,
+                                                        Direction = FillDirection.Vertical,
+                                                        Children = new Drawable[]
+                                                        {
+                                                            cardsFlow = new CardFlow
+                                                            {
+                                                                RelativeSizeAxes = Axes.X,
+                                                                AutoSizeAxes = Axes.Y,
+                                                                Direction = FillDirection.Full,
+                                                            },
+                                                            appendSpinnerRow = new Container
+                                                            {
+                                                                RelativeSizeAxes = Axes.X,
+                                                                Height = append_spinner_row_height,
+                                                                Alpha = 0,
+                                                                Child = appendSpinner = new LoadingSpinner
+                                                                {
+                                                                    Anchor = Anchor.Centre,
+                                                                    Origin = Anchor.Centre,
+                                                                    Size = new Vector2(28),
+                                                                },
+                                                            },
+                                                        },
                                                     },
                                                 },
-                                                appendSpinner = new LoadingSpinner
+                                                freshSpinner = new LoadingSpinner
                                                 {
-                                                    Anchor = Anchor.BottomCentre,
-                                                    Origin = Anchor.BottomCentre,
-                                                    Margin = new MarginPadding { Bottom = Theme.RowSpacing },
-                                                    Size = new Vector2(28),
+                                                    Anchor = Anchor.Centre,
+                                                    Origin = Anchor.Centre,
+                                                    Size = new Vector2(40),
                                                 },
-                                                freshLoadingLayer = new LoadingLayer(dimBackground: true),
                                             },
                                         },
                                     },
@@ -351,14 +384,21 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
     private void updateLoadingSpinners()
     {
         bool loading = engine.IsLoading.Value;
-        bool fresh = engine.LoadingFresh.Value;
+        bool fresh = loading && engine.LoadingFresh.Value;
+        bool appending = loading && !engine.LoadingFresh.Value;
 
-        if (loading && fresh)
-            freshLoadingLayer.Show();
+        scroll.Alpha = fresh ? 0 : 1;
+
+        if (fresh)
+            freshSpinner.Show();
         else
-            freshLoadingLayer.Hide();
+            freshSpinner.Hide();
 
-        if (loading && !fresh)
+        // Presence first, then the spinner's own entrance — see the sidebar's copy of this for
+        // why a fade started inside a non-present parent never progresses.
+        appendSpinnerRow.Alpha = appending ? 1 : 0;
+
+        if (appending)
             appendSpinner.Show();
         else
             appendSpinner.Hide();

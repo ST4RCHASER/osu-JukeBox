@@ -87,6 +87,7 @@ namespace JukeBox.Game.Tests.Visual
                 requestedPreviewUrls.Clear();
                 previewHandles.Clear();
                 mirror.Sets.Clear();
+                mirror.Gate = null;
                 mirror.Sets.AddRange(defaultSets());
 
                 if (playback.IsPlaying)
@@ -236,6 +237,32 @@ namespace JukeBox.Game.Tests.Visual
                 var flowWidth = fullscreen.ChildrenOfType<FillFlowContainer<FullscreenBeatmapCard>>().Single().DrawWidth;
                 return cards.All(c => Math.Abs(c.Width - flowWidth / 3) < 0.5f);
             });
+        }
+
+        // The grid gets the same spinner placement as the sidebar (see
+        // TestSceneBeatmapListing.LoadMoreSpinnerTakesItsOwnRowAndNeverOverlapsACard for the bug
+        // this guards): a fresh fetch takes the grid away and spins in the space it left, so no
+        // spinner is ever drawn over a card here either.
+        [Test]
+        public void FreshFetchTakesTheGridAwayRatherThanSpinningOverIt()
+        {
+            var gate = new TaskCompletionSource<bool>();
+
+            AddStep("gate the mirror", () => mirror.Gate = gate);
+            AddStep("open seeded with 'a'", () => fullscreen.ShowWithInitialChar('a'));
+
+            AddUntilStep("fresh spinner spinning", () => fullscreen.FreshSpinner.State.Value == Visibility.Visible);
+            AddAssert("grid taken away, nothing to spin over", () =>
+                !fullscreen.ChildrenOfType<BasicScrollContainer>().First().IsPresent);
+            AddAssert("no card is on screen to overlap", () => !fullscreen.ChildrenOfType<FullscreenBeatmapCard>().Any());
+
+            AddStep("release the gate", () => gate.SetResult(true));
+
+            AddUntilStep("cards shown", () => fullscreen.ChildrenOfType<FullscreenBeatmapCard>().Count() == 3);
+            AddUntilStep("fresh spinner gone", () => fullscreen.FreshSpinner.State.Value == Visibility.Hidden);
+            AddAssert("the append row is collapsed, so the grid ends at its last card", () =>
+                Math.Abs(fullscreen.ResultsFlow.DrawHeight
+                         - fullscreen.ChildrenOfType<FillFlowContainer<FullscreenBeatmapCard>>().Single().DrawHeight) < 0.5f);
         }
 
         [Test]
@@ -504,8 +531,17 @@ namespace JukeBox.Game.Tests.Visual
 
             public List<BeatmapSetInfo> Sets { get; } = new();
 
-            public Task<List<BeatmapSetInfo>> SearchAsync(SearchRequest request, CancellationToken ct = default)
-                => Task.FromResult(new List<BeatmapSetInfo>(Sets));
+            /// <summary>When set, responses block on this until the test releases it — for the
+            /// spinner-placement coverage, which needs a fetch held in flight.</summary>
+            public TaskCompletionSource<bool>? Gate;
+
+            public async Task<List<BeatmapSetInfo>> SearchAsync(SearchRequest request, CancellationToken ct = default)
+            {
+                if (Gate != null)
+                    await Gate.Task.ConfigureAwait(false);
+
+                return new List<BeatmapSetInfo>(Sets);
+            }
 
             public Task DownloadAsync(int setId, bool noVideo, Stream destination, CancellationToken ct = default, DownloadProgressCallback? progress = null)
                 => throw new NotSupportedException("not exercised by this test scene");
