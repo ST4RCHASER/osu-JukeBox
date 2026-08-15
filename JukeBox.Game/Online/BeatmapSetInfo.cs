@@ -80,4 +80,13 @@ public class BeatmapInfo
     public string Version { get; set; } = "";
     public double DifficultyRating { get; set; }
     public int TotalLength { get; set; }
+
+    /// <summary>
+    /// osu-web's <c>checksum</c>: the MD5 of this difficulty's CANONICAL .osu file, i.e. the one
+    /// osu! itself hashes and the one a replay records. Deliberately not assumed to match the file
+    /// in our cache: mirrors that repack an archive (NeriNyan rewrites .osu files when serving a
+    /// no-video download) change those bytes and therefore their MD5, while this value keeps
+    /// naming the difficulty a replay means. See the replay import's difficulty resolution.
+    /// </summary>
+    public string Checksum { get; set; } = "";
 }

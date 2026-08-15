@@ -23,8 +23,54 @@ namespace JukeBox.Game.Online
 
         public async Task<List<BeatmapSetInfo>> SearchAsync(SearchRequest request, CancellationToken ct = default)
         {
+            if (request.Option == SearchRequest.CHECKSUM_OPTION)
+                return await searchByChecksumAsync(request.Query, ct).ConfigureAwait(false);
+
             string json = await http.GetStringAsync(BuildSearchUrl(request), ct).ConfigureAwait(false);
             return parseSets(json);
+        }
+
+        /// <summary>
+        /// Resolves an .osu file's MD5 to the beatmapset containing it — what a dropped replay
+        /// needs, since a replay identifies its beatmap by checksum and nothing else.
+        ///
+        /// <para>
+        /// Two hops, because <c>/md5/{hash}</c> answers with the single DIFFICULTY that matches and
+        /// the app deals in sets: the difficulty's <c>beatmapset_id</c> is then fetched through
+        /// <c>/s/{id}</c>, which returns the same set schema the search endpoint does. An unknown
+        /// hash (404) is an answer, not a failure, so it comes back as no results rather than an
+        /// exception — a throw would read to <see cref="MirrorChain"/> as "this mirror is broken".
+        /// </para>
+        /// </summary>
+        private async Task<List<BeatmapSetInfo>> searchByChecksumAsync(string md5, CancellationToken ct)
+        {
+            using var beatmapResponse = await http.GetAsync($"{API_BASE}/md5/{Uri.EscapeDataString(md5)}", ct).ConfigureAwait(false);
+
+            if (beatmapResponse.StatusCode == System.Net.HttpStatusCode.NotFound)
+                return new List<BeatmapSetInfo>();
+
+            beatmapResponse.EnsureSuccessStatusCode();
+
+            string beatmapJson = await beatmapResponse.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+
+            using var beatmapDoc = JsonDocument.Parse(beatmapJson);
+
+            if (!beatmapDoc.RootElement.TryGetProperty("beatmapset_id", out var setIdElement)
+                || !setIdElement.TryGetInt32(out int setId))
+            {
+                return new List<BeatmapSetInfo>();
+            }
+
+            using var setResponse = await http.GetAsync($"{API_BASE}/s/{setId}", ct).ConfigureAwait(false);
+
+            if (setResponse.StatusCode == System.Net.HttpStatusCode.NotFound)
+                return new List<BeatmapSetInfo>();
+
+            setResponse.EnsureSuccessStatusCode();
+
+            // A single set object, wrapped so the shared list parser can read it.
+            string setJson = await setResponse.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            return BeatmapSetInfo.ParseList($"[{setJson}]");
         }
 
         public async Task DownloadAsync(int setId, bool noVideo, Stream destination, CancellationToken ct = default, DownloadProgressCallback? progress = null)

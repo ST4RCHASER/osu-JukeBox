@@ -23,6 +23,14 @@ namespace JukeBox.Game.Online
 
         public async Task<List<BeatmapSetInfo>> SearchAsync(SearchRequest request, CancellationToken ct = default)
         {
+            // This mirror has no checksum route (its /md5/ 404s as "not found", and its text search
+            // matches metadata, so an MD5 query returns a cheerful empty list). Refusing outright
+            // is the difference that matters to MirrorChain: it moves on to a mirror that CAN
+            // answer, instead of accepting "no results" as the final word on whether the beatmap
+            // a dropped replay names exists at all.
+            if (request.Option == SearchRequest.CHECKSUM_OPTION)
+                throw new NotSupportedException($"{Name} cannot look a beatmap up by checksum");
+
             string json = await http.GetStringAsync(BuildSearchUrl(request), ct).ConfigureAwait(false);
             return parseSets(json);
         }
