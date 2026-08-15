@@ -133,17 +133,22 @@ namespace JukeBox.Game.Tests.Visual
         [Test]
         public void HoveringRevealsAHandleThatCanStartADrag()
         {
-            AddAssert("the handle is hidden at rest", () => handleOf(rows()[0]).Alpha == 0);
+            // Captured once: re-querying the live list on every step makes the test depend on the
+            // queue still holding the same rows, which is not what it is about.
+            QueuePanel.QueueRow row = null!;
+            AddStep("take the first row", () => row = rows()[0]);
 
-            AddStep("hover the first card", () => InputManager.MoveMouseTo(cardOf(rows()[0])));
+            AddAssert("the handle is hidden at rest", () => handleOf(row).Alpha == 0);
 
-            AddUntilStep("the handle faded in", () => handleOf(rows()[0]).Alpha == 1);
+            AddStep("hover the first card", () => InputManager.MoveMouseTo(cardOf(row)));
+
+            AddUntilStep("the handle faded in", () => handleOf(row).Alpha == 1);
 
             AddAssert("and the list will start a drag from it",
-                () => rows()[0].CanBeDraggedAt(handleOf(rows()[0]).ScreenSpaceDrawQuad.Centre));
+                () => row.CanBeDraggedAt(handleOf(row).ScreenSpaceDrawQuad.Centre));
 
             AddAssert("but not from the middle of the card",
-                () => !rows()[0].CanBeDraggedAt(cardOf(rows()[0]).ScreenSpaceDrawQuad.Centre));
+                () => !row.CanBeDraggedAt(cardOf(row).ScreenSpaceDrawQuad.Centre));
 
             AddStep("stop hovering", () => InputManager.MoveMouseTo(uiContainer.ScreenSpaceDrawQuad.TopRight + new osuTK.Vector2(50, 0)));
         }
@@ -152,14 +157,17 @@ namespace JukeBox.Game.Tests.Visual
         [Test]
         public void TheTwoActionsAreStackedVertically()
         {
-            AddStep("hover the first card", () => InputManager.MoveMouseTo(cardOf(rows()[0])));
-            AddUntilStep("buttons visible", () => buttonsOf(rows()[0]).All(b => b.Alpha == 1));
+            QueuePanel.QueueRow row = null!;
+            AddStep("take the first row", () => row = rows()[0]);
 
-            AddAssert("there are exactly two", () => buttonsOf(rows()[0]).Length == 2);
+            AddStep("hover the first card", () => InputManager.MoveMouseTo(cardOf(row)));
+            AddUntilStep("buttons visible", () => buttonsOf(row).All(b => b.Alpha == 1));
+
+            AddAssert("there are exactly two", () => buttonsOf(row).Length == 2);
 
             AddAssert("play sits ABOVE remove, not beside it", () =>
             {
-                var buttons = buttonsOf(rows()[0]);
+                var buttons = buttonsOf(row);
                 var play = buttons[0].ScreenSpaceDrawQuad;
                 var remove = buttons[1].ScreenSpaceDrawQuad;
 
@@ -168,13 +176,13 @@ namespace JukeBox.Game.Tests.Visual
                        && System.Math.Abs(play.Centre.X - remove.Centre.X) < 1f;
             });
 
-            AddAssert("both stay comfortably clickable", () => buttonsOf(rows()[0]).All(b => b.DrawWidth >= 20 && b.DrawHeight >= 20));
+            AddAssert("both stay comfortably clickable", () => buttonsOf(row).All(b => b.DrawWidth >= 20 && b.DrawHeight >= 20));
 
             AddAssert("and they sit at the card's right edge", () =>
             {
-                float cardRight = cardOf(rows()[0]).ScreenSpaceDrawQuad.TopRight.X;
+                float cardRight = cardOf(row).ScreenSpaceDrawQuad.TopRight.X;
 
-                return buttonsOf(rows()[0]).All(b => b.ScreenSpaceDrawQuad.TopRight.X <= cardRight + 0.5f
+                return buttonsOf(row).All(b => b.ScreenSpaceDrawQuad.TopRight.X <= cardRight + 0.5f
                                                      && b.ScreenSpaceDrawQuad.TopRight.X > cardRight - 40);
             });
         }
@@ -183,24 +191,30 @@ namespace JukeBox.Game.Tests.Visual
         [Test]
         public void BothStackedActionsStillFire()
         {
-            AddStep("hover the second card", () => InputManager.MoveMouseTo(cardOf(rows()[1])));
-            AddUntilStep("buttons visible", () => buttonsOf(rows()[1]).All(b => b.Alpha == 1));
+            QueuePanel.QueueRow second = null!;
+            AddStep("take the second row", () => second = rows()[1]);
+
+            AddStep("hover the second card", () => InputManager.MoveMouseTo(cardOf(second)));
+            AddUntilStep("buttons visible", () => buttonsOf(second).All(b => b.Alpha == 1));
 
             AddStep("click remove", () =>
             {
-                InputManager.MoveMouseTo(buttonsOf(rows()[1])[1]);
+                InputManager.MoveMouseTo(buttonsOf(second)[1]);
                 InputManager.Click(MouseButton.Left);
             });
 
             AddUntilStep("that set left the queue", () => queue.Items.All(i => i.Id != 2));
             AddUntilStep("and its row went with it", () => rows().Length == 2);
 
-            AddStep("hover what is now the second card", () => InputManager.MoveMouseTo(cardOf(rows()[1])));
-            AddUntilStep("buttons visible", () => buttonsOf(rows()[1]).All(b => b.Alpha == 1));
+            QueuePanel.QueueRow nowSecond = null!;
+            AddStep("take what is now the second row", () => nowSecond = rows()[1]);
+
+            AddStep("hover what is now the second card", () => InputManager.MoveMouseTo(cardOf(nowSecond)));
+            AddUntilStep("buttons visible", () => buttonsOf(nowSecond).All(b => b.Alpha == 1));
 
             AddStep("click play", () =>
             {
-                InputManager.MoveMouseTo(buttonsOf(rows()[1])[0]);
+                InputManager.MoveMouseTo(buttonsOf(nowSecond)[0]);
                 InputManager.Click(MouseButton.Left);
             });
 
@@ -216,16 +230,19 @@ namespace JukeBox.Game.Tests.Visual
         {
             AddAssert("starts in queue order", () => queue.Items.Select(i => i.Id).SequenceEqual(new[] { 1, 2, 3 }));
 
-            AddStep("hover the first card", () => InputManager.MoveMouseTo(cardOf(rows()[0])));
-            AddUntilStep("the handle faded in", () => handleOf(rows()[0]).Alpha == 1);
+            QueuePanel.QueueRow first = null!;
+            AddStep("take the first row", () => first = rows()[0]);
+
+            AddStep("hover the first card", () => InputManager.MoveMouseTo(cardOf(first)));
+            AddUntilStep("the handle faded in", () => handleOf(first).Alpha == 1);
 
             AddStep("press on the handle", () =>
             {
-                InputManager.MoveMouseTo(handleOf(rows()[0]));
+                InputManager.MoveMouseTo(handleOf(first));
                 InputManager.PressButton(MouseButton.Left);
             });
 
-            AddStep("drag it past the third row", () => InputManager.MoveMouseTo(cardOf(rows()[2]).ScreenSpaceDrawQuad.Centre));
+            AddStep("drag it past the third row", () => InputManager.MoveMouseTo(rows()[2].ScreenSpaceDrawQuad.Centre));
             AddStep("release", () => InputManager.ReleaseButton(MouseButton.Left));
 
             AddUntilStep("the first set moved down the queue", () => queue.Items.First().Id != 1);
