@@ -11,13 +11,15 @@ using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Shapes;
 using osu.Framework.Graphics.Sprites;
 using osu.Framework.Input.Events;
+using osu.Game.Graphics.UserInterface;
 using osuTK;
 
 namespace JukeBox.Game.UI;
 
 /// <summary>
-/// Queue list: a "Queue (N)" header and one removable row per <see cref="MusicQueue.Items"/> entry,
-/// rebuilt whenever the list changes. Two presentations, chosen by the constructor:
+/// Queue list: a "Queue (N)" header and one removable row per <see cref="MusicQueue.Items"/> entry
+/// (see <see cref="QueueRow"/> for the row's own design), rebuilt whenever the list changes. Two
+/// presentations, chosen by the constructor:
 ///
 /// <list type="bullet">
 /// <item>Floating (default, <c>docked: false</c>) — a right-anchored drawer, off-screen (past its
@@ -47,7 +49,7 @@ public partial class QueuePanel : CompositeDrawable
     private MusicQueue queue { get; set; } = null!;
 
     // canBeNull: not every host of this panel caches a BeatmapCache (e.g. some test scenes don't
-    // need real caching wired up at all) — rows just hide their status text when this is null.
+    // need real caching wired up at all) — rows then simply never show download progress.
     [Resolved(canBeNull: true)]
     private BeatmapCache? cache { get; set; }
 
@@ -87,10 +89,18 @@ public partial class QueuePanel : CompositeDrawable
     internal float ContentHeight => contentFlow.DrawHeight + contentPadding * 2;
 
     /// <summary>
-    /// Test-only: the row at <paramref name="index"/>'s current status text ("ready",
-    /// "downloading…", "waiting", or empty when no <see cref="BeatmapCache"/> is resolved).
+    /// Test-only: the row at <paramref name="index"/>'s download percentage ("42%"), or empty when
+    /// that row isn't downloading or its download has no known total (see
+    /// <see cref="Beatmaps.DownloadProgress.Indeterminate"/>).
     /// </summary>
-    internal string StatusTextAt(int index) => ((QueueRow)rowsFlow.Children[index]).StatusText;
+    internal string ProgressTextAt(int index) => ((QueueRow)rowsFlow.Children[index]).ProgressText;
+
+    /// <summary>Test-only: the 0..1 fill of the row at <paramref name="index"/>'s progress bar.</summary>
+    internal float ProgressFillAt(int index) => ((QueueRow)rowsFlow.Children[index]).ProgressFill;
+
+    /// <summary>Test-only: whether the row at <paramref name="index"/> is showing the indeterminate
+    /// <see cref="LoadingSpinner"/> rather than a percentage.</summary>
+    internal bool SpinnerShownAt(int index) => ((QueueRow)rowsFlow.Children[index]).SpinnerShown;
 
     /// <summary>
     /// Test-only: clicks the ✕ button on the row at <paramref name="index"/>, exercising the same
@@ -256,24 +266,44 @@ public partial class QueuePanel : CompositeDrawable
         }
     }
 
+    /// <summary>
+    /// One queued set, drawn in the same language as <see cref="BeatmapCard"/>'s compact variant —
+    /// cover thumb on the left, then title / artist / "mapped by X" — minus that card's status pill
+    /// and difficulty dots, which say nothing about a set you have already decided to play. The
+    /// right edge carries this row's download feedback (see <see cref="updateProgress"/>) and the ✕
+    /// that drops the set from the queue.
+    /// </summary>
     private partial class QueueRow : CompositeDrawable
     {
-        // Polling a dict lookup + a directory scan every frame per row is cheap at queue scale,
-        // but there's no need to do it 60 times a second either — throttled to roughly twice a
-        // second, which is plenty responsive for a status label a human is watching.
-        private const int poll_interval_frames = 30;
-
         private const float slide_offset = 16;
-        private const float row_height = 32;
+        private const float row_height = 56;
+        private const float thumb_size = 44;
+        private const float thumb_margin = 6;
+
+        /// <summary>Right inset of the text block with only the ✕ to clear.</summary>
+        private const float text_inset_idle = 34;
+
+        /// <summary>Right inset of the text block while a percentage/spinner also sits there.</summary>
+        private const float text_inset_downloading = 82;
+
+        private const float progress_bar_height = 3;
 
         private readonly BeatmapSetInfo set;
         private readonly BeatmapCache? cache;
         private readonly IconButton removeButton;
-        private readonly SpriteText statusText;
         private readonly Box surface;
+        private readonly Container textBlock;
+        private readonly SpriteText percentText;
+        private readonly LoadingSpinner spinner;
+        private readonly Container progressBar;
+        private readonly Box progressFill;
 
-        private int framesSincePoll;
         private bool ready;
+
+        /// <summary>Last state pushed into the drawables below, so <see cref="updateProgress"/> —
+        /// which runs every frame — only touches them when something actually changed (a
+        /// <see cref="SpriteText"/> re-lays out its glyphs on every write to <c>Text</c>).</summary>
+        private DownloadProgress? lastProgress;
 
         public QueueRow(BeatmapSetInfo set, BeatmapCache? cache, System.Action onRemove)
         {
@@ -299,22 +329,98 @@ public partial class QueuePanel : CompositeDrawable
                     RelativeSizeAxes = Axes.Both,
                     Colour = Theme.PanelSurface,
                 },
-                new SpriteText
+                new CoverThumbnail(set.Id, cornerRadius: 5)
                 {
                     Anchor = Anchor.CentreLeft,
                     Origin = Anchor.CentreLeft,
-                    Position = new Vector2(8, 0),
-                    Font = FontUsage.Default.With(size: Theme.RowSecondaryTextSize),
-                    Colour = Theme.TextPrimary,
-                    Text = $"{set.DisplayTitle} — {set.DisplayArtist}",
+                    Size = new Vector2(thumb_size),
+                    Margin = new MarginPadding { Left = thumb_margin },
                 },
-                statusText = new SpriteText
+                // Padding (rather than a positioned child) reserves the thumbnail's column and the
+                // right-hand controls' room: the text inside is relatively sized and truncating, so
+                // it needs a parent whose width is already the space actually left for it.
+                textBlock = new Container
+                {
+                    RelativeSizeAxes = Axes.Both,
+                    Padding = new MarginPadding
+                    {
+                        Left = thumb_margin + thumb_size + 10,
+                        Right = text_inset_idle,
+                    },
+                    Child = new FillFlowContainer
+                    {
+                        Anchor = Anchor.CentreLeft,
+                        Origin = Anchor.CentreLeft,
+                        RelativeSizeAxes = Axes.X,
+                        AutoSizeAxes = Axes.Y,
+                        Direction = FillDirection.Vertical,
+                        Spacing = new Vector2(0, 1),
+                        Children = new Drawable[]
+                        {
+                            new SpriteText
+                            {
+                                RelativeSizeAxes = Axes.X,
+                                Truncate = true,
+                                Font = FontUsage.Default.With(family: "Roboto", weight: "Bold", size: Theme.RowSecondaryTextSize),
+                                Colour = Theme.TextPrimary,
+                                Text = set.DisplayTitle,
+                            },
+                            new SpriteText
+                            {
+                                RelativeSizeAxes = Axes.X,
+                                Truncate = true,
+                                Font = FontUsage.Default.With(size: Theme.CaptionTextSize),
+                                Colour = Theme.TextSecondary,
+                                Text = set.DisplayArtist,
+                            },
+                            new SpriteText
+                            {
+                                RelativeSizeAxes = Axes.X,
+                                Truncate = true,
+                                Font = FontUsage.Default.With(size: Theme.CaptionTextSize - 1),
+                                Colour = Theme.TextTertiary,
+                                Text = $"mapped by {set.Creator}",
+                            },
+                        },
+                    },
+                },
+                percentText = new SpriteText
                 {
                     Anchor = Anchor.CentreRight,
                     Origin = Anchor.CentreRight,
-                    Position = new Vector2(-32, 0),
+                    Position = new Vector2(-text_inset_idle, 0),
                     Font = FontUsage.Default.With(size: Theme.CaptionTextSize),
-                    Colour = Theme.TextTertiary,
+                    Colour = Theme.Accent,
+                    Alpha = 0,
+                },
+                spinner = new LoadingSpinner
+                {
+                    Anchor = Anchor.CentreRight,
+                    Origin = Anchor.CentreRight,
+                    Position = new Vector2(-text_inset_idle - 4, 0),
+                    Size = new Vector2(18),
+                },
+                progressBar = new Container
+                {
+                    Anchor = Anchor.BottomLeft,
+                    Origin = Anchor.BottomLeft,
+                    RelativeSizeAxes = Axes.X,
+                    Height = progress_bar_height,
+                    Alpha = 0,
+                    Children = new Drawable[]
+                    {
+                        new Box
+                        {
+                            RelativeSizeAxes = Axes.Both,
+                            Colour = Theme.ElevatedSurface,
+                        },
+                        progressFill = new Box
+                        {
+                            RelativeSizeAxes = Axes.Both,
+                            Width = 0,
+                            Colour = Theme.Accent,
+                        },
+                    },
                 },
                 removeButton = new IconButton
                 {
@@ -327,14 +433,13 @@ public partial class QueuePanel : CompositeDrawable
                     Alpha = 0,
                 }
             };
-
-            updateStatus();
         }
 
         protected override void LoadComplete()
         {
             base.LoadComplete();
             ready = true;
+            updateProgress();
         }
 
         /// <summary>Fades + slides the row in from the side — called once, right after this row
@@ -380,38 +485,66 @@ public partial class QueuePanel : CompositeDrawable
                 removeButton.Alpha = alpha;
         }
 
+        // Polled rather than pushed: BeatmapCache reports progress from whichever thread is
+        // draining the mirror response, so a push would have to marshal onto the update thread per
+        // chunk (thousands of scheduled callbacks per download). Reading the snapshot here instead
+        // costs one lock-free dictionary lookup per row per frame — and unlike the status text this
+        // replaced, there's no directory scan behind it, so it needs no frame throttle either.
         protected override void Update()
         {
             base.Update();
 
-            if (cache == null)
-                return;
-
-            if (framesSincePoll++ < poll_interval_frames)
-                return;
-
-            framesSincePoll = 0;
-            updateStatus();
+            if (cache != null)
+                updateProgress();
         }
 
-        private void updateStatus()
+        /// <summary>
+        /// Shows this row's download state: a bottom-edge bar filled to the fraction downloaded
+        /// plus a percentage when the mirror advertised a total, or a <see cref="LoadingSpinner"/>
+        /// when it didn't (see <see cref="DownloadProgress.Indeterminate"/>). Nothing at all when
+        /// the set isn't downloading — a queued set that is merely waiting its turn, or one already
+        /// cached, needs no ornament.
+        /// </summary>
+        private void updateProgress()
         {
-            bool isCached = cache != null && cache.IsCached(set.Id);
-            bool downloading = cache != null && cache.IsDownloading(set.Id);
+            DownloadProgress? current = cache != null && cache.TryGetDownloadProgress(set.Id, out var progress)
+                ? progress
+                : null;
 
-            statusText.Text = cache == null
-                ? string.Empty
-                : isCached
-                    ? "ready"
-                    : downloading
-                        ? "downloading…"
-                        : "waiting";
+            if (current == lastProgress)
+                return;
 
-            statusText.Colour = isCached ? Theme.Accent : Theme.TextTertiary;
+            lastProgress = current;
+
+            bool determinate = current is { Indeterminate: false };
+
+            textBlock.Padding = textBlock.Padding with
+            {
+                Right = current == null ? text_inset_idle : text_inset_downloading,
+            };
+
+            progressBar.Alpha = determinate ? 1 : 0;
+            progressFill.Width = determinate ? (float)current!.Value.Value : 0;
+
+            percentText.Alpha = determinate ? 1 : 0;
+
+            if (determinate)
+                percentText.Text = $"{current!.Value.Value * 100:0}%";
+
+            // LoadingSpinner is a VisibilityContainer — it spins/fades itself in and out through
+            // Show()/Hide() rather than a raw Alpha write.
+            if (current is { Indeterminate: true })
+                spinner.Show();
+            else
+                spinner.Hide();
         }
 
         public void TriggerRemove() => removeButton.TriggerClick();
 
-        internal string StatusText => statusText.Text.ToString();
+        internal string ProgressText => percentText.Alpha > 0 ? percentText.Text.ToString() : string.Empty;
+
+        internal float ProgressFill => progressBar.Alpha > 0 ? progressFill.Width : 0;
+
+        internal bool SpinnerShown => spinner.State.Value == Visibility.Visible;
     }
 }
