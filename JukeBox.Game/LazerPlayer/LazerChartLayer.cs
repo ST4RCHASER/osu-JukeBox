@@ -191,7 +191,11 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
         SelectedSkin = selectedChoice;
         osu.Framework.Logging.Logger.Log($"[LazerChartLayer] building {ruleset.ShortName} chart with skin: {selectedChoice}");
 
-        var selected = SkinSelection.CreateSkin(selectedChoice, resourceProvider);
+        // Routed through the service (not the static) so JukeBoxSkin.Custom can resolve the
+        // user-imported .osk folder, which needs storage access this layer has no business doing.
+        // With no service cached (bare test scenes) the choice is always Argon anyway.
+        var selected = skinSelection?.CreateEffectiveSkin(resourceProvider)
+                       ?? SkinSelection.CreateSkin(selectedChoice, resourceProvider);
         var rulesetResources = new ResourceStoreBackedSkin(ruleset.CreateResourceStore(), host, audio);
         ownedSkins.Add(selected);
         ownedSkins.Add(rulesetResources);

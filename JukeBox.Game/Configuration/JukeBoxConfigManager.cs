@@ -86,6 +86,15 @@ public enum JukeBoxSetting
     /// same sync feed, so this is a mirror, not a second player.
     /// </summary>
     DetachPlayOnMain,
+    /// <summary>
+    /// Folder NAME (not a full path) of the user-imported legacy skin under the app storage's
+    /// <c>skins/</c> directory — written when a .osk is dragged onto the window (see
+    /// <see cref="Import.SkinArchive"/>), read by <see cref="LazerPlayer.SkinSelection"/> whenever
+    /// <see cref="Skin"/> is <see cref="JukeBoxSkin.Custom"/>. A name rather than an absolute path
+    /// so the choice survives the storage directory itself moving (a different OS user, a portable
+    /// install). Empty means nothing has been imported, in which case Custom degrades to Argon.
+    /// </summary>
+    CustomSkinPath,
 }
 
 /// <summary>
@@ -129,7 +138,9 @@ public enum FpsDisplayMode
 /// The bundled lazer skin driving the gameplay chart renderer. All four concrete entries are the
 /// skins constructible without a realm-backed SkinManager in ppy.osu.Game 2026.730.0 (each has an
 /// IStorageResourceProvider-only constructor); there is no bundled "retro" skin in that package.
-/// <see cref="Random"/> re-rolls one of the four concrete skins on every song change.
+/// <see cref="Random"/> re-rolls one of the four concrete skins on every song change, and
+/// <see cref="Custom"/> selects whatever legacy skin the user last imported by dropping a .osk
+/// (see <see cref="JukeBoxSetting.CustomSkinPath"/>).
 /// </summary>
 public enum JukeBoxSkin
 {
@@ -143,6 +154,16 @@ public enum JukeBoxSkin
 
     [System.ComponentModel.Description("<Random Skin>")]
     Random,
+
+    /// <summary>
+    /// The user's imported .osk, resolved through <see cref="JukeBoxSetting.CustomSkinPath"/>.
+    /// Selectable with nothing imported (the dropdown lists every enum member), in which case it
+    /// degrades to <see cref="Argon"/> rather than rendering nothing — see
+    /// <c>SkinSelection.CreateEffectiveSkin</c>. Never rolled by <see cref="Random"/>: a random
+    /// skin should stay predictable across machines, and it may not resolve at all.
+    /// </summary>
+    [System.ComponentModel.Description("Custom (imported)")]
+    Custom,
 }
 
 /// <summary>
@@ -196,5 +217,6 @@ public class JukeBoxConfigManager : IniConfigManager<JukeBoxSetting>
         SetDefault(JukeBoxSetting.PlayfieldZoom, 1.0, 0.01, 2.0);
         SetDefault(JukeBoxSetting.DetachPlayer, false);
         SetDefault(JukeBoxSetting.DetachPlayOnMain, false);
+        SetDefault(JukeBoxSetting.CustomSkinPath, string.Empty);
     }
 }

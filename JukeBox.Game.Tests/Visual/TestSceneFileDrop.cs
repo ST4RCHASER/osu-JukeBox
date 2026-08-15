@@ -8,7 +8,9 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using JukeBox.Game.Beatmaps;
+using JukeBox.Game.Configuration;
 using JukeBox.Game.Import;
+using JukeBox.Game.LazerPlayer;
 using JukeBox.Game.Online;
 using JukeBox.Game.Playback;
 using NUnit.Framework;
@@ -16,6 +18,7 @@ using osu.Framework.Allocation;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Testing;
+using osu.Game.IO;
 
 namespace JukeBox.Game.Tests.Visual
 {
@@ -100,6 +103,29 @@ namespace JukeBox.Game.Tests.Visual
 
         private string lastMessage => importer.Notification.Value?.Message ?? string.Empty;
 
+        // Config, the skin service and the lazer resource provider all come from the test runner
+        // (JukeBoxGameBase), which caches exactly what the real game does.
+        [Resolved]
+        private JukeBoxConfigManager config { get; set; } = null!;
+
+        [Resolved]
+        private SkinSelection skinSelection { get; set; } = null!;
+
+        [Resolved]
+        private IStorageResourceProvider skinResources { get; set; } = null!;
+
+        private string makeOsk(string name)
+        {
+            string build = Path.Combine(tmp, "build_" + name);
+            Directory.CreateDirectory(build);
+            File.WriteAllText(Path.Combine(build, "skin.ini"), $"[General]\nName: {name}\nVersion: 2.5\n");
+            File.WriteAllBytes(Path.Combine(build, "cursor.png"), new byte[] { 0x89, 0x50 });
+
+            string osk = Path.Combine(tmp, name + ".osk");
+            ZipFile.CreateFromDirectory(build, osk);
+            return osk;
+        }
+
         [Test]
         public void DroppingAnOszCachesQueuesAndPlaysIt()
         {
@@ -143,6 +169,76 @@ namespace JukeBox.Game.Tests.Visual
 
             AddUntilStep("toast reports the imported title", () => lastMessage == "Added: Unsubmitted");
             AddUntilStep("plays under a synthetic local (negative) id", () => playback.Current.Value?.SetId < 0);
+        }
+
+        [Test]
+        public void DroppingAnOskImportsItSelectsItAndPersistsTheChoice()
+        {
+            string osk = null!;
+            var originalSkin = JukeBoxSkin.Argon;
+            string originalCustom = string.Empty;
+
+            AddStep("remember the current skin settings", () =>
+            {
+                // This fixture shares the test runner's real config manager with every other
+                // fixture in the run, so the selection is put back before leaving.
+                originalSkin = config.Get<JukeBoxSkin>(JukeBoxSetting.Skin);
+                originalCustom = config.Get<string>(JukeBoxSetting.CustomSkinPath);
+            });
+
+            AddStep("build a .osk fixture", () => osk = makeOsk("DropTestSkin"));
+            AddStep("drop it", () => importer.Import(osk));
+
+            AddUntilStep("toast names the imported skin", () => lastMessage == "Skin applied: DropTestSkin");
+            AddAssert("Custom is the persisted choice", () => config.Get<JukeBoxSkin>(JukeBoxSetting.Skin) == JukeBoxSkin.Custom);
+            AddAssert("the imported folder is the persisted path", () => config.Get<string>(JukeBoxSetting.CustomSkinPath) == "DropTestSkin");
+
+            AddAssert("the skin service resolves it", () => skinSelection.Effective.Value == JukeBoxSkin.Custom
+                                                            && skinSelection.CustomSkinDirectory != null
+                                                            && File.Exists(Path.Combine(skinSelection.CustomSkinDirectory!, "skin.ini")));
+
+            AddAssert("and builds it as the active gameplay skin", () =>
+            {
+                using var skin = skinSelection.CreateEffectiveSkin(skinResources);
+                return skin is JukeBox.Game.LazerPlayer.ImportedLegacySkin;
+            });
+
+            AddStep("restore the previous skin settings", () =>
+            {
+                config.SetValue(JukeBoxSetting.CustomSkinPath, originalCustom);
+                config.SetValue(JukeBoxSetting.Skin, originalSkin);
+            });
+        }
+
+        // Custom is reachable from the settings dropdown whether or not anything has ever been
+        // imported, so it has to degrade rather than render nothing.
+        [Test]
+        public void CustomSkinWithNothingImportedFallsBackToABundledSkin()
+        {
+            var originalSkin = JukeBoxSkin.Argon;
+            string originalCustom = string.Empty;
+
+            AddStep("select Custom with no import", () =>
+            {
+                originalSkin = config.Get<JukeBoxSkin>(JukeBoxSetting.Skin);
+                originalCustom = config.Get<string>(JukeBoxSetting.CustomSkinPath);
+
+                config.SetValue(JukeBoxSetting.CustomSkinPath, string.Empty);
+                config.SetValue(JukeBoxSetting.Skin, JukeBoxSkin.Custom);
+            });
+
+            AddAssert("nothing resolves", () => skinSelection.CustomSkinDirectory == null);
+            AddAssert("a bundled skin is built instead", () =>
+            {
+                using var skin = skinSelection.CreateEffectiveSkin(skinResources);
+                return skin is not JukeBox.Game.LazerPlayer.ImportedLegacySkin;
+            });
+
+            AddStep("restore the previous skin settings", () =>
+            {
+                config.SetValue(JukeBoxSetting.CustomSkinPath, originalCustom);
+                config.SetValue(JukeBoxSetting.Skin, originalSkin);
+            });
         }
 
         [Test]

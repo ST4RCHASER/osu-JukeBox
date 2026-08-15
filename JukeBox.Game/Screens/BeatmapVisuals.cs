@@ -95,6 +95,10 @@ public partial class BeatmapVisuals : CompositeDrawable
     private readonly BindableDouble playfieldZoom = new(1.0);
     private readonly IBindable<JukeBoxSkin> effectiveSkin = new Bindable<JukeBoxSkin>();
 
+    // Same rebuild trigger as effectiveSkin, for a skin change the enum value can't express: a
+    // freshly-imported .osk replacing the custom skin while Custom is already selected.
+    private readonly IBindable<int> skinRevision = new Bindable<int>();
+
     // Lazer's own background-blur scale: setting 0..1 maps to a gaussian sigma of 0..25.
     private const float max_blur_sigma = 25;
 
@@ -389,7 +393,10 @@ public partial class BeatmapVisuals : CompositeDrawable
         }
 
         if (skinSelection != null)
+        {
             effectiveSkin.BindTo(skinSelection.Effective);
+            skinRevision.BindTo(skinSelection.Revision);
+        }
 
         if (offsetStore != null)
             beatmapOffset.BindTo(offsetStore.CurrentOffset);
@@ -454,15 +461,18 @@ public partial class BeatmapVisuals : CompositeDrawable
         // A skin choice change (dropdown flip, or Random's per-song re-roll) rebuilds the chart
         // layer — the skin chain is constructed once per LazerChartLayer, so a rebuild is the
         // application mechanism (documented; the ruleset checkboxes by contrast apply live).
-        effectiveSkin.BindValueChanged(_ =>
-        {
-            if (chartLayer == null)
-                return;
+        effectiveSkin.BindValueChanged(_ => rebuildChartLayer());
+        skinRevision.BindValueChanged(_ => rebuildChartLayer());
+    }
 
-            chartContainer.Remove(chartLayer, true);
-            chartLayer = null;
-            updateLazerLayer();
-        });
+    private void rebuildChartLayer()
+    {
+        if (chartLayer == null)
+            return;
+
+        chartContainer.Remove(chartLayer, true);
+        chartLayer = null;
+        updateLazerLayer();
     }
 
     private void updateClockOffset() => offsetClock.Offset = beatmapOffset.Value + globalOffset.Value;
