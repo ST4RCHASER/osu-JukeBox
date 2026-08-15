@@ -904,60 +904,97 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("error toast stays red", () => toast("Something broke")!.AccentColour == Theme.Error);
         }
 
-        // The whole point of hosting the toasts inside the player box rather than at the top level:
-        // in the three-column layout they must never reach across the right column, where every
-        // transport control and the queue live. (Bottom-right anchoring within their host, and their
-        // stacking, is covered exhaustively in TestSceneToasts.)
+        /// <summary>
+        /// Toasts belong to the WINDOW's bottom-right, not the player's (user request). The player
+        /// box moves and resizes with the sidebars, focus mode and PlayfieldZoom; the strip must not
+        /// follow it.
+        /// </summary>
         [Test]
-        public void ToastsStayInsideThePlayerAreaClearOfTheSideColumns()
+        public void ToastsSitAtTheWindowsBottomRightAndDoNotFollowThePlayer()
         {
             // Pushed straight at the overlay rather than through jukebox.LastError: that bindable is
-            // fixture-scoped and survives between tests, so driving it here would couple a pure
-            // geometry check to whatever the previous test happened to leave in it. The wiring from
-            // the jukebox to the toasts has its own test above.
-            AddStep("push a toast", () => screen.Toasts.Push("Stay in your lane"));
+            // fixture-scoped and survives between tests.
+            AddStep("push a toast", () => screen.Toasts.Push("Bottom right, please"));
 
             RectangleF toastBox = default;
-            RectangleF playerBox = default;
-            RectangleF leftColumn = default;
-            RectangleF rightColumn = default;
+            RectangleF windowBox = default;
+            RectangleF playerBefore = default;
 
-            int settledFrames = 0;
+            AddUntilStep("a toast settles", () => settledToast(ref toastBox, ref windowBox));
 
-            // Deliberately measures whichever toast is currently NEWEST rather than the one pushed
-            // above: the fixture's jukebox keeps running its radio retries in the background across
-            // every test, so a burst of its error toasts can push (and, at the cap, evict) this
-            // test's own message while the test is still watching. Any toast makes the point.
-            //
-            // Waits on the animated properties rather than on the transform list, because a toast
-            // enters by sliding in from the right at 0.95 scale and mid-entrance it legitimately
-            // overhangs its host — and then waits for a second settled frame, because a quad read on
-            // the frame a value settles is still built from the previous frame's layout. All four
-            // rectangles are captured together, so they always describe one single frame.
-            AddUntilStep("a toast settles, and is measured against the layout", () =>
+            AddAssert("it hugs the window's bottom-right corner",
+                () => windowBox.Right - toastBox.Right < 40 && windowBox.Bottom - toastBox.Bottom < 40);
+
+            AddStep("remember how big the player is", () => playerBefore = screen.PlayerBox.ScreenSpaceDrawQuad.AABBFloat);
+            AddStep("collapse the sidebars (focus mode)", () => config.SetValue(JukeBoxSetting.UiLayout, UiLayout.Focus));
+
+            AddUntilStep("the player box really did change size",
+                () => System.Math.Abs(screen.PlayerBox.ScreenSpaceDrawQuad.AABBFloat.Width - playerBefore.Width) > 50);
+
+            RectangleF toastAfter = default;
+            RectangleF windowAfter = default;
+
+            AddUntilStep("the toast settles again", () => settledToast(ref toastAfter, ref windowAfter));
+
+            AddAssert("the toast did not move with it",
+                () => System.Math.Abs(toastAfter.Right - toastBox.Right) < 1
+                      && System.Math.Abs(toastAfter.Bottom - toastBox.Bottom) < 1);
+
+            AddStep("restore the layout", () => config.SetValue(JukeBoxSetting.UiLayout, UiLayout.ThreeColumn));
+        }
+
+        /// <summary>
+        /// The other half of the report: toasts were painted UNDER the fullscreen listing, so a
+        /// message arriving while searching was invisible. Asserted as draw order rather than mere
+        /// visibility — lower Depth is nearer the viewer, and every other child of this screen
+        /// leaves its depth at 0.
+        /// </summary>
+        [Test]
+        public void ToastsDrawAboveTheFullscreenSearchAndEveryOtherOverlay()
+        {
+            AddStep("open the fullscreen search", () => screen.ChildrenOfType<FullscreenListingOverlay>().Single().ShowSearch());
+            AddUntilStep("it is showing", () => screen.ChildrenOfType<FullscreenListingOverlay>().Single().Alpha > 0);
+
+            AddStep("push a toast", () => screen.Toasts.Push("Above the search"));
+
+            AddAssert("the toast strip is nearer the viewer than the listing",
+                () => screen.Toasts.Depth < screen.ChildrenOfType<FullscreenListingOverlay>().Single().Depth);
+
+            AddAssert("and than every other top-level overlay",
+                () => screen.Toasts.Depth < screen.ChildrenOfType<MapIdOverlay>().Single().Depth
+                      && screen.Toasts.Depth < screen.ChildrenOfType<FileImportOverlay>().Single().Depth
+                      && screen.Toasts.Depth < screen.ChildrenOfType<SettingsOverlay>().Single().Depth);
+
+            AddStep("close the search", () => screen.ChildrenOfType<FullscreenListingOverlay>().Single().Hide());
+        }
+
+        private int toastSettledFrames;
+
+        /// <summary>
+        /// Waits for a toast to finish its entrance before measuring — it slides in from the right
+        /// at 0.95 scale and legitimately overhangs mid-entrance — then waits a further settled
+        /// frame, since a quad read on the frame a value settles is still built from the previous
+        /// frame's layout. Measures whichever toast is newest rather than one specific message: the
+        /// fixture's jukebox keeps running radio retries, and a burst of its error toasts can evict
+        /// this test's own message while it watches.
+        /// </summary>
+        private bool settledToast(ref RectangleF toastBox, ref RectangleF windowBox)
+        {
+            var t = screen.Toasts.AllToasts.LastOrDefault();
+
+            if (t is not { Alpha: >= 1, X: 0 } || t.Scale.X < 1)
             {
-                var t = screen.Toasts.AllToasts.LastOrDefault();
+                toastSettledFrames = 0;
+                return false;
+            }
 
-                if (t is not { Alpha: >= 1, X: 0 } || t.Scale.X < 1)
-                {
-                    settledFrames = 0;
-                    return false;
-                }
+            if (++toastSettledFrames < 3)
+                return false;
 
-                if (++settledFrames < 3)
-                    return false;
-
-                toastBox = t.ScreenSpaceDrawQuad.AABBFloat;
-                playerBox = screen.PlayerBox.ScreenSpaceDrawQuad.AABBFloat;
-                leftColumn = screen.LeftColumn.ScreenSpaceDrawQuad.AABBFloat;
-                rightColumn = screen.RightColumn.ScreenSpaceDrawQuad.AABBFloat;
-                return true;
-            });
-
-            AddAssert("it lands inside the player box", () => playerBox.Contains(toastBox));
-
-            AddAssert("and therefore clear of both columns",
-                () => !toastBox.IntersectsWith(rightColumn) && !toastBox.IntersectsWith(leftColumn));
+            toastBox = t.ScreenSpaceDrawQuad.AABBFloat;
+            windowBox = screen.ScreenSpaceDrawQuad.AABBFloat;
+            toastSettledFrames = 0;
+            return true;
         }
 
         private ToastOverlay.Toast? toast(string message)
