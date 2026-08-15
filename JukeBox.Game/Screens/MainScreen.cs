@@ -37,9 +37,12 @@ namespace JukeBox.Game.Screens;
 ///
 /// <para>
 /// The left column embeds <see cref="BeatmapListingOverlay"/> in its <c>docked</c> mode (permanently
-/// visible — no more show/hide overlay semantics; see that class). Typing a printable character
-/// (with no modifiers held) focuses+seeds it via <see cref="BeatmapListingOverlay.ShowWithInitialChar"/>,
-/// same entry point as before, just without a pop-in. The right column embeds <see cref="PlaybackPanel"/>
+/// visible — no more show/hide overlay semantics; see that class), showing the shared search
+/// engine's current results with no search box or filters of its own. Search lives in exactly one
+/// place: <see cref="FullscreenListingOverlay"/>, opened either by the sidebar's search button
+/// (<see cref="BeatmapListingOverlay.SearchOpenRequested"/>) or by typing a printable character
+/// with no modifiers held, which seeds it via
+/// <see cref="FullscreenListingOverlay.ShowWithInitialChar"/>. The right column embeds <see cref="PlaybackPanel"/>
 /// and <see cref="SettingsOverlay"/> (also docked) side by side behind two tab buttons — both stay
 /// permanently loaded and alive, so switching tabs is a simple Alpha toggle (instant, and every
 /// component's own state — scroll position, filter selections, checkbox values — just sits there
@@ -53,9 +56,8 @@ namespace JukeBox.Game.Screens;
 /// being independently hideable, as a quick "jump to the queue/transport" shortcut). There is no separate
 /// settings shortcut/corner button any more — the Settings tab header in the right column is
 /// always reachable directly (see <see cref="createTabHeader"/>). The map-ID lookup
-/// (<see cref="MapIdOverlay"/>) is opened from an icon button docked inline at the right edge of
-/// the left column's search box (see <see cref="BeatmapListingOverlay.MapIdRequested"/>) rather
-/// than a corner button.
+/// (<see cref="MapIdOverlay"/>) is opened from the "#" button beside the sidebar's search button
+/// (see <see cref="BeatmapListingOverlay.MapIdRequested"/>) rather than a corner button.
 /// </para>
 ///
 /// <para>
@@ -83,10 +85,6 @@ public partial class MainScreen : Screen
     private const float left_column_width = 380;
     private const float right_column_width = 340;
 
-    /// <summary>The left column's collapsed width under the fullscreen search style — a slim rail
-    /// hosting only the search-opener icon (see <see cref="applySearchStyle"/>).</summary>
-    private const float search_rail_width = 64;
-
     private const float tab_header_height = 36;
 
     // The design canvas the visuals render into before being scaled to fit the box. 854 covers
@@ -102,6 +100,16 @@ public partial class MainScreen : Screen
 
     [Resolved]
     private JukeBoxConfigManager config { get; set; } = null!;
+
+    /// <summary>
+    /// A bound COPY of <see cref="Jukebox.LastError"/> rather than a subscription straight onto
+    /// the jukebox's own bindable. The jukebox long outlives any one screen, so a direct
+    /// subscription keeps a dead screen's <see cref="showToast"/> callback alive on it — and that
+    /// callback does <c>AddInternal</c>, which then mutates a screen's children while the async
+    /// disposal queue is walking them on another thread. A bindable FIELD is unbound
+    /// automatically when this drawable is disposed, so the callback can't outlive the screen.
+    /// </summary>
+    private readonly Bindable<string?> lastError = new Bindable<string?>();
 
     private Bindable<UiLayout> uiLayout = null!;
     private Bindable<double> playfieldZoom = null!;
@@ -132,19 +140,11 @@ public partial class MainScreen : Screen
 
     /// <summary>
     /// The one search engine both listing presentations render — hosted HERE (not inside the
-    /// docked listing, its default owner) so it keeps ticking (debounce, scheduled result
-    /// applies) even while the fullscreen style's icon rail hides the docked listing entirely.
+    /// docked listing, its default owner) so it keeps ticking (debounce, scheduled result applies)
+    /// regardless of which of the two views happens to be on screen, and so its results survive
+    /// the fullscreen listing closing.
     /// </summary>
     private BeatmapSearchEngine searchEngine = null!;
-
-    /// <summary>The left column's normal body — the docked listing (crossfaded away while the
-    /// fullscreen style collapses the column to the icon rail).</summary>
-    private Container listingBody = null!;
-
-    /// <summary>The left column's fullscreen-style body — only the search-opener icon.</summary>
-    private Container searchRail = null!;
-
-    private Bindable<SearchStyle> searchStyle = null!;
 
     private RightPanelTabButton playbackTabButton = null!;
     private RightPanelTabButton settingsTabButton = null!;
@@ -191,14 +191,6 @@ public partial class MainScreen : Screen
     /// </summary>
     internal MarginPadding VisualsHostPadding => visualsHost.Padding;
 
-    /// <summary>Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the left column's
-    /// docked-listing body, to assert the fullscreen style crossfades it away.</summary>
-    internal Container ListingBody => listingBody;
-
-    /// <summary>Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the icon rail, to
-    /// assert the fullscreen style crossfades it in.</summary>
-    internal Container SearchRail => searchRail;
-
     /// <summary>Test-only: the visuals canvas's current alpha (0 while the player is detached
     /// without <see cref="JukeBoxSetting.DetachPlayOnMain"/>).</summary>
     internal float SceneAlpha => sceneContainer.Alpha;
@@ -218,9 +210,9 @@ public partial class MainScreen : Screen
         RelativeSizeAxes = Axes.Both;
 
         // The engine is created and hosted here (see the searchEngine field) and shared by both
-        // presentations: the docked listing renders it in the left column, and the fullscreen
-        // style's big listing — a whole-window modal (see its hosting spot at the top level of
-        // InternalChildren below) — renders the same query/filters/results.
+        // presentations: the docked sidebar renders its results in the left column, and the
+        // fullscreen listing — a whole-window modal (see its hosting spot at the top level of
+        // InternalChildren below) — is where the same query/filters are actually driven.
         searchEngine = new BeatmapSearchEngine();
         listing = new BeatmapListingOverlay(docked: true, engine: searchEngine) { RelativeSizeAxes = Axes.Both };
         fullscreenListing = new FullscreenListingOverlay(searchEngine) { RelativeSizeAxes = Axes.Both };
@@ -324,31 +316,11 @@ public partial class MainScreen : Screen
                         RelativeSizeAxes = Axes.Both,
                         Colour = Theme.PanelSurface,
                     },
-                    listingBody = new Container
+                    new Container
                     {
                         RelativeSizeAxes = Axes.Both,
                         Padding = new MarginPadding(Theme.PanelPadding),
                         Child = listing,
-                    },
-                    // The fullscreen style's icon rail (see applySearchStyle): the column
-                    // collapses to search_rail_width and only this opener remains.
-                    searchRail = new Container
-                    {
-                        RelativeSizeAxes = Axes.Both,
-                        Alpha = 0,
-                        Child = new SearchRailButton
-                        {
-                            Anchor = Anchor.TopCentre,
-                            Origin = Anchor.TopCentre,
-                            Margin = new MarginPadding { Top = Theme.PanelPadding },
-                            Size = new Vector2(40),
-                            Icon = FontAwesome.Solid.Search,
-                            Action = () =>
-                            {
-                                if (uiLayout.Value == UiLayout.ThreeColumn)
-                                    fullscreenListing.ShowSearch();
-                            },
-                        },
                     },
                 },
             },
@@ -403,10 +375,10 @@ public partial class MainScreen : Screen
                     },
                 },
             },
-            // Top level, ABOVE the columns: the fullscreen search style's big
-            // listing is a true whole-window modal (dim scrim + centred sliding panel — see
-            // FullscreenListingOverlay), not a player-box-area overlay. The map-ID modal stays
-            // above it so "#" lookup keeps working from either presentation.
+            // Top level, ABOVE the columns: the big listing is a true whole-window modal (dim
+            // scrim + centred sliding panel — see FullscreenListingOverlay), not a
+            // player-box-area overlay. The map-ID modal stays above it so "#" lookup keeps
+            // working with the listing open.
             fullscreenListing,
             mapIdOverlay,
         };
@@ -418,27 +390,17 @@ public partial class MainScreen : Screen
         fullscreenListing.SetPicked += set => _ = jukebox.EnqueueAndMaybePlayAsync(set);
         mapIdOverlay.SetResolved += set => _ = jukebox.EnqueueAndMaybePlayAsync(set);
 
-        // The map-ID button now lives inline in the docked search box (see
-        // BeatmapListingOverlay.MapIdRequested) rather than a corner button.
+        // The map-ID button sits beside the sidebar's search button (see
+        // BeatmapListingOverlay.MapIdRequested) rather than in a corner.
         listing.MapIdRequested += () => mapIdOverlay.ToggleVisibility();
 
-        // "Opening search" under the fullscreen style covers focusing the docked search box too
-        // (not just type-anywhere) — the big listing takes over from there.
-        listing.SearchBoxFocused += () =>
-        {
-            if (searchStyle.Value == SearchStyle.Fullscreen && uiLayout.Value == UiLayout.ThreeColumn)
-                fullscreenListing.ShowSearch();
-        };
-
-        // The left column's dedicated search-opener icon: under the fullscreen style it presents
-        // the big listing; under compact it just focuses the docked keyword box (same as clicking
-        // the box itself).
+        // The sidebar's search button is the mouse-driven way into the one search surface. Gated
+        // on the layout for the same reason type-anywhere is: focus mode has no sidebar on screen
+        // to have clicked, and nothing should be able to pop a modal over the full-bleed visuals.
         listing.SearchOpenRequested += () =>
         {
-            if (searchStyle.Value == SearchStyle.Fullscreen && uiLayout.Value == UiLayout.ThreeColumn)
+            if (uiLayout.Value == UiLayout.ThreeColumn)
                 fullscreenListing.ShowSearch();
-            else
-                listing.FocusSearch();
         };
 
         // See updateSceneScale's own doc comment for why this is hung off playerBox's OnUpdate
@@ -455,18 +417,12 @@ public partial class MainScreen : Screen
 
         selectTab(RightPanelTab.Playback, animate: false);
 
-        // Both bindables are assigned BEFORE either apply runs: applyLayout's insets read the
-        // current style (rail vs full column width), and applySearchStyle's guard reads the
-        // current layout — the initial calls land the resting state instantly, then live changes
-        // animate.
         uiLayout = config.GetBindable<UiLayout>(JukeBoxSetting.UiLayout);
-        searchStyle = config.GetBindable<SearchStyle>(JukeBoxSetting.SearchStyle);
 
-        applySearchStyle(searchStyle.Value, animate: false);
+        // The initial call lands the resting state instantly; live changes animate.
         applyLayout(uiLayout.Value, animate: false);
 
         uiLayout.BindValueChanged(e => applyLayout(e.NewValue, animate: true));
-        searchStyle.BindValueChanged(e => applySearchStyle(e.NewValue, animate: true));
 
         // No BindValueChanged needed: updateSceneScale already re-reads this every frame (see its
         // own remarks on why it's driven off playerBox.OnUpdate rather than a one-shot), so a
@@ -474,8 +430,6 @@ public partial class MainScreen : Screen
         playfieldZoom = config.GetBindable<double>(JukeBoxSetting.PlayfieldZoom);
 
         // Alpha (not unloading) on both sides of the swap — see detachedPlaceholder's remarks.
-        // (searchStyle wiring lives above via applySearchStyle — the branch's older duplicate
-        // handler was dropped in this merge resolution.)
         detachPlayer = config.GetBindable<bool>(JukeBoxSetting.DetachPlayer);
         detachPlayOnMain = config.GetBindable<bool>(JukeBoxSetting.DetachPlayOnMain);
         detachPlayer.BindValueChanged(_ => updatePlayerBoxPresentation());
@@ -483,7 +437,9 @@ public partial class MainScreen : Screen
         updatePlayerBoxPresentation();
 
         jukebox.Start();
-        jukebox.LastError.BindValueChanged(e =>
+
+        lastError.BindTo(jukebox.LastError);
+        lastError.BindValueChanged(e =>
         {
             if (e.NewValue != null)
                 showToast(e.NewValue);
@@ -568,21 +524,17 @@ public partial class MainScreen : Screen
             return true;
         }
 
-        // Type-anywhere-to-search only makes sense while the left column is actually reachable —
-        // in focus mode it (and its search box) is hidden, so let the keypress fall through instead
-        // of silently seeding/focusing an invisible box.
+        // Type-anywhere-to-search is deliberately inert in focus mode: that mode is pure
+        // full-bleed visuals, and a keypress must not pop a modal listing over them.
         if (uiLayout.Value == UiLayout.ThreeColumn && !e.ControlPressed && !e.AltPressed && !e.SuperPressed)
         {
             char? c = keyToChar(e.Key);
 
             if (c != null)
             {
-                // The style setting picks which presentation "opening search" means — both views
-                // share one search engine, so the seeded query lands in both either way.
-                if (searchStyle.Value == SearchStyle.Fullscreen)
-                    fullscreenListing.ShowWithInitialChar(c.Value);
-                else
-                    listing.ShowWithInitialChar(c.Value);
+                // One search surface, one entry point. The sidebar shows the same engine's
+                // results, so it follows along without being involved here.
+                fullscreenListing.ShowWithInitialChar(c.Value);
                 return true;
             }
         }
@@ -600,16 +552,10 @@ public partial class MainScreen : Screen
     /// with nothing left overlaying them, not just the side columns disappearing. Restoring plays
     /// every part of that back in reverse.
     /// </summary>
-    /// <summary>The left column's width under the CURRENT search style: the slim icon rail while
-    /// the fullscreen style is active, the full listing column otherwise. Every left inset (player
-    /// box, focus-mode slide distance) derives from this rather than the raw constant.</summary>
-    private float currentLeftColumnWidth => searchStyle.Value == SearchStyle.Fullscreen ? search_rail_width : left_column_width;
-
-    /// <summary>The centre cell's insets in ThreeColumn mode — shared by <see cref="applyLayout"/>
-    /// and <see cref="applySearchStyle"/> so both transitions target the same geometry.</summary>
-    private MarginPadding threeColumnPadding() => new MarginPadding
+    /// <summary>The centre cell's insets in ThreeColumn mode.</summary>
+    private static MarginPadding threeColumnPadding() => new MarginPadding
     {
-        Left = currentLeftColumnWidth + Theme.SectionSpacing,
+        Left = left_column_width + Theme.SectionSpacing,
         Right = right_column_width + Theme.SectionSpacing,
         Top = Theme.SectionSpacing,
         Bottom = Theme.SectionSpacing,
@@ -624,7 +570,7 @@ public partial class MainScreen : Screen
         double duration = animate ? Theme.DurationFast : 0;
         const Easing easing = Easing.None;
 
-        LeftColumn.MoveToX(focus ? -(currentLeftColumnWidth + Theme.SectionSpacing) : 0, duration, easing);
+        LeftColumn.MoveToX(focus ? -(left_column_width + Theme.SectionSpacing) : 0, duration, easing);
         LeftColumn.FadeTo(focus ? 0 : 1, duration, easing);
 
         RightColumn.MoveToX(focus ? right_column_width + Theme.SectionSpacing : 0, duration, easing);
@@ -646,36 +592,6 @@ public partial class MainScreen : Screen
             fullscreenListing.Hide();
             GetContainingFocusManager()?.ChangeFocus(null);
         }
-    }
-
-    /// <summary>
-    /// Applies the search style's left-column presentation: the fullscreen style collapses the
-    /// column to the slim icon rail (crossfading the docked listing out and the search-opener
-    /// icon in) and slides the player box's left inset along with it; compact restores the
-    /// full listing column. One orchestrated animation on live switches (Theme timing), instant
-    /// for the initial call at load.
-    /// </summary>
-    private void applySearchStyle(SearchStyle style, bool animate)
-    {
-        bool fullscreen = style == SearchStyle.Fullscreen;
-
-        double duration = animate ? Theme.DurationNormal : 0;
-        var easing = fullscreen ? Theme.EaseExit : Theme.EaseEnter;
-
-        // Flipping to Compact retires the big listing immediately (search goes back to living
-        // entirely in the left column); flipping to Fullscreen simply arms it for the next open.
-        if (!fullscreen)
-            fullscreenListing.Hide();
-
-        LeftColumn.ResizeWidthTo(currentLeftColumnWidth, duration, Theme.EaseEnter);
-        listingBody.FadeTo(fullscreen ? 0 : 1, duration, easing);
-        searchRail.FadeTo(fullscreen ? 1 : 0, duration, easing);
-
-        // The player box follows the column's new width so the tiling holds through the
-        // transition. Focus mode's zero padding must not be disturbed — its own restore recomputes
-        // from the then-current style (applyLayout → threeColumnPadding).
-        if (uiLayout.Value == UiLayout.ThreeColumn)
-            visualsHost.TransformTo(nameof(visualsHost.Padding), threeColumnPadding(), duration, Theme.EaseEnter);
     }
 
     /// <summary>
@@ -789,17 +705,10 @@ public partial class MainScreen : Screen
         text.ScaleTo(1f, Theme.DurationNormal, Theme.EaseEnter).Delay(4000).ScaleTo(Theme.PopScale, Theme.DurationSlow, Theme.EaseExit);
     }
 
-    /// <summary>The icon rail's search-opener — a dedicated type (rather than a bare
-    /// <see cref="IconButton"/>) so tests can tell it apart from the docked listing's own
-    /// search-opener icon, which stays in the tree (hidden) under the fullscreen style.</summary>
-    private partial class SearchRailButton : IconButton
-    {
-    }
-
     /// <summary>
     /// One tab button in the right column's Playback/Settings strip — a rounded, flat button that
     /// fills accent-adjacent while <see cref="Active"/> with a thin accent underline, matching the
-    /// design system's chip/button language elsewhere (<see cref="FilterChip"/>, <see cref="IconButton"/>)
+    /// design system's button language elsewhere (<see cref="TextButton"/>, <see cref="IconButton"/>)
     /// without pulling in the framework's generic (unthemed) TabControl.
     /// </summary>
     private partial class RightPanelTabButton : ClickableContainer

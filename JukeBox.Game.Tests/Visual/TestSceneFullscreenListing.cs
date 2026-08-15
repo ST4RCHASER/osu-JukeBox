@@ -226,8 +226,8 @@ namespace JukeBox.Game.Tests.Visual
             AddUntilStep("cards shown", () => fullscreen.ChildrenOfType<FullscreenBeatmapCard>().Count() == 3);
             AddUntilStep("entrance settled", () => fullscreen.SlidePanel.Y == 0);
 
-            AddAssert("query synced into the docked view (one shared engine)", () => docked.SearchBox.Text == "a");
-            AddAssert("docked view rendered the same results", () => docked.ChildrenOfType<BeatmapCard>().Count() == 3);
+            AddAssert("query landed on the shared engine", () => docked.Engine.Query.Value == "a");
+            AddAssert("sidebar rendered the same results", () => docked.ChildrenOfType<BeatmapCard>().Count() == 3);
 
             // The wide test host must actually get the osu-web-style 3-column grid.
             AddAssert("three cards per row", () =>

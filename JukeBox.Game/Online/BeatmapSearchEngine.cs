@@ -13,9 +13,10 @@ using osu.Framework.Threading;
 namespace JukeBox.Game.Online;
 
 /// <summary>
-/// The beatmap-search state machine shared by both listing presentations (the docked/compact
-/// <see cref="UI.BeatmapListingOverlay"/> and the fullscreen <see cref="UI.FullscreenListingOverlay"/> —
-/// see <see cref="Configuration.SearchStyle"/>): a 300ms-debounced keyword search against
+/// The beatmap-search state machine shared by both listing presentations (the compact sidebar
+/// <see cref="UI.BeatmapListingOverlay"/>, which only renders results, and the
+/// <see cref="UI.FullscreenListingOverlay"/> the user actually searches and filters in):
+/// a 300ms-debounced keyword search against
 /// <see cref="IBeatmapMirror"/>, refined by the filter bindables below and paginated with
 /// infinite-scroll semantics. Extracted from the (previously monolithic) listing overlay so the two
 /// presentations are pure views over one engine — their filter chips bind the same bindables (so
@@ -31,8 +32,10 @@ namespace JukeBox.Game.Online;
 ///
 /// A slower, older search response can never overwrite a newer one (<see cref="searchSequence"/>
 /// guard). A <see cref="Component"/> so the debounce runs on this drawable's own scheduler —
-/// hosted as an internal child of the docked listing, preserving the old behaviour that the
-/// debounced search only ticks while that listing is present.
+/// hosted by whoever owns it (<see cref="Screens.MainScreen"/> in the app, so the engine keeps
+/// ticking regardless of which listing is on screen; a self-owning listing in bare test scenes).
+/// Results outlive any one view, which is what lets the sidebar keep showing whatever the user
+/// last searched for in the fullscreen listing after closing it.
 /// </summary>
 public partial class BeatmapSearchEngine : Component
 {
@@ -84,11 +87,24 @@ public partial class BeatmapSearchEngine : Component
     /// <summary>The loaded sets passing the client-side genre/language filters — what views render.</summary>
     public IEnumerable<BeatmapSetInfo> VisibleSets => loadedSets.Where(s => MatchesClientFilters(s, GenreId.Value, LanguageId.Value));
 
-    public bool IsLoading { get; private set; }
+    /// <summary>
+    /// True while a request is in flight. A bindable (rather than a plain flag) because every view
+    /// renders it as a real <c>LoadingSpinner</c>/<c>LoadingLayer</c> rather than status text —
+    /// see <see cref="LoadingFresh"/> for which of the two.
+    /// </summary>
+    public readonly BindableBool IsLoading = new BindableBool();
+
+    /// <summary>
+    /// True while the in-flight request is a FRESH search (page 0) rather than a "load more" page
+    /// append. Views cover their whole result area for a fresh search (everything is about to be
+    /// replaced) but only show a footer spinner while appending (the existing cards stay valid).
+    /// </summary>
+    public readonly BindableBool LoadingFresh = new BindableBool();
+
     public bool HasMore { get; private set; }
 
-    /// <summary>Human-readable search lifecycle line ("searching…", "no results", …), shown by
-    /// every view's status text.</summary>
+    /// <summary>Human-readable search lifecycle line ("no results", …), shown by every view's
+    /// status text. Deliberately says nothing about being busy — that's the spinners' job.</summary>
     public readonly Bindable<string> Status = new Bindable<string>(string.Empty);
 
     /// <summary>
@@ -161,7 +177,7 @@ public partial class BeatmapSearchEngine : Component
     {
         // Driven off the RAW loaded count, not the filtered count: the client-side filter can
         // legitimately reduce a full page to zero visible cards, and later pages may still match.
-        if (IsLoading || !HasMore || loadedSets.Count == 0)
+        if (IsLoading.Value || !HasMore || loadedSets.Count == 0)
             return;
 
         if (contentOverflows)
@@ -214,8 +230,12 @@ public partial class BeatmapSearchEngine : Component
         int mySequence = ++searchSequence;
         int page = fresh ? 0 : currentPage + 1;
 
-        IsLoading = true;
-        Schedule(() => Status.Value = fresh ? "searching…" : "loading more…");
+        IsLoading.Value = true;
+        LoadingFresh.Value = fresh;
+
+        // Cleared rather than set to a "searching…" line: a spinner carries "busy" now, and a
+        // stale "no results" left showing underneath it would contradict it.
+        Schedule(() => Status.Value = string.Empty);
 
         var request = BuildRequest(page);
 
@@ -238,7 +258,7 @@ public partial class BeatmapSearchEngine : Component
             if (mySequence != searchSequence)
                 return;
 
-            IsLoading = false;
+            IsLoading.Value = false;
             currentPage = page;
             HasMore = results.Count >= PAGE_SIZE;
 

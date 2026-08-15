@@ -29,18 +29,18 @@ using SearchExtra = osu.Game.Overlays.BeatmapListing.SearchExtra;
 namespace JukeBox.Game.UI;
 
 /// <summary>
-/// The <see cref="Configuration.SearchStyle.Fullscreen"/> presentation: an osu-web-style "beatmap
-/// listing" page presented as a TRUE fullscreen modal — hosted at <see cref="Screens.MainScreen"/>'s
-/// top level so it covers the ENTIRE window (both side columns included), a centred
-/// listing panel above a dim <see cref="Theme.ModalScrim"/> with nothing else interactive while
-/// open. Opening (type-anywhere via <see cref="ShowWithInitialChar"/>, the docked search box
-/// gaining focus, or the left column's search icon button — all via <see cref="ShowSearch"/>)
-/// slides the panel UP from past the window's bottom edge while the scrim fades in (see
-/// <see cref="PopIn"/>); Escape and the Enter-queue flow reverse it (slide down + fade) back to
-/// the normal layout.
+/// The app's ONE search surface: an osu-web-style "beatmap listing" page presented as a TRUE
+/// fullscreen modal — hosted at <see cref="Screens.MainScreen"/>'s top level so it covers the
+/// ENTIRE window (both side columns included), a centred listing panel above a dim
+/// <see cref="Theme.ModalScrim"/> with nothing else interactive while open. Opening (type-anywhere
+/// via <see cref="ShowWithInitialChar"/>, or the sidebar's search button via
+/// <see cref="ShowSearch"/>) slides the panel UP from past the window's bottom edge while the
+/// scrim fades in (see <see cref="PopIn"/>); Escape and the Enter-queue flow reverse it (slide
+/// down + fade) back to the normal layout.
 ///
-/// A pure VIEW over the shared <see cref="BeatmapSearchEngine"/> (the same instance driving the
-/// docked <see cref="BeatmapListingOverlay"/>): the big keyword box binds the same
+/// A pure VIEW over the shared <see cref="BeatmapSearchEngine"/> (the same instance the compact
+/// <see cref="BeatmapListingOverlay"/> sidebar renders results from, which is why those results
+/// are still there after this closes): the big keyword box binds the same
 /// <see cref="BeatmapSearchEngine.Query"/>, the labelled filter block binds the same filter
 /// bindables (rows the engine can't back with real data — rank achieved, played state, etc. — are
 /// omitted, not faked), and the three-column grid of <see cref="FullscreenBeatmapCard"/>s rebuilds
@@ -101,6 +101,13 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
     private PreviewPlayer previewPlayer = null!;
     private Box scrim = null!;
     private Container panel = null!;
+
+    // Fetches read as real lazer spinners, never as text: the layer covers the grid while a FRESH
+    // search is in flight (everything below is about to be replaced), the footer spinner appears
+    // while a further page is appended (the cards on screen stay valid). Same split as the
+    // sidebar's.
+    private LoadingLayer freshLoadingLayer = null!;
+    private LoadingSpinner appendSpinner = null!;
 
     // Lazer's REAL beatmap-listing filter rows (label-left + horizontal text tab items) — wired
     // both ways to the shared engine's raw bindables in LoadComplete, so selections here and the
@@ -222,7 +229,7 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
                                     new Drawable[] { createHeader() },
                                     new Drawable[]
                                     {
-                                        scroll = new BasicScrollContainer
+                                        new Container
                                         {
                                             RelativeSizeAxes = Axes.Both,
                                             // A full section of clearance between the (fixed)
@@ -230,11 +237,26 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
                                             // grid's masked viewport starts below this padding,
                                             // so cards can never collide with the filter rows.
                                             Padding = new MarginPadding { Top = Theme.SectionSpacing + 4 },
-                                            Child = cardsFlow = new CardFlow
+                                            Children = new Drawable[]
                                             {
-                                                RelativeSizeAxes = Axes.X,
-                                                AutoSizeAxes = Axes.Y,
-                                                Direction = FillDirection.Full,
+                                                scroll = new BasicScrollContainer
+                                                {
+                                                    RelativeSizeAxes = Axes.Both,
+                                                    Child = cardsFlow = new CardFlow
+                                                    {
+                                                        RelativeSizeAxes = Axes.X,
+                                                        AutoSizeAxes = Axes.Y,
+                                                        Direction = FillDirection.Full,
+                                                    },
+                                                },
+                                                appendSpinner = new LoadingSpinner
+                                                {
+                                                    Anchor = Anchor.BottomCentre,
+                                                    Origin = Anchor.BottomCentre,
+                                                    Margin = new MarginPadding { Bottom = Theme.RowSpacing },
+                                                    Size = new Vector2(28),
+                                                },
+                                                freshLoadingLayer = new LoadingLayer(dimBackground: true),
                                             },
                                         },
                                     },
@@ -264,6 +286,9 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
         };
 
         engine.Status.BindValueChanged(e => statusText.Text = e.NewValue, true);
+
+        engine.IsLoading.BindValueChanged(_ => updateLoadingSpinners(), true);
+        engine.LoadingFresh.BindValueChanged(_ => updateLoadingSpinners(), true);
 
         // Dropdown-enum <-> engine-string two-way sync (see the adapter fields): seed from the
         // engine's current values, then mirror changes in both directions. The value writes are
@@ -321,6 +346,22 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
             foreach (var card in cardsFlow)
                 card.PreviewingSetId.Value = e.NewValue;
         });
+    }
+
+    private void updateLoadingSpinners()
+    {
+        bool loading = engine.IsLoading.Value;
+        bool fresh = engine.LoadingFresh.Value;
+
+        if (loading && fresh)
+            freshLoadingLayer.Show();
+        else
+            freshLoadingLayer.Hide();
+
+        if (loading && !fresh)
+            appendSpinner.Show();
+        else
+            appendSpinner.Hide();
     }
 
     private Drawable createHeader()

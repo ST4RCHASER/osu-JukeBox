@@ -17,6 +17,7 @@ using osu.Framework.Allocation;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Sprites;
+using osu.Framework.Graphics.UserInterface;
 using osu.Framework.Screens;
 using osu.Framework.Testing;
 using osu.Game.Overlays.Settings;
@@ -84,7 +85,6 @@ namespace JukeBox.Game.Tests.Visual
                 queue.Items.Clear();
                 mirror.Sets.Clear();
                 config.SetValue(JukeBoxSetting.UiLayout, UiLayout.ThreeColumn);
-                config.SetValue(JukeBoxSetting.SearchStyle, SearchStyle.Compact);
                 screen = new MainScreen { RelativeSizeAxes = Axes.Both };
                 // MainScreen is a Screen — osu!framework requires a Screen to be hosted by a
                 // ScreenStack (see JukeBoxGame's own top-level screenStack.Push(new MainScreen())).
@@ -394,32 +394,66 @@ namespace JukeBox.Game.Tests.Visual
                 sampler.Samples.Any(s => s.box > startWidth + 1 && s.box < screen.DrawWidth - 1));
         }
 
+        // There is exactly one search surface now: typing anywhere opens the fullscreen listing
+        // seeded with the character, rather than seeding a sidebar box that no longer exists.
         [Test]
-        public void TypingFocusesAndSeedsTheDockedSearchBox()
+        public void TypingOpensTheFullscreenListingSeeded()
         {
-            AddAssert("search box starts empty", () => screen.ChildrenOfType<BeatmapListingOverlay>().Single().SearchBox.Text == string.Empty);
+            AddAssert("fullscreen listing starts hidden", () => fullscreenListing().State.Value == Visibility.Hidden);
+            AddAssert("sidebar has no text box at all", () =>
+                !screen.ChildrenOfType<BeatmapListingOverlay>().Single().ChildrenOfType<TextBox>().Any());
 
             AddStep("press 'a'", () => InputManager.Key(Key.A));
 
-            AddAssert("search box seeded with 'a'", () => screen.ChildrenOfType<BeatmapListingOverlay>().Single().SearchBox.Text == "a");
-            AddUntilStep("search box focused", () => screen.ChildrenOfType<BeatmapListingOverlay>().Single().SearchBox.HasFocus);
+            AddUntilStep("fullscreen listing shown", () => fullscreenListing().State.Value == Visibility.Visible);
+            AddAssert("its keyword box is seeded with 'a'", () => fullscreenListing().SearchBox.Text == "a");
+            AddAssert("shared engine carries the query", () =>
+                screen.ChildrenOfType<BeatmapListingOverlay>().Single().Engine.Query.Value == "a");
             AddAssert("left column never left shown", () => screen.LeftColumn.Alpha == 1);
         }
 
-        // Escape's new contract: it blurs the docked search box but the column itself — unlike the
-        // old dismissable overlay — is never hidden.
+        // Escape's contract: it closes the fullscreen listing back to the player; the permanently
+        // docked sidebar is never hidden by it.
         [Test]
-        public void EscapeUnfocusesSearchBoxWithoutHidingTheColumn()
+        public void EscapeClosesTheFullscreenListingWithoutHidingTheColumn()
         {
-            AddStep("press 'a' (focus + seed)", () => InputManager.Key(Key.A));
-            AddUntilStep("search box focused", () => screen.ChildrenOfType<BeatmapListingOverlay>().Single().SearchBox.HasFocus);
+            AddStep("press 'a' (opens search)", () => InputManager.Key(Key.A));
+            AddUntilStep("fullscreen listing shown", () => fullscreenListing().State.Value == Visibility.Visible);
 
             AddStep("press escape", () => InputManager.Key(Key.Escape));
 
-            AddUntilStep("search box no longer focused", () => !screen.ChildrenOfType<BeatmapListingOverlay>().Single().SearchBox.HasFocus);
+            AddUntilStep("fullscreen listing closed", () => fullscreenListing().State.Value == Visibility.Hidden);
             AddAssert("left column still shown", () => screen.LeftColumn.Alpha == 1);
-            AddAssert("listing still present in the hierarchy", () => screen.ChildrenOfType<BeatmapListingOverlay>().Any());
+            AddAssert("sidebar still present and visible", () =>
+                screen.ChildrenOfType<BeatmapListingOverlay>().Single().State.Value == Visibility.Visible);
         }
+
+        // The engine outlives the modal, which is what lets the sidebar go on showing whatever the
+        // user searched for once they close the listing.
+        [Test]
+        public void SidebarKeepsTheResultsAfterTheFullscreenListingCloses()
+        {
+            AddStep("mirror serves three sets", () => mirror.Sets.AddRange(new[]
+            {
+                new BeatmapSetInfo { Id = 1, Title = "Alpha Song", Artist = "a", Creator = "c", Status = "ranked" },
+                new BeatmapSetInfo { Id = 2, Title = "Beta Song", Artist = "b", Creator = "c", Status = "ranked" },
+                new BeatmapSetInfo { Id = 3, Title = "Gamma Song", Artist = "g", Creator = "c", Status = "ranked" },
+            }));
+
+            AddStep("press 'a' (opens search)", () => InputManager.Key(Key.A));
+            AddUntilStep("sidebar rendered the results too", () =>
+                screen.ChildrenOfType<BeatmapListingOverlay>().Single().ChildrenOfType<BeatmapCard>().Count() == 3);
+
+            AddStep("press escape", () => InputManager.Key(Key.Escape));
+            AddUntilStep("fullscreen listing closed", () => fullscreenListing().State.Value == Visibility.Hidden);
+
+            AddAssert("sidebar still shows those results", () =>
+                screen.ChildrenOfType<BeatmapListingOverlay>().Single().ChildrenOfType<BeatmapCard>().Count() == 3);
+            AddAssert("and the query is still on the engine", () =>
+                screen.ChildrenOfType<BeatmapListingOverlay>().Single().Engine.Query.Value == "a");
+        }
+
+        private FullscreenListingOverlay fullscreenListing() => screen.ChildrenOfType<FullscreenListingOverlay>().Single();
 
         // Focus mode is an animated transition (both side columns slide/fade out together while
         // the player box expands, reversed on restore — see MainScreen.applyLayout), so the Alpha
@@ -441,9 +475,8 @@ namespace JukeBox.Game.Tests.Visual
             AddUntilStep("both columns shown again", () => screen.LeftColumn.Alpha == 1 && screen.RightColumn.Alpha == 1);
         }
 
-        // Type-anywhere-to-search only makes sense while the column hosting the search box is
-        // actually reachable — while focus mode hides it, a keypress must fall through untouched
-        // rather than silently seeding/focusing a now-invisible box.
+        // Focus mode is pure full-bleed visuals — a stray keypress must not pop the listing modal
+        // over them.
         [Test]
         public void TypingDoesNothingWhileInFocusMode()
         {
@@ -451,47 +484,11 @@ namespace JukeBox.Game.Tests.Visual
             AddUntilStep("columns hidden", () => screen.LeftColumn.Alpha == 0);
 
             AddStep("press 'a'", () => InputManager.Key(Key.A));
+            AddWaitStep("let any entrance animate", 5);
 
-            AddAssert("search box was not seeded", () => screen.ChildrenOfType<BeatmapListingOverlay>().Single().SearchBox.Text == string.Empty);
-        }
-
-        // The SearchStyle setting picks which presentation "opening search" means, live: under
-        // Fullscreen, type-anywhere presents the big listing overlay over the player box (seeded
-        // with the char — both presentations share one search engine, so the docked box shows the
-        // same query); Escape closes it back to the player; flipping the setting to Compact while
-        // it's open retires it immediately and the next keypress goes back to the docked column.
-        [Test]
-        public void SearchStyleSettingRoutesSearchOpeningLive()
-        {
-            FullscreenListingOverlay fullscreen = null!;
-            AddStep("grab fullscreen listing", () => fullscreen = screen.ChildrenOfType<FullscreenListingOverlay>().Single());
-
-            AddAssert("fullscreen listing starts hidden", () => fullscreen.State.Value == Visibility.Hidden);
-
-            AddStep("press 'a' under compact style", () => InputManager.Key(Key.A));
-            AddAssert("fullscreen listing stays hidden (compact routes to the docked column)",
-                () => fullscreen.State.Value == Visibility.Hidden);
-            AddAssert("docked box seeded instead", () => screen.ChildrenOfType<BeatmapListingOverlay>().Single().SearchBox.Text == "a");
-
-            AddStep("unfocus and switch to fullscreen style", () =>
-            {
-                InputManager.Key(Key.Escape);
-                config.SetValue(JukeBoxSetting.SearchStyle, SearchStyle.Fullscreen);
-            });
-
-            AddStep("press 'b'", () => InputManager.Key(Key.B));
-            AddUntilStep("fullscreen listing shown", () => fullscreen.State.Value == Visibility.Visible);
-            AddAssert("fullscreen box seeded with 'b'", () => fullscreen.SearchBox.Text == "b");
-            AddAssert("docked box shows the same shared query", () => screen.ChildrenOfType<BeatmapListingOverlay>().Single().SearchBox.Text == "b");
-
-            AddStep("press escape", () => InputManager.Key(Key.Escape));
-            AddUntilStep("fullscreen listing closed back to the player", () => fullscreen.State.Value == Visibility.Hidden);
-
-            AddStep("press 'c' (reopen)", () => InputManager.Key(Key.C));
-            AddUntilStep("fullscreen listing shown again", () => fullscreen.State.Value == Visibility.Visible);
-
-            AddStep("flip the setting to Compact while open", () => config.SetValue(JukeBoxSetting.SearchStyle, SearchStyle.Compact));
-            AddUntilStep("fullscreen listing retired immediately", () => fullscreen.State.Value == Visibility.Hidden);
+            AddAssert("fullscreen listing stayed hidden", () => fullscreenListing().State.Value == Visibility.Hidden);
+            AddAssert("nothing was seeded into the engine", () =>
+                screen.ChildrenOfType<BeatmapListingOverlay>().Single().Engine.Query.Value == string.Empty);
         }
 
         // The fullscreen listing is a TRUE whole-window modal: its quad must cover the entire
@@ -504,11 +501,7 @@ namespace JukeBox.Game.Tests.Visual
             FullscreenListingOverlay fullscreen = null!;
             FrameSampler sampler = null!;
 
-            AddStep("switch to fullscreen style and grab the overlay", () =>
-            {
-                config.SetValue(JukeBoxSetting.SearchStyle, SearchStyle.Fullscreen);
-                fullscreen = screen.ChildrenOfType<FullscreenListingOverlay>().Single();
-            });
+            AddStep("grab the overlay", () => fullscreen = fullscreenListing());
             AddStep("add per-frame panel-Y sampler", () => uiContainer.Add(sampler = new FrameSampler(
                 () => (fullscreen.SlidePanel.Y, 0))));
 
@@ -544,75 +537,19 @@ namespace JukeBox.Game.Tests.Visual
             AddUntilStep("panel slid back down past the bottom", () => fullscreen.SlidePanel.Y > 1);
         }
 
-        // The search-opener icons: under compact style the docked listing's own icon focuses the
-        // keyword box; under fullscreen style the collapsed column's rail icon presents the big
-        // listing.
+        // The sidebar's big search button is the mouse-driven way into the one search surface, and
+        // the left column keeps its full width doing it (there is no collapsed rail mode any more).
         [Test]
-        public void SearchIconButtonOpensSearchPerStyle()
+        public void SidebarSearchButtonOpensTheFullscreenListing()
         {
-            AddStep("click the docked listing's search icon under compact style", () =>
-                screen.ChildrenOfType<BeatmapListingOverlay>().Single()
-                      .ChildrenOfType<IconButton>().Single(b => b.Icon.Equals(FontAwesome.Solid.Search)).TriggerClick());
-            AddUntilStep("docked keyword box focused", () => screen.ChildrenOfType<BeatmapListingOverlay>().Single().SearchBox.HasFocus);
-            AddAssert("fullscreen listing stayed hidden", () =>
-                screen.ChildrenOfType<FullscreenListingOverlay>().Single().State.Value == Visibility.Hidden);
+            AddAssert("left column at its full width", () => screen.LeftColumn.Width == 380);
+            AddAssert("fullscreen listing starts hidden", () => fullscreenListing().State.Value == Visibility.Hidden);
 
-            AddStep("switch to fullscreen style", () => config.SetValue(JukeBoxSetting.SearchStyle, SearchStyle.Fullscreen));
+            AddStep("click the sidebar's search button", () =>
+                screen.ChildrenOfType<BeatmapListingOverlay.SearchButton>().Single().TriggerClick());
 
-            AddStep("click the icon rail's search button", () => clickRailButton());
-            AddUntilStep("fullscreen listing shown", () =>
-                screen.ChildrenOfType<FullscreenListingOverlay>().Single().State.Value == Visibility.Visible);
-        }
-
-        // SearchRailButton is a private nested type (MainScreen) — located by type name the same
-        // way the tab buttons are.
-        private void clickRailButton()
-            => screen.ChildrenOfType<ClickableContainer>().First(c => c.GetType().Name == "SearchRailButton").TriggerClick();
-
-        // The fullscreen style collapses the left column to a slim icon rail: the docked listing
-        // crossfades away (ONLY the search icon remains), the column width animates down, and the
-        // player box's inset follows it so the centre tiling holds. Switching back to
-        // compact restores the full column live.
-        [Test]
-        public void FullscreenStyleCollapsesLeftColumnToIconRail()
-        {
-            FrameSampler sampler = null!;
-
-            AddAssert("column starts at full width (compact style)", () => screen.LeftColumn.Width == 380);
-            AddAssert("docked listing body shown, rail hidden", () => screen.ListingBody.Alpha == 1 && screen.SearchRail.Alpha == 0);
-
-            AddStep("add per-frame column-width sampler", () => uiContainer.Add(sampler = new FrameSampler(
-                () => (screen.LeftColumn.Width, 0))));
-
-            AddStep("switch to fullscreen style", () => config.SetValue(JukeBoxSetting.SearchStyle, SearchStyle.Fullscreen));
-
-            AddUntilStep("column collapsed to the rail width", () => screen.LeftColumn.Width < 70);
-            AddAssert("collapse animated through intermediate widths (no snap)",
-                () => sampler.Samples.Any(s => s.box > 70 && s.box < 375));
-            AddUntilStep("docked listing crossfaded away", () => screen.ListingBody.Alpha == 0);
-            AddUntilStep("only the search icon remains (rail shown)", () => screen.SearchRail.Alpha == 1);
-
-            // The centre inset follows the rail: the player box now sits a gutter right of the
-            // RAIL's edge, not the old full column's.
-            AddUntilStep("player box left inset follows the rail", () =>
-            {
-                float boxLeft = screen.PlayerBox.ScreenSpaceDrawQuad.TopLeft.X;
-                float railRight = screen.LeftColumn.ScreenSpaceDrawQuad.TopRight.X;
-                return boxLeft - railRight >= Theme.SectionSpacing - 0.5f && boxLeft - railRight <= Theme.SectionSpacing + 1.5f;
-            });
-
-            AddStep("click the rail icon", () => clickRailButton());
-            AddUntilStep("fullscreen listing shown", () =>
-                screen.ChildrenOfType<FullscreenListingOverlay>().Single().State.Value == Visibility.Visible);
-            AddStep("press escape", () => InputManager.Key(Key.Escape));
-            AddUntilStep("fullscreen listing closed", () =>
-                screen.ChildrenOfType<FullscreenListingOverlay>().Single().State.Value == Visibility.Hidden);
-
-            AddStep("switch back to compact", () => config.SetValue(JukeBoxSetting.SearchStyle, SearchStyle.Compact));
-
-            AddUntilStep("column restored to full width", () => screen.LeftColumn.Width == 380);
-            AddUntilStep("docked listing body restored", () => screen.ListingBody.Alpha == 1);
-            AddUntilStep("rail hidden again", () => screen.SearchRail.Alpha == 0);
+            AddUntilStep("fullscreen listing shown", () => fullscreenListing().State.Value == Visibility.Visible);
+            AddAssert("left column unchanged", () => screen.LeftColumn.Width == 380 && screen.LeftColumn.Alpha == 1);
         }
 
         // Regression coverage for the (now-removed) corner gear: Settings is reachable purely by
@@ -663,9 +600,9 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("the queue itself is on that tab", () => playbackBody.ChildrenOfType<QueuePanel>().Any());
         }
 
-        // Regression coverage for the map-ID button: now docked inline at the right edge of the
-        // search box (left column) rather than a standalone corner button — it opens the same
-        // shared MapIdOverlay via BeatmapListingOverlay.MapIdRequested.
+        // Regression coverage for the map-ID button: it sits beside the sidebar's search button
+        // rather than in a corner, and opens the one shared MapIdOverlay via
+        // BeatmapListingOverlay.MapIdRequested.
         [Test]
         public void HashtagButtonTogglesMapIdOverlay()
         {
@@ -674,7 +611,7 @@ namespace JukeBox.Game.Tests.Visual
 
             AddAssert("starts hidden", () => overlay.State.Value == Visibility.Hidden);
 
-            AddStep("click the hashtag button in the search box",
+            AddStep("click the hashtag button beside the search button",
                 () => screen.ChildrenOfType<IconButton>().Single(b => b.Icon.Equals(FontAwesome.Solid.Hashtag)).TriggerClick());
             AddAssert("overlay visible", () => overlay.State.Value == Visibility.Visible);
 
