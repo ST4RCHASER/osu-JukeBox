@@ -1,5 +1,6 @@
 #nullable enable
 
+using System.Collections.Generic;
 using JukeBox.Game.Detach;
 using NUnit.Framework;
 
@@ -20,13 +21,17 @@ namespace JukeBox.Game.Tests.Detach
                 Rate = 1.25,
                 Playing = true,
                 SentAtUnixMs = 1755000000123,
-                BackgroundDim = 0.45,
-                BackgroundBlur = 0.2,
-                PlayfieldZoom = 1.5,
-                GlobalAudioOffset = -30,
-                RenderChart = true,
-                ShowStoryboardVideo = false,
+                ReplayOsrPath = "/tmp/drops/peppy - heron.osr",
+                ReplayOsuFile = "/tmp/cache/165202/heron [Beginner].osu",
+                Settings = new Dictionary<string, string>
+                {
+                    ["jukebox:BackgroundDim"] = "0.45",
+                    ["lazer:HitLighting"] = "1",
+                    ["ruleset:ManiaRulesetSetting.ScrollSpeed"] = "16",
+                },
                 Skin = "Triangles",
+                CustomSkinDirectory = "/tmp/storage/skins/Aristia",
+                BeatmapAudioOffset = -12,
             };
 
             var parsed = ViewerSyncState.FromJson(state.ToJson());
@@ -40,13 +45,12 @@ namespace JukeBox.Game.Tests.Detach
             Assert.That(parsed.Rate, Is.EqualTo(state.Rate));
             Assert.That(parsed.Playing, Is.EqualTo(state.Playing));
             Assert.That(parsed.SentAtUnixMs, Is.EqualTo(state.SentAtUnixMs));
-            Assert.That(parsed.BackgroundDim, Is.EqualTo(state.BackgroundDim));
-            Assert.That(parsed.BackgroundBlur, Is.EqualTo(state.BackgroundBlur));
-            Assert.That(parsed.PlayfieldZoom, Is.EqualTo(state.PlayfieldZoom));
-            Assert.That(parsed.GlobalAudioOffset, Is.EqualTo(state.GlobalAudioOffset));
-            Assert.That(parsed.RenderChart, Is.EqualTo(state.RenderChart));
-            Assert.That(parsed.ShowStoryboardVideo, Is.EqualTo(state.ShowStoryboardVideo));
+            Assert.That(parsed.ReplayOsrPath, Is.EqualTo(state.ReplayOsrPath));
+            Assert.That(parsed.ReplayOsuFile, Is.EqualTo(state.ReplayOsuFile));
+            Assert.That(parsed.Settings, Is.EquivalentTo(state.Settings));
             Assert.That(parsed.Skin, Is.EqualTo(state.Skin));
+            Assert.That(parsed.CustomSkinDirectory, Is.EqualTo(state.CustomSkinDirectory));
+            Assert.That(parsed.BeatmapAudioOffset, Is.EqualTo(state.BeatmapAudioOffset));
         }
 
         [Test]
@@ -57,6 +61,9 @@ namespace JukeBox.Game.Tests.Detach
             Assert.That(parsed, Is.Not.Null);
             Assert.That(parsed!.SetDirectory, Is.Null);
             Assert.That(parsed.OsuFile, Is.Null);
+            Assert.That(parsed.ReplayOsrPath, Is.Null);
+            Assert.That(parsed.ReplayOsuFile, Is.Null);
+            Assert.That(parsed.CustomSkinDirectory, Is.Null);
         }
 
         // The protocol is line-delimited: a snapshot containing a newline would be read as two

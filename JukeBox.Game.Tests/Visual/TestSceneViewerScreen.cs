@@ -2,16 +2,24 @@
 
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.IO;
 using JukeBox.Game.Configuration;
 using JukeBox.Game.Detach;
+using JukeBox.Game.LazerPlayer;
+using JukeBox.Game.Playback;
+using JukeBox.Game.Replays;
 using JukeBox.Game.Screens;
+using JukeBox.Game.Tests.Import;
 using NUnit.Framework;
 using osu.Framework.Allocation;
 using osu.Framework.Graphics;
 using osu.Framework.Screens;
 using osu.Framework.Testing;
 using osu.Framework.Utils;
+using osu.Game.Rulesets;
+using osu.Game.Rulesets.Mania;
+using osu.Game.Rulesets.Mania.Configuration;
 
 namespace JukeBox.Game.Tests.Visual
 {
@@ -28,6 +36,18 @@ namespace JukeBox.Game.Tests.Visual
     {
         [Resolved]
         private JukeBoxConfigManager config { get; set; } = null!;
+
+        [Resolved]
+        private SkinSelection skinSelection { get; set; } = null!;
+
+        [Resolved]
+        private BeatmapOffsetStore offsets { get; set; } = null!;
+
+        [Resolved]
+        private ReplayStore replays { get; set; } = null!;
+
+        [Resolved]
+        private IRulesetConfigCache rulesetConfigs { get; set; } = null!;
 
         private string tmp = null!;
         private string setDir = null!;
@@ -61,6 +81,11 @@ namespace JukeBox.Game.Tests.Visual
             {
                 config.SetValue(JukeBoxSetting.BackgroundDim, 0.3);
                 config.SetValue(JukeBoxSetting.RenderChart, false);
+                skinSelection.SetExternalCustomSkinDirectory(null);
+
+                if (rulesetConfigs.GetConfigFor(new ManiaRuleset()) is ManiaRulesetConfigManager mania)
+                    mania.SetValue(ManiaRulesetSetting.ScrollSpeed, 8.0);
+
                 reader?.SignalEof();
 
                 try
@@ -98,8 +123,11 @@ namespace JukeBox.Game.Tests.Visual
             Rate = 1,
             Playing = playing,
             SentAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-            BackgroundDim = 0.3,
-            PlayfieldZoom = 1,
+            Settings = new Dictionary<string, string>
+            {
+                ["jukebox:BackgroundDim"] = "0.3",
+                ["jukebox:PlayfieldZoom"] = "1",
+            },
             Skin = nameof(JukeBoxSkin.Argon),
         };
 
@@ -125,14 +153,128 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("send snapshot with dim 0.7 + chart on", () =>
             {
                 var state = makeState(0, false);
-                state.BackgroundDim = 0.7;
-                state.RenderChart = true;
+                state.Settings["jukebox:BackgroundDim"] = "0.7";
+                state.Settings["jukebox:RenderChart"] = "1";
                 reader.Push(state.ToJson());
             });
 
             AddUntilStep("dim applied to config", () => Precision.AlmostEquals(config.Get<double>(JukeBoxSetting.BackgroundDim), 0.7));
             AddUntilStep("chart applied to config", () => config.Get<bool>(JukeBoxSetting.RenderChart));
         }
+
+        /// <summary>
+        /// A LATER snapshot changing a setting must move it — the whole difference between "honours
+        /// the setting" and "honours it once at startup and then freezes" (which is what a
+        /// weakly-held <c>GetBindable</c> copy would do). Same reason this asserts on a second
+        /// value rather than just the first.
+        /// </summary>
+        [Test]
+        public void LaterSnapshotsKeepMovingSettings()
+        {
+            AddStep("push viewer screen", pushScreen);
+            AddStep("send dim 0.7", () => push(s => s.Settings["jukebox:BackgroundDim"] = "0.7"));
+            AddUntilStep("dim is 0.7", () => Precision.AlmostEquals(config.Get<double>(JukeBoxSetting.BackgroundDim), 0.7));
+
+            AddStep("collect garbage", () =>
+            {
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+                GC.Collect();
+            });
+
+            AddStep("send dim 0.1", () => push(s => s.Settings["jukebox:BackgroundDim"] = "0.1"));
+            AddUntilStep("dim is 0.1", () => Precision.AlmostEquals(config.Get<double>(JukeBoxSetting.BackgroundDim), 0.1));
+        }
+
+        /// <summary>
+        /// The mania scroll speed stands in for every per-ruleset row (the osu! snaking/cursor/
+        /// analysis ones, taiko's hit animations, mania's direction and note colouring): they all
+        /// travel through the same registry into the same realm-backed managers, so one of them
+        /// arriving proves the channel for all of them. Coverage of the registry as a WHOLE is
+        /// <see cref="TestSceneSettingsMirror"/>'s job.
+        /// </summary>
+        [Test]
+        public void RulesetSettingsMirrorIntoTheirOwnConfig()
+        {
+            AddStep("push viewer screen", pushScreen);
+            AddStep("send mania scroll speed 22", () => push(s => s.Settings["ruleset:ManiaRulesetSetting.ScrollSpeed"] = "22"));
+
+            AddUntilStep("mania config took it", () => maniaScrollSpeed() == 22);
+
+            AddStep("send mania scroll speed 9", () => push(s => s.Settings["ruleset:ManiaRulesetSetting.ScrollSpeed"] = "9"));
+            AddUntilStep("mania config moved again", () => maniaScrollSpeed() == 9);
+        }
+
+        [Test]
+        public void CustomSkinDirectoryComesFromTheSnapshotNotLocalStorage()
+        {
+            string skinDir = null!;
+
+            AddStep("push viewer screen", pushScreen);
+            AddStep("send a custom skin directory", () =>
+            {
+                skinDir = Path.Combine(tmp, "skins", "Aristia");
+                Directory.CreateDirectory(skinDir);
+                push(s => s.CustomSkinDirectory = skinDir);
+            });
+
+            // Nothing was imported into THIS process's storage, so without the override the
+            // resolved directory would be null and the imported skin would degrade to Argon.
+            AddUntilStep("resolved against the sent path", () => skinSelection.CustomSkinDirectory == skinDir);
+
+            AddStep("send no custom skin", () => push(s => s.CustomSkinDirectory = null));
+            AddUntilStep("back to nothing imported", () => skinSelection.CustomSkinDirectory == null);
+        }
+
+        [Test]
+        public void BeatmapAudioOffsetApplies()
+        {
+            AddStep("push viewer screen", pushScreen);
+            AddStep("send -40ms for this mapset", () => push(s => s.BeatmapAudioOffset = -40));
+            AddUntilStep("offset store took it", () => Precision.AlmostEquals(offsets.CurrentOffset.Value, -40));
+
+            AddStep("send +25ms", () => push(s => s.BeatmapAudioOffset = 25));
+            AddUntilStep("offset store moved", () => Precision.AlmostEquals(offsets.CurrentOffset.Value, 25));
+        }
+
+        /// <summary>
+        /// A replay crosses the pipe as a PATH; the viewer decodes it into its own registry so the
+        /// chart plays the real play rather than autoplay, exactly as the main window does.
+        /// </summary>
+        [Test]
+        public void ReplayIsDecodedFromItsPathAndRegistered()
+        {
+            string osuFile = null!;
+            string osrPath = null!;
+
+            AddStep("push viewer screen", pushScreen);
+            AddStep("write a genuine .osr for the fixture difficulty", () =>
+            {
+                osuFile = Path.Combine(setDir, "happy [Easy].osu");
+                osrPath = Path.Combine(tmp, "someone - happy.osr");
+                ReplayFixture.Write(osrPath, osuFile, "someone");
+            });
+
+            AddStep("send the replay's path", () => push(s =>
+            {
+                s.ReplayOsrPath = osrPath;
+                s.ReplayOsuFile = osuFile;
+            }));
+
+            AddUntilStep("registered against its difficulty", () => replays.ForOsuFile(osuFile)?.Score != null);
+        }
+
+        private void push(Action<ViewerSyncState> mutate)
+        {
+            var state = makeState(0, false);
+            mutate(state);
+            reader!.Push(state.ToJson());
+        }
+
+        private double maniaScrollSpeed()
+            => rulesetConfigs.GetConfigFor(new ManiaRuleset()) is ManiaRulesetConfigManager mania
+                ? mania.Get<double>(ManiaRulesetSetting.ScrollSpeed)
+                : double.NaN;
 
         [Test]
         public void VersionMismatchRequestsExit()

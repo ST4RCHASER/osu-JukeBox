@@ -88,12 +88,37 @@ public partial class SkinSelection : Component
     {
         get
         {
+            if (externalCustomSkinDirectory != null)
+                return Directory.Exists(externalCustomSkinDirectory) ? externalCustomSkinDirectory : null;
+
             if (customSkinName.Value.Length == 0)
                 return null;
 
             string path = Path.Combine(host.Storage.GetFullPath("skins"), customSkinName.Value);
             return Directory.Exists(path) ? path : null;
         }
+    }
+
+    private string? externalCustomSkinDirectory;
+
+    /// <summary>
+    /// Points <see cref="CustomSkinDirectory"/> at a folder OUTSIDE this process's storage,
+    /// overriding the <see cref="JukeBoxSetting.CustomSkinPath"/> lookup entirely. Exists for the
+    /// detached viewer window, which runs under its own storage: the setting holds a folder name
+    /// resolved against the MAIN process's <c>skins/</c> directory, so mirroring the name alone
+    /// would resolve to nothing and silently degrade the imported skin to Argon. Setting it bumps
+    /// <see cref="Revision"/> when Custom is what's being built, so a change applies to the chart
+    /// already on screen rather than at the next song.
+    /// </summary>
+    public void SetExternalCustomSkinDirectory(string? directory)
+    {
+        if (externalCustomSkinDirectory == directory)
+            return;
+
+        externalCustomSkinDirectory = directory;
+
+        if (effective.Value == JukeBoxSkin.Custom)
+            revision.Value++;
     }
 
     /// <summary>

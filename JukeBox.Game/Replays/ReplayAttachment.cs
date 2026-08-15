@@ -19,6 +19,14 @@ public class ReplayAttachment
     /// <summary>The player's name as the replay recorded it; may be empty.</summary>
     public string PlayerName { get; init; } = string.Empty;
 
+    /// <summary>
+    /// Absolute path of the dropped .osr itself. Kept so a second process on the same machine (the
+    /// detached viewer window — see <see cref="Detach.ViewerSyncState.ReplayOsrPath"/>) can decode
+    /// the same replay for itself instead of receiving megabytes of frames over the sync pipe.
+    /// Empty for an attachment built by a test that never had a file.
+    /// </summary>
+    public string SourcePath { get; init; } = string.Empty;
+
     /// <summary>MD5 of the exact .osu the replay was played on.</summary>
     public string BeatmapMd5 { get; init; } = string.Empty;
 

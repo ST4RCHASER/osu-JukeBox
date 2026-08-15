@@ -7,6 +7,7 @@ using JukeBox.Game.Beatmaps;
 using JukeBox.Game.Configuration;
 using JukeBox.Game.LazerPlayer;
 using JukeBox.Game.Playback;
+using JukeBox.Game.Replays;
 using osu.Framework.Allocation;
 using osu.Framework.Bindables;
 using osu.Framework.Graphics;
@@ -42,6 +43,15 @@ public partial class DetachedViewerManager : Component
 
     [Resolved]
     private SkinSelection skinSelection { get; set; } = null!;
+
+    [Resolved]
+    private SettingsMirror settings { get; set; } = null!;
+
+    [Resolved]
+    private BeatmapOffsetStore offsets { get; set; } = null!;
+
+    [Resolved]
+    private ReplayStore replays { get; set; } = null!;
 
     private Bindable<bool> detach = null!;
     private readonly Bindable<CachedBeatmapSet?> current = new Bindable<CachedBeatmapSet?>();
@@ -189,22 +199,25 @@ public partial class DetachedViewerManager : Component
 
         var set = current.Value;
 
+        // The replay for the difficulty currently selected — the same lookup the rendering side
+        // does, so the viewer plays back a real play exactly when the main window does.
+        var replay = replays.ForOsuFile(selectedOsuFile.Value);
+
         var state = new ViewerSyncState
         {
             SetId = set?.SetId ?? 0,
             SetDirectory = set?.Directory,
             OsuFile = selectedOsuFile.Value,
+            ReplayOsrPath = replay?.SourcePath.Length > 0 ? replay.SourcePath : null,
+            ReplayOsuFile = replay?.SourcePath.Length > 0 ? replay.OsuFile : null,
             PositionMs = playback.CurrentTimeMs,
             Rate = playback.PlaybackRate.Value,
             Playing = playback.IsPlaying,
             SentAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-            BackgroundDim = config.Get<double>(JukeBoxSetting.BackgroundDim),
-            BackgroundBlur = config.Get<double>(JukeBoxSetting.BackgroundBlur),
-            PlayfieldZoom = config.Get<double>(JukeBoxSetting.PlayfieldZoom),
-            GlobalAudioOffset = config.Get<double>(JukeBoxSetting.GlobalAudioOffset),
-            RenderChart = config.Get<bool>(JukeBoxSetting.RenderChart),
-            ShowStoryboardVideo = config.Get<bool>(JukeBoxSetting.ShowStoryboardVideo),
+            Settings = settings.Capture(),
             Skin = skinSelection.Effective.Value.ToString(),
+            CustomSkinDirectory = skinSelection.CustomSkinDirectory,
+            BeatmapAudioOffset = offsets.CurrentOffset.Value,
         };
 
         try
