@@ -69,17 +69,9 @@ internal static class Theme
         _ => StatusGraveyard,
     };
 
-    /// <summary>Star-rating bucket colour following osu!'s difficulty spectrum (easy→green through
-    /// expert+→purple), used for the per-difficulty dots on listing cards.</summary>
-    public static Color4 DifficultyColour(double stars) => stars switch
-    {
-        < 2.0 => new Color4(0x88, 0xDA, 0x20, 0xFF),   // green
-        < 2.7 => new Color4(0x66, 0xCC, 0xFF, 0xFF),   // blue
-        < 4.0 => new Color4(0xFF, 0xD9, 0x66, 0xFF),   // yellow
-        < 5.3 => new Color4(0xFF, 0x8E, 0x5D, 0xFF),   // orange
-        < 6.5 => new Color4(0xFF, 0x5C, 0x5C, 0xFF),   // red
-        _ => new Color4(0x9B, 0x6F, 0xE0, 0xFF),       // purple
-    };
+    // Star ratings are deliberately NOT coloured here. They use lazer's own continuous spectrum via
+    // OsuColour.ForStarDifficulty (see StarRatingPill): this file used to approximate it with six
+    // bands, which merged everything from 5.0 to 6.4 into one red and never reached purple at all.
 
     // ---- Shape / spacing --------------------------------------------------------------------
 

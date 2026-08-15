@@ -35,8 +35,14 @@ namespace JukeBox.Game.UI;
 /// </summary>
 public partial class DifficultySwitcher : CompositeDrawable
 {
-    /// <summary>Keep the dropdown tidy on sets with absurd difficulty counts.</summary>
-    private const int max_items = 10;
+    /// <summary>
+    /// How tall the open list may get before it scrolls. EVERY difficulty is listed — a cap used to
+    /// drop them at ten, which silently hid two thirds of a big marathon set and, worse, made the
+    /// "start on the hardest" default a lie, since the real hardest difficulty was often one of the
+    /// ones dropped. Height is bounded instead of the item count, so nothing is unreachable: this is
+    /// roughly a dozen rows, which fits the column without the menu covering the whole panel.
+    /// </summary>
+    private const float menu_max_height = 400;
 
     /// <summary>How far the dropdown dims while locked — see <see cref="updateLockedState"/>.
     /// Enough to read as unavailable, not so much that the selected difficulty stops being
@@ -299,25 +305,20 @@ public partial class DifficultySwitcher : CompositeDrawable
     }
 
     /// <summary>
-    /// The difficulties this dropdown offers, EASIEST FIRST.
-    ///
-    /// <para>
-    /// The cap is applied before the sort, not after: it keeps "which difficulties are listed"
-    /// exactly as it was (the scan order, i.e. alphabetical by filename) so this change only
-    /// reorders the list rather than quietly swapping which entries a huge set shows — and, since
-    /// <see cref="applyHardestDefault"/> chooses from this same list, it also guarantees the
-    /// difficulty auto-selected on play is one the user can actually see.
-    /// </para>
+    /// EVERY difficulty in the set, EASIEST FIRST. Nothing is dropped — the list is bounded by
+    /// <see cref="menu_max_height"/> and scrolls instead — so what
+    /// <see cref="applyHardestDefault"/> picks from is the whole set, and the difficulty it starts
+    /// on is genuinely the hardest rather than the hardest of an arbitrary first ten.
     ///
     /// <para>
     /// Difficulties with no known rating sort to the END and keep their relative order, because
-    /// <see cref="Enumerable.OrderBy{T,K}(IEnumerable{T},Func{T,K})"/> is a stable sort. A set with
-    /// NO online metadata at all (a local folder, a dropped .osz) therefore falls back to exactly
-    /// the alphabetical order this dropdown used before — every key is equal, so nothing moves.
+    /// <c>OrderBy</c> is a stable sort. A set with NO online metadata at all (a local folder, a
+    /// dropped .osz) therefore falls back to exactly the alphabetical order this dropdown used
+    /// before — every key is equal, so nothing moves.
     /// </para>
     /// </summary>
     private System.Collections.Generic.IEnumerable<DifficultyInfo> listedDifficulties(CachedBeatmapSet set)
-        => set.Difficulties.Take(max_items).OrderBy(d => starsFor(d) ?? double.PositiveInfinity);
+        => set.Difficulties.OrderBy(d => starsFor(d) ?? double.PositiveInfinity);
 
     /// <summary>
     /// Starts a set on its HARDEST difficulty rather than the set's own default (which is just the
@@ -412,11 +413,12 @@ public partial class DifficultySwitcher : CompositeDrawable
 
         string? selectedPath = playback.SelectedOsuFile.Value ?? set.PreferredOsuFile;
         // Falls back to the first LISTED difficulty (the easiest), not set.Difficulties[0] — the
-        // list is sorted by rating now, so the raw scan order's first entry may not even be shown.
+        // list is sorted by rating, so the raw scan order's first entry is rarely the one on top.
         var match = set.Difficulties.FirstOrDefault(d => d.Path == selectedPath) ?? listedDifficulties(set).First();
 
-        // Only sync if the target difficulty actually made it into the (possibly capped) dropdown
-        // Items list — matches the old chip flow's max_items cap.
+        // The list holds every difficulty now, so this only guards the window between a set change
+        // and the Schedule that repopulates Items — writing a Current the control doesn't yet know
+        // about would throw.
         if (!dropdown.Items.Contains(match))
             return;
 
@@ -474,7 +476,7 @@ public partial class DifficultySwitcher : CompositeDrawable
 
         protected override DropdownHeader CreateHeader() => header = new DifficultyDropdownHeader();
 
-        protected override DropdownMenu CreateMenu() => new DifficultyMenu(badgesFor);
+        protected override DropdownMenu CreateMenu() => new DifficultyMenu(badgesFor) { MaxHeight = menu_max_height };
 
         private partial class DifficultyMenu : OsuDropdownMenu
         {
@@ -624,7 +626,7 @@ public partial class DifficultySwitcher : CompositeDrawable
             }));
 
             if (stars != null)
-                Add(StarRatingPill.Create(stars.Value, fontSize: 10));
+                Add(new StarRatingPill(stars.Value, fontSize: 10));
         }
     }
 }

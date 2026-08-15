@@ -519,12 +519,128 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("taiko pill prints its rating", () => pillTextOf(set.Difficulties[1]) == "5.77");
 
             AddAssert("std pill is tinted for 2.31 stars",
-                () => pillColourOf(set.Difficulties[0]) == Theme.DifficultyColour(2.31));
+                () => pillColourOf(set.Difficulties[0]) == starColour(2.31));
             AddAssert("taiko pill is tinted for 5.77 stars",
-                () => pillColourOf(set.Difficulties[1]) == Theme.DifficultyColour(5.77));
-            AddAssert("the two ratings are far enough apart to land in different colour buckets",
-                () => Theme.DifficultyColour(2.31) != Theme.DifficultyColour(5.77));
+                () => pillColourOf(set.Difficulties[1]) == starColour(5.77));
+            AddAssert("the two ratings are far enough apart to look different",
+                () => starColour(2.31) != starColour(5.77));
         }
+
+        /// <summary>lazer's own colour for a rating — the reference these assertions compare
+        /// against, so a change to our side that stopped matching the game would fail here.</summary>
+        private static Color4 starColour(double stars) => new OsuColour().ForStarDifficulty(stars);
+
+        // The app used to band ratings into six fixed colours, which merged everything from 5.0 to
+        // 6.4 into one red (the user's screenshot had 5.10, 5.23, 5.72 and 6.22 all identical) and
+        // never reached the purple end the game shows past 6.5. Colours now come from lazer's
+        // continuous spectrum, so neighbouring ratings differ and high ones actually go purple.
+        [Test]
+        public void StarPillsUseLazersContinuousSpectrumRatherThanBands()
+        {
+            var set = new CachedBeatmapSet { SetId = 130, Directory = tmp, AudioFile = fixtureSet.AudioFile, PreferredOsuFile = "a.osu" };
+            double[] ratings = { 5.10, 5.23, 5.72, 6.22, 6.62 };
+
+            AddStep("play a set of closely-graded difficulties", () =>
+            {
+                var online = new BeatmapSetInfo { Id = 130, Title = "Close together" };
+
+                for (int i = 0; i < ratings.Length; i++)
+                {
+                    set.OsuFiles.Add($"{i}.osu");
+                    set.Difficulties.Add(new DifficultyInfo { Path = $"{i}.osu", Version = $"D{i}", Mode = 0 });
+                    online.Beatmaps.Add(new BeatmapInfo { Mode = "osu", Version = $"D{i}", DifficultyRating = ratings[i] });
+                }
+
+                set.PreferredOsuFile = "0.osu";
+                playback.Current.Value = set;
+                playback.SelectedOsuFile.Value = "0.osu";
+                jukebox.NowPlaying.Value = online;
+            });
+
+            AddUntilStep("all five rated", () => menuRows()
+                .Count(r => difficultyOf(r) != null && r.ChildrenOfType<CircularContainer>().Any()) == ratings.Length);
+
+            AddAssert("every pill matches lazer's colour for its own rating", () =>
+                set.Difficulties.All(d =>
+                {
+                    double rating = ratings[int.Parse(d.Version.Substring(1))];
+                    return pillColourOf(d) == starColour(rating);
+                }));
+
+            AddAssert("and no two of these ratings share a colour",
+                () => set.Difficulties.Select(pillColourOf).Distinct().Count() == ratings.Length);
+
+            // Past lazer's 6.5 cutoff the fill is dark enough that black text is unreadable, so
+            // lazer switches the text to a light orange. The pill has to follow, or the number
+            // vanishes into its own background exactly where ratings matter most.
+            AddAssert("the 6.62 pill's text follows lazer's high-rating rule", () =>
+            {
+                var hardest = set.Difficulties.Single(d => d.Version == "D4");
+                var expected = new OsuColour().ForStarDifficultyText(6.62);
+                return starPillOf(hardest).ChildrenOfType<osu.Framework.Graphics.Sprites.SpriteText>().Single().Colour == expected;
+            });
+        }
+
+        // The list used to stop at ten, which hid two thirds of a big marathon set — and made the
+        // "start on the hardest" default a lie, since the real hardest was usually one of the ones
+        // dropped. Every difficulty is listed now; the MENU's height is what's bounded.
+        [Test]
+        public void EveryDifficultyIsListedAndTheMenuScrolls()
+        {
+            const int count = 30;
+            var set = new CachedBeatmapSet { SetId = 131, Directory = tmp, AudioFile = fixtureSet.AudioFile };
+
+            AddStep("play a 30-difficulty set", () =>
+            {
+                var online = new BeatmapSetInfo { Id = 131, Title = "Marathon" };
+
+                for (int i = 0; i < count; i++)
+                {
+                    set.OsuFiles.Add($"{i}.osu");
+                    set.Difficulties.Add(new DifficultyInfo { Path = $"{i}.osu", Version = $"D{i:00}", Mode = 0 });
+                    // Ascending, so the hardest is the LAST one — which the old cap would have cut.
+                    online.Beatmaps.Add(new BeatmapInfo { Mode = "osu", Version = $"D{i:00}", DifficultyRating = 1 + i * 0.25 });
+                }
+
+                set.PreferredOsuFile = "0.osu";
+                playback.Current.Value = set;
+                playback.SelectedOsuFile.Value = "0.osu";
+                jukebox.NowPlaying.Value = online;
+            });
+
+            AddUntilStep("all 30 listed", () => dropdown().Items.Count() == count);
+            AddAssert("and 30 rows really exist", () => menuRows().Count(r => difficultyOf(r) != null) == count);
+
+            AddAssert("the menu is height-bounded rather than item-bounded", () => boundedMenu() != null);
+
+            AddStep("open the menu", () =>
+            {
+                InputManager.MoveMouseTo(dropdown().ChildrenOfType<DropdownHeader>().Single());
+                InputManager.Click(MouseButton.Left);
+            });
+
+            // The rows add up to more than the menu is allowed to be, which is exactly the condition
+            // that makes it scroll rather than grow — assert the overflow, not just the cap.
+            AddUntilStep("the open menu is capped and scrollable", () =>
+            {
+                var menu = boundedMenu();
+                var scroll = menu?.ChildrenOfType<ScrollContainer<Drawable>>().FirstOrDefault();
+
+                return menu != null
+                       && scroll != null
+                       && menu.DrawHeight <= menu.MaxHeight + 1
+                       && scroll.ScrollableExtent > 0;
+            });
+
+            AddAssert("the hardest difficulty is the last one, and it's the one playing",
+                () => listedVersions().LastOrDefault() == $"D{count - 1:00}"
+                      && playback.SelectedOsuFile.Value == $"{count - 1}.osu");
+        }
+
+        /// <summary>The dropdown's menu, if it declares a height bound at all — null rather than
+        /// throwing, so a regression reads as a failed assertion instead of an exception.</summary>
+        private Menu? boundedMenu() => dropdown().ChildrenOfType<Menu>()
+            .FirstOrDefault(m => m.MaxHeight > 0 && !float.IsPositiveInfinity(m.MaxHeight));
 
         // A set playing without online metadata (a local folder, or a mirror response with no
         // beatmap list) has no ratings to show — the icon must still be drawn rather than the whole
