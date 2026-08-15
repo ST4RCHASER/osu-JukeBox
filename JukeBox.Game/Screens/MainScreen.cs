@@ -145,6 +145,7 @@ public partial class MainScreen : Screen
     private PlaybackPanel playbackPanel = null!;
     private SettingsOverlay settingsBody = null!;
     private MapIdOverlay mapIdOverlay = null!;
+    private FileImportOverlay fileImportOverlay = null!;
 
     /// <summary>
     /// The one search engine both listing presentations render — hosted HERE (not inside the
@@ -227,6 +228,7 @@ public partial class MainScreen : Screen
         playbackPanel = new PlaybackPanel();
         settingsBody = new SettingsOverlay(docked: true) { RelativeSizeAxes = Axes.Both };
         mapIdOverlay = new MapIdOverlay();
+        fileImportOverlay = new FileImportOverlay();
 
         InternalChildren = new Drawable[]
         {
@@ -389,6 +391,7 @@ public partial class MainScreen : Screen
             // working with the listing open.
             fullscreenListing,
             mapIdOverlay,
+            fileImportOverlay,
         };
 
         // Fire-and-forget by design: SetPicked is a synchronous event, and EnqueueAndMaybePlayAsync's
@@ -401,6 +404,14 @@ public partial class MainScreen : Screen
         // The map-ID button sits beside the sidebar's search button (see
         // BeatmapListingOverlay.MapIdRequested) rather than in a corner.
         listing.MapIdRequested += () => mapIdOverlay.ToggleVisibility();
+
+        // The folder button opens the in-app picker, and whatever it yields goes through the
+        // importer the window's drag-and-drop handler already uses — so a picked file and a
+        // dropped one are the same import, with the same toasts (bound in LoadComplete) and the
+        // same failure reporting. Fire-and-forget like the drop path: Import reports its own
+        // outcomes through fileImporter.Notification rather than through the returned Task.
+        listing.FileImportRequested += () => fileImportOverlay.ToggleVisibility();
+        fileImportOverlay.FileSelected += path => _ = fileImporter.Import(path);
 
         // The sidebar's search button is the mouse-driven way into the one search surface. Gated
         // on the layout for the same reason type-anywhere is: focus mode has no sidebar on screen
