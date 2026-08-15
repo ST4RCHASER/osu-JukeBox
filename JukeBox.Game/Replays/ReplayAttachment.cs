@@ -46,15 +46,25 @@ public class ReplayAttachment
     public IReadOnlyList<string> ModAcronyms { get; init; } = Array.Empty<string>();
 
     /// <summary>
-    /// How much faster the play ran than the beatmap's own timing — 1.5 under DT/NC, 0.75 under
-    /// HT/DC, 1 otherwise. Applied to actual PLAYBACK (see <see cref="Playback.PlaybackController.ReplayRate"/>)
-    /// rather than to the chart, so the music speeds up with the gameplay and the two stay in sync,
-    /// which is what the rate mods do in osu! itself.
+    /// The play's speed change applied as TEMPO — faster or slower with pitch preserved. This is
+    /// DoubleTime's and HalfTime's half of the story; 1 when neither is present. See
+    /// <see cref="ReplayMods.TrackAdjustmentsFor"/> for why the two are tracked separately.
     /// </summary>
-    public double Rate { get; init; } = 1;
+    public double RateTempo { get; init; } = 1;
 
-    /// <summary>Whether <see cref="Rate"/> should shift pitch too — see <see cref="ReplayMods.ShiftsPitch"/>.</summary>
-    public bool RateShiftsPitch { get; init; }
+    /// <summary>
+    /// The play's speed change applied as FREQUENCY — faster or slower with pitch shifted with it.
+    /// This is Nightcore's and Daycore's half; 1 when neither is present.
+    /// </summary>
+    public double RateFrequency { get; init; } = 1;
+
+    /// <summary>
+    /// Effective playback speed, i.e. both halves combined — 1.5 under DT or NC, 0.75 under HT or
+    /// DC, 1 otherwise. Applied to actual PLAYBACK rather than to the chart, so the music changes
+    /// speed with the gameplay and the two stay in sync, which is what the rate mods do in osu!
+    /// itself. Display and logging only; the adjustments themselves are the two above.
+    /// </summary>
+    public double Rate => RateTempo * RateFrequency;
 
     /// <summary>When the play happened, per the replay header.</summary>
     public DateTimeOffset PlayedAt { get; init; }
