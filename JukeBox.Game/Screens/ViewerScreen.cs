@@ -1,11 +1,15 @@
 #nullable enable
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Threading;
 using JukeBox.Game.Beatmaps;
 using JukeBox.Game.Configuration;
 using JukeBox.Game.Detach;
+using JukeBox.Game.LazerPlayer;
+using JukeBox.Game.Playback;
+using JukeBox.Game.Replays;
 using osu.Framework.Allocation;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
@@ -46,6 +50,18 @@ public partial class ViewerScreen : Screen
     [Resolved]
     private GameHost host { get; set; } = null!;
 
+    [Resolved]
+    private SettingsMirror settings { get; set; } = null!;
+
+    [Resolved]
+    private SkinSelection skinSelection { get; set; } = null!;
+
+    [Resolved]
+    private BeatmapOffsetStore offsets { get; set; } = null!;
+
+    [Resolved]
+    private ReplayStore replays { get; set; } = null!;
+
     private Container sceneContainer = null!;
     private SpriteText waitingText = null!;
 
@@ -61,6 +77,14 @@ public partial class ViewerScreen : Screen
     // times per second, and only an actual change may rebuild the (expensive) visual stack.
     private int builtSetId = -1;
     private string? builtOsuFile;
+
+    // Part of the same "what are the visuals built for" key: a replay arriving for the difficulty
+    // already on screen has to rebuild it, since autoplay-vs-replay is decided once per build.
+    private string? builtReplayOsrPath;
+
+    // .osr paths already decoded into `replays` (or found undecodable), so the 4 Hz heartbeat
+    // doesn't re-decode the same replay forever. Reader-thread only — no lock needed.
+    private readonly HashSet<string> decodedReplays = new HashSet<string>(StringComparer.Ordinal);
 
     // Same async-load arbitration as NowPlayingScreen: only the load whose generation is still
     // current when it completes is allowed to swap in.
@@ -138,6 +162,12 @@ public partial class ViewerScreen : Screen
                 if (state == null)
                     continue;
 
+                // Decoded HERE rather than on the update thread, for the same reason the reads
+                // are: a replay's frames take real time to parse. Doing it before the snapshot is
+                // published also means the registry is populated before the rebuild that consults
+                // it, which is what makes a replay play back instead of autoplay.
+                registerReplay(state);
+
                 lock (pendingLock)
                     pending = state;
             }
@@ -148,6 +178,39 @@ public partial class ViewerScreen : Screen
         }
 
         inputClosed = true;
+    }
+
+    /// <summary>
+    /// Decodes the snapshot's replay (if any) into this process's own <see cref="ReplayStore"/>,
+    /// which is what makes <see cref="BeatmapVisuals"/> play the real play here too. The .osr is a
+    /// local file both processes can read, so only its PATH crosses the pipe — a decoded score
+    /// carries every frame of the play and would be megabytes per snapshot. A replay that won't
+    /// decode is recorded as attempted anyway: the alternative is retrying it at the heartbeat
+    /// rate forever.
+    /// </summary>
+    private void registerReplay(ViewerSyncState state)
+    {
+        if (state.ReplayOsrPath == null || state.ReplayOsuFile == null)
+            return;
+
+        if (!decodedReplays.Add(state.ReplayOsrPath))
+            return;
+
+        try
+        {
+            replays.Register(new ReplayAttachment
+            {
+                OsuFile = state.ReplayOsuFile,
+                SourcePath = state.ReplayOsrPath,
+                Score = new JukeBoxScoreDecoder(state.ReplayOsuFile).Decode(state.ReplayOsrPath),
+            });
+
+            Logger.Log($"Viewer: decoded replay '{state.ReplayOsrPath}' for '{Path.GetFileName(state.ReplayOsuFile)}'");
+        }
+        catch (Exception e)
+        {
+            Logger.Error(e, $"Viewer: failed to decode replay '{state.ReplayOsrPath}' — falling back to autoplay");
+        }
     }
 
     protected override void Update()
@@ -190,18 +253,19 @@ public partial class ViewerScreen : Screen
             return;
         }
 
-        // Mirror the main app's visual settings into OUR config instance — BeatmapVisuals binds
-        // these already, so they apply live exactly as they would in the main window. (This
-        // config belongs to the viewer's own separate storage, so persisting them is harmless.)
-        config.SetValue(JukeBoxSetting.BackgroundDim, state.BackgroundDim);
-        config.SetValue(JukeBoxSetting.BackgroundBlur, state.BackgroundBlur);
-        config.SetValue(JukeBoxSetting.PlayfieldZoom, state.PlayfieldZoom);
-        config.SetValue(JukeBoxSetting.GlobalAudioOffset, state.GlobalAudioOffset);
-        config.SetValue(JukeBoxSetting.RenderChart, state.RenderChart);
-        config.SetValue(JukeBoxSetting.ShowStoryboardVideo, state.ShowStoryboardVideo);
+        // Mirror the main app's settings into OUR config managers — every consumer downstream
+        // (BeatmapVisuals, the mod/element/conversion services, the DrawableRuleset's own ruleset
+        // config bindings) already binds these, so they apply live exactly as they would in the
+        // main window. These config managers belong to the viewer's own separate storage, so
+        // persisting them is harmless.
+        settings.Apply(state.Settings);
 
+        // Not config keys on this side, for the reasons documented on each snapshot field.
         if (Enum.TryParse<JukeBoxSkin>(state.Skin, out var skin))
             config.SetValue(JukeBoxSetting.Skin, skin);
+
+        skinSelection.SetExternalCustomSkinDirectory(state.CustomSkinDirectory);
+        offsets.CurrentOffset.Value = state.BeatmapAudioOffset;
 
         int snapsBefore = viewerClock.SnapCount;
         viewerClock.Apply(state.PositionMs, state.Rate, state.Playing);
@@ -215,7 +279,7 @@ public partial class ViewerScreen : Screen
         if (eventful || syncLogCounter++ % 40 == 0)
             Logger.Log($"[viewer-sync] pos={state.PositionMs:F0}ms delta={viewerClock.LastDeltaMs:+0;-0;0}ms snaps={viewerClock.SnapCount} transport={DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - state.SentAtUnixMs}ms playing={state.Playing}");
 
-        if (state.SetId != builtSetId || state.OsuFile != builtOsuFile)
+        if (state.SetId != builtSetId || state.OsuFile != builtOsuFile || state.ReplayOsrPath != builtReplayOsrPath)
             rebuild(state);
     }
 
@@ -223,6 +287,7 @@ public partial class ViewerScreen : Screen
     {
         builtSetId = state.SetId;
         builtOsuFile = state.OsuFile;
+        builtReplayOsrPath = state.ReplayOsrPath;
 
         int myGeneration = ++generation;
 

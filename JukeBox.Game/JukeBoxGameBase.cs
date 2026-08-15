@@ -150,6 +150,7 @@ namespace JukeBox.Game
         private ChartModSelection chartMods = null!;
         private PlayfieldElementVisibility playfieldElements = null!;
         private ChartConversion chartConversion = null!;
+        private Detach.SettingsMirror settingsMirror = null!;
         private osu.Game.Skinning.SkinManager skinManager = null!;
         private DroppedFileImporter fileImporter = null!;
 
@@ -369,6 +370,15 @@ namespace JukeBox.Game
             var offsetStore = new BeatmapOffsetStore();
             Add(offsetStore);
             dependencies.Cache(offsetStore);
+
+            // The settings surface the detached viewer window mirrors — one registry, captured by
+            // the main process and applied by the viewer (see Detach.SettingsMirror). Present in
+            // both processes because it IS the same class on both sides: which direction it runs
+            // is decided by who calls Capture and who calls Apply, not by what gets constructed.
+            // Added after the config managers it binds; it defers its own registration until the
+            // realm-backed ruleset configs have loaded.
+            Add(settingsMirror = new Detach.SettingsMirror());
+            dependencies.Cache(settingsMirror);
 
             // UI scaling, lazer's ScalingContainer trick applied to our DPI-scaling root: Scale
             // enlarges the whole UI while the inverse relative Size keeps it filling the window.

@@ -226,6 +226,7 @@ public partial class DroppedFileImporter : Component
         var attachment = new ReplayAttachment
         {
             PlayerName = header.PlayerName,
+            SourcePath = path,
             BeatmapMd5 = header.BeatmapMd5,
             OsuFile = osuFile,
             Score = score,

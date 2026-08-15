@@ -1,5 +1,6 @@
 #nullable enable
 
+using System.Collections.Generic;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -19,7 +20,7 @@ public sealed class ViewerSyncState
     /// version exits rather than misinterpret fields (a stale binary can be running as the
     /// viewer after an upgrade); the main process observes the exit and turns the setting off.
     /// </summary>
-    public const int PROTOCOL_VERSION = 1;
+    public const int PROTOCOL_VERSION = 2;
 
     public int Version { get; set; } = PROTOCOL_VERSION;
 
@@ -35,6 +36,18 @@ public sealed class ViewerSyncState
     /// <summary>Absolute path of the selected .osu difficulty, or null for the set default.</summary>
     public string? OsuFile { get; set; }
 
+    /// <summary>
+    /// Absolute path of the .osr the user dropped for <see cref="ReplayOsuFile"/>, or null when no
+    /// replay is attached to anything currently loadable. The viewer decodes it itself (same
+    /// decoder, same local file) rather than receiving serialized frames — a replay's frames are
+    /// megabytes, and both processes can read the same path.
+    /// </summary>
+    public string? ReplayOsrPath { get; set; }
+
+    /// <summary>The difficulty <see cref="ReplayOsrPath"/> was played on — the key the rendering
+    /// side looks a replay up by. Null whenever <see cref="ReplayOsrPath"/> is.</summary>
+    public string? ReplayOsuFile { get; set; }
+
     // ---- clock ----
 
     public double PositionMs { get; set; }
@@ -45,18 +58,36 @@ public sealed class ViewerSyncState
     /// alongside its clock delta.</summary>
     public long SentAtUnixMs { get; set; }
 
-    // ---- visual settings, mirrored into the viewer's own config instance ----
+    // ---- settings, mirrored into the viewer's own config managers ----
 
-    public double BackgroundDim { get; set; }
-    public double BackgroundBlur { get; set; }
-    public double PlayfieldZoom { get; set; } = 1;
-    public double GlobalAudioOffset { get; set; }
-    public bool RenderChart { get; set; }
-    public bool ShowStoryboardVideo { get; set; } = true;
+    /// <summary>
+    /// Every setting <see cref="SettingsMirror"/> knows about, keyed by its registry key. This is
+    /// the single channel for the whole settings surface — our own config, lazer's game-wide one
+    /// and the per-ruleset ones — so syncing a new setting means adding it to that registry, not
+    /// adding a field here. See <see cref="SettingsMirror"/> for why the values are strings.
+    /// </summary>
+    public Dictionary<string, string> Settings { get; set; } = new Dictionary<string, string>();
 
     /// <summary>The main app's RESOLVED skin name (never Random — the main process rolls it, so
-    /// both windows show the same concrete skin).</summary>
+    /// both windows show the same concrete skin). Outside <see cref="Settings"/> for exactly that
+    /// reason: the raw config value is the unresolved choice.</summary>
     public string Skin { get; set; } = nameof(Configuration.JukeBoxSkin.Argon);
+
+    /// <summary>
+    /// Absolute path of the imported .osk folder backing <see cref="Configuration.JukeBoxSkin.Custom"/>,
+    /// or null when nothing is imported. Also outside <see cref="Settings"/>: the config value is a
+    /// folder NAME resolved against the sending process's storage, and the viewer's storage is a
+    /// different directory that has no skins in it.
+    /// </summary>
+    public string? CustomSkinDirectory { get; set; }
+
+    /// <summary>
+    /// The per-mapset audio offset in force for what's playing, in ms. Outside <see cref="Settings"/>
+    /// because it isn't a config key at all: it's whichever entry of the main process's
+    /// <c>beatmap-offsets.json</c> matches the current set (see <c>BeatmapOffsetStore</c>), a file
+    /// the viewer's storage doesn't have.
+    /// </summary>
+    public double BeatmapAudioOffset { get; set; }
 
     public string ToJson() => JsonSerializer.Serialize(this, ViewerSyncStateJsonContext.Default.ViewerSyncState);
 
