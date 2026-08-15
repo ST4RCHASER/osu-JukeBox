@@ -58,6 +58,10 @@ namespace JukeBox.Game.Online
         /// <param name="health">Shared across chains so a failure observed by one call is still
         /// remembered by the next (chains themselves are built per call) — null disables the
         /// memory entirely, which is what the plain constructor above gives tests.</param>
+        /// <param name="mirrors">The backends to try, in preference order. That order is only the
+        /// starting point: each request is served in tiers by what a mirror can actually express and
+        /// whether it is in a failure cooldown (see SearchAsync), so a mirror listed first is not
+        /// necessarily the one asked first.</param>
         public MirrorChain(MirrorHealth? health, params IBeatmapMirror[] mirrors)
         {
             this.health = health;
