@@ -22,7 +22,9 @@ using osu.Framework.Graphics.Shapes;
 using osu.Framework.Graphics.Sprites;
 using osu.Framework.Graphics.UserInterface;
 using osu.Framework.Testing;
+using osu.Game.Graphics;
 using osuTK;
+using osuTK.Graphics;
 using osuTK.Input;
 
 namespace JukeBox.Game.Tests.Visual
@@ -385,18 +387,176 @@ namespace JukeBox.Game.Tests.Visual
             AddUntilStep("playback switched to hard.osu", () => playback.SelectedOsuFile.Value == "hard.osu");
         }
 
+        // The mode used to be a text tag baked into the item's label ("[taiko] Oni"). It's now drawn
+        // as lazer's real ruleset icon in the item's badge strip instead, so the label carries only
+        // the difficulty name — no bracketed prefix left behind.
         [Test]
-        public void DifficultyDropdownItemLabelIncludesMode()
+        public void DifficultyDropdownItemLabelIsJustTheVersion()
         {
-            var mixedSet = new CachedBeatmapSet { SetId = 105, Directory = tmp, AudioFile = fixtureSet.AudioFile, PreferredOsuFile = "std.osu" };
-            mixedSet.Difficulties.Add(new DifficultyInfo { Path = "std.osu", Version = "Normal", Mode = 0 });
-            mixedSet.Difficulties.Add(new DifficultyInfo { Path = "taiko.osu", Version = "Oni", Mode = 1 });
+            AddStep("play mixed-mode set", () => playback.PlayAsync(mixedModeSet()));
+            AddUntilStep("track active", () => playback.Current.Value?.SetId == 105);
 
-            AddStep("play mixed-mode set", () => playback.PlayAsync(mixedSet));
-            AddUntilStep("track active", () => playback.Current.Value?.SetId == mixedSet.SetId);
+            AddAssert("taiko item labelled with only its version", () => dropdown()
+                .GenerateItemTextForTest(playback.Current.Value!.Difficulties[1]).ToString() == "Oni");
+            AddAssert("no bracketed mode tag anywhere in the labels", () => playback.Current.Value!.Difficulties
+                .All(d => !dropdown().GenerateItemTextForTest(d).ToString().Contains('[')));
+        }
 
-            AddAssert("taiko item labelled with its mode", () => nowPlaying.ChildrenOfType<DifficultySwitcher.DifficultyDropdown>()
-                .Single().GenerateItemTextForTest(mixedSet.Difficulties[1]).ToString() == "[taiko] Oni");
+        // Each item instead opens with lazer's REAL ruleset icon (a SpriteIcon over the
+        // texture-backed OsuIcon glyphs — see RulesetIconTest) for that difficulty's own mode.
+        [Test]
+        public void DifficultyDropdownItemsCarryTheRulesetIcon()
+        {
+            AddStep("play mixed-mode set", () => playback.PlayAsync(mixedModeSet()));
+            AddUntilStep("track active", () => playback.Current.Value?.SetId == 105);
+
+            AddAssert("std item carries osu!'s icon", () => iconOf(playback.Current.Value!.Difficulties[0]).Equals(OsuIcon.RulesetOsu));
+            AddAssert("taiko item carries taiko's icon", () => iconOf(playback.Current.Value!.Difficulties[1]).Equals(OsuIcon.RulesetTaiko));
+        }
+
+        // …followed by a star-rating pill filled with that rating's difficulty-spectrum colour, the
+        // same chip the fullscreen listing's expanded rows draw. Ratings aren't in a .osu file, so
+        // they come from the online metadata for the set being played, matched on mode + version.
+        [Test]
+        public void DifficultyDropdownItemsCarryAStarPillColouredByRating()
+        {
+            var set = mixedModeSet();
+
+            AddStep("publish online ratings", () => jukebox.NowPlaying.Value = new BeatmapSetInfo
+            {
+                Id = 105,
+                Title = "Mixed",
+                Artist = "Someone",
+                Beatmaps =
+                {
+                    new BeatmapInfo { Mode = "osu", Version = "Normal", DifficultyRating = 2.31 },
+                    new BeatmapInfo { Mode = "taiko", Version = "Oni", DifficultyRating = 5.77 },
+                },
+            });
+            AddStep("play mixed-mode set", () => playback.PlayAsync(set));
+            AddUntilStep("track active", () => playback.Current.Value?.SetId == 105);
+
+            AddAssert("std pill prints its rating", () => pillTextOf(set.Difficulties[0]) == "2.31");
+            AddAssert("taiko pill prints its rating", () => pillTextOf(set.Difficulties[1]) == "5.77");
+
+            AddAssert("std pill is tinted for 2.31 stars",
+                () => pillColourOf(set.Difficulties[0]) == Theme.DifficultyColour(2.31));
+            AddAssert("taiko pill is tinted for 5.77 stars",
+                () => pillColourOf(set.Difficulties[1]) == Theme.DifficultyColour(5.77));
+            AddAssert("the two ratings are far enough apart to land in different colour buckets",
+                () => Theme.DifficultyColour(2.31) != Theme.DifficultyColour(5.77));
+        }
+
+        // A set playing without online metadata (a local folder, or a mirror response with no
+        // beatmap list) has no ratings to show — the icon must still be drawn rather than the whole
+        // strip going missing with it.
+        [Test]
+        public void DifficultyDropdownItemsDropOnlyThePillWhenNoRatingIsKnown()
+        {
+            var set = mixedModeSet();
+
+            AddStep("clear online metadata", () => jukebox.NowPlaying.Value = null);
+            AddStep("play mixed-mode set", () => playback.PlayAsync(set));
+            AddUntilStep("track active", () => playback.Current.Value?.SetId == 105);
+
+            AddAssert("icon still drawn", () => iconOf(set.Difficulties[0]).Equals(OsuIcon.RulesetOsu));
+            AddAssert("no star pill", () => badgesFor(set.Difficulties[0]).ChildrenOfType<CircularContainer>().Any() == false);
+        }
+
+        // Collapsing the menu must not change how the current difficulty reads: the closed
+        // dropdown's header carries the same badge strip as the row it stands for.
+        [Test]
+        public void ClosedDropdownHeaderCarriesTheSameBadges()
+        {
+            var set = mixedModeSet();
+
+            AddStep("publish online ratings", () => jukebox.NowPlaying.Value = new BeatmapSetInfo
+            {
+                Id = 105,
+                Beatmaps = { new BeatmapInfo { Mode = "osu", Version = "Normal", DifficultyRating = 2.31 } },
+            });
+            AddStep("play mixed-mode set", () => playback.PlayAsync(set));
+            AddUntilStep("track active", () => playback.Current.Value?.SetId == 105);
+            AddUntilStep("header has badges", () => headerBadges().Any());
+
+            AddAssert("header shows the selected difficulty's ruleset icon", () => headerBadges()
+                .SelectMany(b => b.ChildrenOfType<SpriteIcon>())
+                .Any(i => i.Icon.Equals(OsuIcon.RulesetOsu)));
+            AddAssert("header shows the selected difficulty's rating", () => headerBadges()
+                .SelectMany(b => b.ChildrenOfType<osu.Framework.Graphics.Sprites.SpriteText>())
+                .Any(t => t.Text.ToString() == "2.31"));
+        }
+
+        private CachedBeatmapSet mixedModeSet()
+        {
+            var set = new CachedBeatmapSet { SetId = 105, Directory = tmp, AudioFile = fixtureSet.AudioFile, PreferredOsuFile = "std.osu" };
+            set.Difficulties.Add(new DifficultyInfo { Path = "std.osu", Version = "Normal", Mode = 0 });
+            set.Difficulties.Add(new DifficultyInfo { Path = "taiko.osu", Version = "Oni", Mode = 1 });
+            return set;
+        }
+
+        private DifficultySwitcher.DifficultyDropdown dropdown()
+            => nowPlaying.ChildrenOfType<DifficultySwitcher.DifficultyDropdown>().Single();
+
+        // The badge strip the dropdown would draw for an item, without opening the menu — a
+        // DropdownMenu only builds its row drawables once it has been popped open.
+        private Drawable badgesFor(DifficultyInfo difficulty) => dropdown().BadgesForTest(difficulty)!;
+
+        private IconUsage iconOf(DifficultyInfo difficulty)
+            => badgesFor(difficulty).ChildrenOfType<SpriteIcon>().First().Icon;
+
+        private Drawable starPillOf(DifficultyInfo difficulty)
+            => badgesFor(difficulty).ChildrenOfType<CircularContainer>().Single();
+
+        private string pillTextOf(DifficultyInfo difficulty)
+            => starPillOf(difficulty).ChildrenOfType<osu.Framework.Graphics.Sprites.SpriteText>().Single().Text.ToString();
+
+        private Color4 pillColourOf(DifficultyInfo difficulty)
+            => starPillOf(difficulty).ChildrenOfType<Box>().Single().Colour;
+
+        private IEnumerable<DifficultySwitcher.DifficultyBadges> headerBadges()
+            => nowPlaying.DifficultySwitcher.ChildrenOfType<DifficultySwitcher.DifficultyBadges>();
+
+        // The title used to sit over a full-width accent rule, which read as a divider cutting the
+        // song's own metadata in half. The block is now three plain lines: title, artist, and the
+        // mapper credit that took the rule's place.
+        [Test]
+        public void SongBlockShowsTitleArtistAndMapperWithNoAccentRule()
+        {
+            AddStep("set NowPlaying", () => jukebox.NowPlaying.Value = new BeatmapSetInfo
+            {
+                Id = 7,
+                Title = "Future Candy",
+                Artist = "YUC'e",
+                Creator = "Sotarks",
+            });
+
+            AddUntilStep("mapper credited", () => nowPlaying.MapperText.Text.ToString() == "mapped by Sotarks");
+            AddAssert("title shown", () => nowPlaying.TitleText.Text.ToString() == "Future Candy");
+            AddAssert("artist shown", () => nowPlaying.ArtistText.Text.ToString() == "YUC'e");
+
+            AddAssert("mapper reads below the artist",
+                () => nowPlaying.MapperText.ScreenSpaceDrawQuad.TopLeft.Y
+                      >= nowPlaying.ArtistText.ScreenSpaceDrawQuad.TopLeft.Y);
+
+            // A Box is the only way the rule could be drawn, and the song block holds nothing else
+            // that would legitimately need one.
+            AddAssert("no accent rule under the title",
+                () => !nowPlaying.SongInfo.ChildrenOfType<Box>().Any());
+        }
+
+        [Test]
+        public void SongBlockLeavesTheMapperLineBlankWhenNoCreatorIsKnown()
+        {
+            AddStep("set NowPlaying with no creator", () => jukebox.NowPlaying.Value = new BeatmapSetInfo
+            {
+                Id = 8,
+                Title = "Untitled",
+                Artist = "Unknown",
+            });
+
+            AddUntilStep("title shown", () => nowPlaying.TitleText.Text.ToString() == "Untitled");
+            AddAssert("no credit to nobody", () => nowPlaying.MapperText.Text.ToString() == string.Empty);
         }
 
         [Test]
