@@ -321,7 +321,7 @@ public partial class QueuePanel : CompositeDrawable
     /// the wheel.
     /// </para>
     /// </summary>
-    private partial class QueueList : OsuRearrangeableListContainer<BeatmapSetInfo>
+    internal partial class QueueList : OsuRearrangeableListContainer<BeatmapSetInfo>
     {
         private readonly Func<BeatmapSetInfo, QueueRow> createRow;
         private readonly Dictionary<BeatmapSetInfo, QueueRow> rows = new();
@@ -439,11 +439,18 @@ public partial class QueuePanel : CompositeDrawable
 
         private const float button_size = 24;
 
+        /// <summary>The ▶/✕ column: one button wide, since they stack rather than sit side by side.</summary>
+        private const float action_column_width = button_size + 8;
+
+        /// <summary>Width of the hover-revealed drag handle, which OVERLAYS the card's left edge
+        /// rather than reserving a column of its own — see <see cref="dragHandle"/>.</summary>
+        private const float drag_handle_width = 22;
+
         /// <summary>Right inset of the text block with only the ▶ and ✕ to clear.</summary>
-        private const float text_inset_idle = 34 + button_size;
+        private const float text_inset_idle = action_column_width + 8;
 
         /// <summary>Right inset of the text block while a percentage/spinner also sits there.</summary>
-        private const float text_inset_downloading = 82 + button_size;
+        private const float text_inset_downloading = action_column_width + 56;
 
         private const float progress_bar_height = 3;
 
@@ -456,6 +463,19 @@ public partial class QueuePanel : CompositeDrawable
 
         private IconButton removeButton = null!;
         private IconButton? playNowButton;
+        private Container dragHandle = null!;
+        private Container card = null!;
+
+        /// <summary>Test hook (JukeBox.Game.Tests has InternalsVisibleTo): the card itself — the
+        /// row's content, which is what must span the full width with no handle gutter beside it.</summary>
+        internal Drawable Card => card;
+
+        /// <summary>Test hook: the hover-revealed drag handle that <see cref="IsDraggableAt"/>
+        /// hit-tests.</summary>
+        internal Drawable DragHandle => dragHandle;
+
+        /// <summary>Test hook: what the list itself asks before starting a drag.</summary>
+        internal bool CanBeDraggedAt(Vector2 screenSpacePos) => IsDraggableAt(screenSpacePos);
         private Box surface = null!;
         private Container textBlock = null!;
         private SpriteText percentText = null!;
@@ -485,7 +505,7 @@ public partial class QueuePanel : CompositeDrawable
         /// Update()/Scheduler ticking for a not-IsPresent drawable, which stalls that fade
         /// indefinitely instead of letting it progress every frame.
         /// </summary>
-        protected override Drawable CreateContent() => new Container
+        protected override Drawable CreateContent() => card = new Container
         {
             RelativeSizeAxes = Axes.X,
             Height = row_height,
@@ -599,34 +619,80 @@ public partial class QueuePanel : CompositeDrawable
                         },
                     },
                 },
-                // ▶ sits immediately left of ✕ — the destructive action stays in the corner it has
-                // always been in, so muscle memory for "remove" survives the new neighbour.
-                playNowButton = onPlayNow == null ? null : new IconButton
+                // ▶ ABOVE ✕ in a narrow column at the right edge (user request). The destructive
+                // action keeps the bottom of the pair, so it is still the one furthest from where
+                // the pointer arrives and "remove" stays the deliberate click of the two.
+                new FillFlowContainer
                 {
                     Anchor = Anchor.CentreRight,
                     Origin = Anchor.CentreRight,
-                    Position = new Vector2(-4 - button_size, 0),
-                    Size = new Vector2(button_size),
-                    Icon = FontAwesome.Solid.Play,
-                    Action = onPlayNow,
-                    Alpha = 0,
+                    AutoSizeAxes = Axes.Both,
+                    Direction = FillDirection.Vertical,
+                    Spacing = new Vector2(0, 2),
+                    Margin = new MarginPadding { Right = 4 },
+                    Children = new Drawable[]
+                    {
+                        playNowButton = onPlayNow == null ? null : new IconButton
+                        {
+                            Size = new Vector2(button_size),
+                            Icon = FontAwesome.Solid.Play,
+                            Action = onPlayNow,
+                            Alpha = 0,
+                        },
+                        removeButton = new IconButton
+                        {
+                            Size = new Vector2(button_size),
+                            Icon = FontAwesome.Solid.Times,
+                            Action = onRemove,
+                            Alpha = 0,
+                        },
+                    }.Where(d => d != null).Select(d => d!).ToArray(),
                 },
-                removeButton = new IconButton
+                // The drag handle OVERLAYS the card's left edge instead of sitting in a reserved
+                // column beside it, so the card is full width at rest (user request). It carries its
+                // own scrim because it lands on top of the cover thumbnail, and it is what
+                // IsDraggableAt hit-tests — see that override.
+                dragHandle = new Container
                 {
-                    Anchor = Anchor.CentreRight,
-                    Origin = Anchor.CentreRight,
-                    Position = new Vector2(-4, 0),
-                    Size = new Vector2(button_size),
-                    Icon = FontAwesome.Solid.Times,
-                    Action = onRemove,
+                    Anchor = Anchor.CentreLeft,
+                    Origin = Anchor.CentreLeft,
+                    RelativeSizeAxes = Axes.Y,
+                    Width = drag_handle_width,
                     Alpha = 0,
+                    Children = new Drawable[]
+                    {
+                        new Box
+                        {
+                            RelativeSizeAxes = Axes.Both,
+                            Colour = Theme.PanelSurface,
+                            Alpha = 0.85f,
+                        },
+                        new SpriteIcon
+                        {
+                            Anchor = Anchor.Centre,
+                            Origin = Anchor.Centre,
+                            Size = new Vector2(11),
+                            Icon = FontAwesome.Solid.Bars,
+                            Colour = Theme.TextTertiary,
+                        },
+                    },
                 },
             }.Where(d => d != null).Select(d => d!).ToArray(),
         };
 
+        /// <summary>
+        /// Our own handle replaces the one <see cref="OsuRearrangeableListItem{T}"/> draws, which
+        /// lives in an auto-sized grid column and therefore reserves its width even while hidden —
+        /// that reserved gutter is what kept the card off the panel's left edge. Switching it off
+        /// collapses the column; the drag itself keeps working because the list asks
+        /// <see cref="IsDraggableAt"/> where a drag may begin, and that now points at our handle.
+        /// </summary>
+        protected override bool IsDraggableAt(Vector2 screenSpacePos) => dragHandle.ReceivePositionalInputAt(screenSpacePos);
+
         protected override void LoadComplete()
         {
             base.LoadComplete();
+            ShowDragHandle.Value = false;
             ready = true;
             updateProgress();
 
@@ -657,6 +723,8 @@ public partial class QueuePanel : CompositeDrawable
 
         private void fadeButtons(float alpha)
         {
+            dragHandle.FadeTo(alpha, Theme.HoverFadeDuration);
+
             foreach (var button in new[] { playNowButton, removeButton })
             {
                 if (button == null)
