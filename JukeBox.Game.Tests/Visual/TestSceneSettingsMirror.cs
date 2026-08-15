@@ -7,6 +7,7 @@ using JukeBox.Game.Configuration;
 using JukeBox.Game.Detach;
 using NUnit.Framework;
 using osu.Framework.Allocation;
+using osu.Framework.Bindables;
 using osu.Framework.Testing;
 using osu.Game.Configuration;
 using osu.Game.Rulesets;
@@ -52,6 +53,9 @@ namespace JukeBox.Game.Tests.Visual
                 lazerConfig.SetValue(OsuSetting.HitLighting, false);
                 osuRulesetConfig()?.SetValue(OsuRulesetSetting.SnakingInSliders, true);
                 maniaRulesetConfig()?.SetValue(ManiaRulesetSetting.ScrollSpeed, 8.0);
+                watchedScrollSpeed = null;
+                watchedDim = null;
+                watchedHitLighting = null;
             });
         }
 
@@ -198,6 +202,95 @@ namespace JukeBox.Game.Tests.Visual
 
             AddAssert("the good one landed", () => lazerConfig.Get<bool>(OsuSetting.HitLighting));
             AddAssert("the torn one was left alone", () => config.Get<double>(JukeBoxSetting.BackgroundDim) == 0.3);
+        }
+
+        // Bound copies held in FIELDS so a collection mid-test can't drop the subscriptions these
+        // two tests count on — the same weak-reference hazard the mirror itself guards against.
+        private Bindable<double>? watchedScrollSpeed;
+        private Bindable<double>? watchedDim;
+        private Bindable<bool>? watchedHitLighting;
+
+        private int scrollSpeedChanges, dimChanges, hitLightingChanges;
+
+        /// <summary>
+        /// Subscribes to one setting from each of the three config managers and counts how many
+        /// times each is actually CHANGED, which is what the manager persists (for a ruleset
+        /// setting, into realm).
+        /// </summary>
+        private void watchWrites()
+        {
+            watchedScrollSpeed = maniaRulesetConfig()!.GetBindable<double>(ManiaRulesetSetting.ScrollSpeed);
+            watchedDim = config.GetBindable<double>(JukeBoxSetting.BackgroundDim);
+            watchedHitLighting = lazerConfig.GetBindable<bool>(OsuSetting.HitLighting);
+
+            watchedScrollSpeed.ValueChanged += _ => scrollSpeedChanges++;
+            watchedDim.ValueChanged += _ => dimChanges++;
+            watchedHitLighting.ValueChanged += _ => hitLightingChanges++;
+
+            scrollSpeedChanges = dimChanges = hitLightingChanges = 0;
+        }
+
+        /// <summary>
+        /// The viewer re-applies the WHOLE snapshot at 4 Hz, so this is the property that keeps
+        /// that free: assigning a bindable the value it already holds changes nothing, and a
+        /// setting that isn't changed is never persisted. It is asserted rather than assumed
+        /// because it rests on osu.Framework's equality short-circuit in <c>Bindable.Value</c> —
+        /// if that ever went away, the viewer would start writing every registered setting to
+        /// realm four times a second and nothing else would notice.
+        /// </summary>
+        [Test]
+        public void ReapplyingAnUnchangedSnapshotWritesNothing()
+        {
+            Dictionary<string, string> snapshot = null!;
+
+            AddUntilStep("registry populated", () => mirror.Keys.Any());
+            AddStep("capture and settle", () =>
+            {
+                snapshot = mirror.Capture();
+                mirror.Apply(snapshot);
+            });
+
+            AddStep("start counting", watchWrites);
+            AddStep("re-apply the same snapshot ten times", () =>
+            {
+                for (int i = 0; i < 10; i++)
+                    mirror.Apply(snapshot);
+            });
+
+            AddAssert("no setting was written", () => scrollSpeedChanges == 0 && dimChanges == 0 && hitLightingChanges == 0);
+        }
+
+        /// <summary>
+        /// And the same property under the worst case for it — a slider being dragged in the main
+        /// window, which sends a different value every heartbeat. The dragged setting is written
+        /// once per tick, which is inherent; every OTHER setting in the registry must stay silent.
+        /// </summary>
+        [Test]
+        public void DraggingOneSettingWritesOnlyThatSetting()
+        {
+            const int ticks = 40; // ten seconds of the 4 Hz heartbeat
+
+            Dictionary<string, string> snapshot = null!;
+
+            AddUntilStep("registry populated", () => mirror.Keys.Any());
+            AddStep("capture and settle", () =>
+            {
+                snapshot = mirror.Capture();
+                mirror.Apply(snapshot);
+            });
+
+            AddStep("start counting", watchWrites);
+            AddStep($"drag the scroll speed across {ticks} snapshots", () =>
+            {
+                for (int i = 0; i < ticks; i++)
+                {
+                    snapshot["ruleset:ManiaRulesetSetting.ScrollSpeed"] = (5 + i * 0.25).ToString("R", System.Globalization.CultureInfo.InvariantCulture);
+                    mirror.Apply(snapshot);
+                }
+            });
+
+            AddAssert("the dragged one moved once per tick", () => scrollSpeedChanges == ticks);
+            AddAssert("nothing else moved at all", () => dimChanges == 0 && hitLightingChanges == 0);
         }
     }
 }
