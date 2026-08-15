@@ -165,6 +165,13 @@ public partial class BeatmapSearchEngine : Component
     public readonly Bindable<string?> LastError = new Bindable<string?>();
 
     /// <summary>
+    /// Names the mirror that answered the last search WITHOUT being able to apply its filters, or
+    /// null when the results really are filtered. Only reachable on the mirror backend, and only
+    /// once every mirror that could express the filters has failed (see <see cref="MirrorChain"/>).
+    /// </summary>
+    public readonly Bindable<string?> FiltersDroppedBy = new Bindable<string?>();
+
+    /// <summary>
     /// The rendered result set changed — fired on the update thread. The argument is true for a
     /// FRESH search (views should scroll back to the top), false for a page append or a
     /// client-side filter change (views rebuild in place).
@@ -181,6 +188,10 @@ public partial class BeatmapSearchEngine : Component
 
     [Resolved(canBeNull: true)]
     private JukeBoxConfigManager? config { get; set; }
+
+    /// <summary>The persisted "Search API" setting <see cref="Api"/> follows. A field purely to keep
+    /// it alive — see <see cref="load"/>.</summary>
+    private Bindable<SearchApi>? apiConfig;
 
     private ScheduledDelegate? debounceDelegate;
 
@@ -227,7 +238,14 @@ public partial class BeatmapSearchEngine : Component
         // Bound BEFORE the subscription below so adopting the persisted value at startup isn't
         // itself treated as the user switching backends.
         if (config != null)
-            Api.BindTo(config.GetBindable<SearchApi>(JukeBoxSetting.SearchApi));
+        {
+            // The returned bindable is kept in a FIELD, never bound to inline. ConfigManager hands
+            // back a bound COPY that it only references weakly, so a copy nobody else keeps alive
+            // is collected — after which the setting still reads correctly at startup but stops
+            // propagating, and changing "Search API" in settings silently does nothing.
+            apiConfig = config.GetBindable<SearchApi>(JukeBoxSetting.SearchApi);
+            Api.BindTo(apiConfig);
+        }
 
         Api.BindValueChanged(_ => ScheduleSearch());
 
@@ -350,6 +368,12 @@ public partial class BeatmapSearchEngine : Component
         string? error = null;
         bool fromOfficial = false;
 
+        // Only the mirror path can land here: no mirror that could express the filters answered, so
+        // the results on screen are broader than the filter rows claim and the user has to be told.
+        // Assigned from the request's callback, which runs on whatever thread the search completed on.
+        string? unfilteredBy = null;
+        request.OnFiltersDropped = name => unfilteredBy = name;
+
         if (Api.Value == SearchApi.Official)
         {
             try
@@ -414,8 +438,9 @@ public partial class BeatmapSearchEngine : Component
             }
 
             loadedSets.AddRange(results);
-            updateStatus(error);
+            updateStatus(error, unfilteredBy);
             LastError.Value = error;
+            FiltersDroppedBy.Value = unfilteredBy;
             ResultsChanged?.Invoke(fresh);
         });
     }
@@ -447,11 +472,11 @@ public partial class BeatmapSearchEngine : Component
         }
 
         autoChainedPages = 0;
-        updateStatus(null);
+        updateStatus(null, FiltersDroppedBy.Value);
         ResultsChanged?.Invoke(false);
     }
 
-    private void updateStatus(string? error)
+    private void updateStatus(string? error, string? unfilteredBy)
     {
         if (error != null)
         {
@@ -462,6 +487,14 @@ public partial class BeatmapSearchEngine : Component
         if (!VisibleSets.Any())
         {
             Status.Value = loadedSets.Count == 0 ? "no results" : "no results (client-side genre/language filter)";
+            return;
+        }
+
+        // Louder than a result count, because it means the visible results are BROADER than the
+        // filter rows say — the alternative (staying quiet) is what made the filters look broken.
+        if (unfilteredBy != null)
+        {
+            Status.Value = $"{unfilteredBy} can't apply these filters — showing unfiltered results";
             return;
         }
 

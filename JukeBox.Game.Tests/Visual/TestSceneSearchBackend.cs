@@ -72,6 +72,7 @@ namespace JukeBox.Game.Tests.Visual
                 mirror.Sets.Clear();
                 mirror.Sets.Add(new BeatmapSetInfo { Id = 100, Title = "From Mirror", Genre = new NamedIdInfo { Id = 3 } });
                 mirror.Requests.Clear();
+                mirror.DropFiltersAs = null;
 
                 officialHandler.Reset();
                 clientId.Value = "1234";
@@ -225,6 +226,24 @@ namespace JukeBox.Game.Tests.Visual
             AddUntilStep("set filtered out", () => !engine.VisibleSets.Any());
         }
 
+        // The regression this pairs with: with a mirror that silently ignores every filter, results
+        // never changed and nothing said why — indistinguishable from the filters being broken.
+        [Test]
+        public void UnfilterableMirrorResultsSaySoInTheListing()
+        {
+            AddStep("mirror cannot apply the filters", () => mirror.DropFiltersAs = "osu.direct");
+            AddStep("search", () => engine.Query.Value = "camellia");
+
+            AddUntilStep("results arrive anyway", () => engine.LoadedSets.Any());
+
+            AddAssert("the mirror is named", () => engine.FiltersDroppedBy.Value == "osu.direct");
+            AddAssert("status says the results are unfiltered", () => engine.Status.Value.Contains("can't apply these filters"));
+
+            AddStep("mirror can apply them again", () => mirror.DropFiltersAs = null);
+            AddStep("search again", () => engine.Query.Value = "camellia 2");
+            AddUntilStep("warning cleared", () => engine.FiltersDroppedBy.Value == null && !engine.Status.Value.Contains("can't apply"));
+        }
+
         // ---- Debounce ---------------------------------------------------------------------------
 
         [Test]
@@ -236,6 +255,45 @@ namespace JukeBox.Game.Tests.Visual
         }
 
         // ---- Filter rows -------------------------------------------------------------------------
+
+        // REPRODUCTION: the real user action is changing the dropdown in Settings, which writes the
+        // CONFIG value — not the engine bindable the other tests poke directly.
+        [Test]
+        public void ChangingTheSettingUpdatesTheRowsLive()
+        {
+            AddAssert("starts hidden on mirror", () => listing.GenreRow.Alpha == 0);
+
+            AddStep("switch the SETTING to Official", () => config.SetValue(JukeBoxSetting.SearchApi, SearchApi.Official));
+
+            AddAssert("engine followed the setting", () => engine.Api.Value == SearchApi.Official);
+            AddAssert("genre row visible", () => listing.GenreRow.Alpha == 1);
+            AddAssert("language row visible", () => listing.LanguageRow.Alpha == 1);
+
+            AddStep("switch the SETTING back to Mirror", () => config.SetValue(JukeBoxSetting.SearchApi, SearchApi.Mirror));
+            AddAssert("genre row hidden again", () => listing.GenreRow.Alpha == 0);
+        }
+
+        // REPRODUCTION: the app starts with the setting ALREADY on Official (that is how a returning
+        // user launches), so the listing is constructed against a backend it never saw *change*.
+        // Every other test in this file flips the setting on a listing built while Mirror was
+        // selected, which is a different code path.
+        [Test]
+        public void OfficialFromTheStartShowsGenreAndLanguage()
+        {
+            AddStep("persist Official, then build the listing", () =>
+            {
+                config.SetValue(JukeBoxSetting.SearchApi, SearchApi.Official);
+
+                engine = new BeatmapSearchEngine();
+                listing = new FullscreenListingOverlay(engine) { RelativeSizeAxes = Axes.Both };
+                Child = new Container { RelativeSizeAxes = Axes.Both, Children = new Drawable[] { engine, listing } };
+            });
+            AddStep("show", () => listing.ShowSearch());
+
+            AddAssert("engine adopted the persisted backend", () => engine.Api.Value == SearchApi.Official);
+            AddAssert("genre row visible", () => listing.GenreRow.Alpha == 1);
+            AddAssert("language row visible", () => listing.LanguageRow.Alpha == 1);
+        }
 
         [Test]
         public void FilterRowsFollowTheActiveBackend()
@@ -299,9 +357,17 @@ namespace JukeBox.Game.Tests.Visual
 
             public List<SearchRequest> Requests { get; } = new List<SearchRequest>();
 
+            /// <summary>When set, answers like a mirror that could not express the filters — which
+            /// is what MirrorChain reports once no capable mirror could be reached.</summary>
+            public string? DropFiltersAs;
+
             public Task<List<BeatmapSetInfo>> SearchAsync(SearchRequest request, CancellationToken ct = default)
             {
                 Requests.Add(request);
+
+                if (DropFiltersAs != null)
+                    request.OnFiltersDropped?.Invoke(DropFiltersAs);
+
                 return Task.FromResult(new List<BeatmapSetInfo>(Sets));
             }
 
