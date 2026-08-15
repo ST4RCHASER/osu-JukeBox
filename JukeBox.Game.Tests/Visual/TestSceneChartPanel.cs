@@ -13,6 +13,7 @@ using JukeBox.Game.Replays;
 using JukeBox.Game.UI;
 using NUnit.Framework;
 using osu.Framework.Allocation;
+using osu.Framework.Bindables;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Platform;
@@ -271,7 +272,10 @@ namespace JukeBox.Game.Tests.Visual
 
             // Disabled is what stops the user: lazer's checkbox refuses input while its Current is,
             // and a programmatic write throws outright.
-            AddAssert("every toggle refuses to move", () => Enum.GetValues<ChartMod>().All(m => panel.ModCheckbox(m).Current.Disabled));
+            AddAssert("every toggle refuses to move",
+                () => Enum.GetValues<ChartMod>().Where(m => ChartModCatalog.KeyCountOf(m) == null)
+                          .All(m => panel.ModCheckbox(m).Current.Disabled)
+                      && panel.KeyOverrideCheckbox.Current.Disabled);
             AddAssert("nothing new got selected behind the lock", () => !chartMods.Enabled(ChartMod.Flashlight).Value);
 
             AddStep("replay stops", () => jukebox.NowPlaying.Value = new BeatmapSetInfo { Id = 8 });
@@ -300,8 +304,9 @@ namespace JukeBox.Game.Tests.Visual
                     .All(panel.ModOffered));
 
             AddAssert($"mania-only mods offered: {maniaOnly}",
-                () => new[] { ChartMod.Key1, ChartMod.Key4, ChartMod.Key7, ChartMod.Key9, ChartMod.DualStages, ChartMod.FadeIn }
-                    .All(m => panel.ModOffered(m) == maniaOnly));
+                () => new[] { ChartMod.DualStages, ChartMod.FadeIn }.All(m => panel.ModOffered(m) == maniaOnly));
+
+            AddAssert($"the key-count control offered: {maniaOnly}", () => panel.KeyOverrideOffered == maniaOnly);
 
             AddAssert($"Mirror offered: {mirror}", () => panel.ModOffered(ChartMod.Mirror) == mirror);
             AddAssert($"Random offered: {random}", () => panel.ModOffered(ChartMod.Random) == random);
@@ -337,8 +342,8 @@ namespace JukeBox.Game.Tests.Visual
         {
             AddStep("play a mania difficulty", () => playing(3));
 
-            AddAssert("key counts and Co-op refuse input",
-                () => new[] { ChartMod.Key1, ChartMod.Key4, ChartMod.Key9, ChartMod.DualStages }.All(panel.ModInert));
+            AddAssert("the key count and Co-op refuse input",
+                () => panel.KeyOverrideInert && panel.ModInert(ChartMod.DualStages));
 
             AddAssert("and the reason is on screen", () => panel.ConvertsOnlyNoteVisible);
 
@@ -350,6 +355,92 @@ namespace JukeBox.Game.Tests.Visual
 
             AddAssert("the note goes with the rows it explains", () => !panel.ConvertsOnlyNoteVisible);
         }
+
+        /// <summary>
+        /// The nine key-count rows are one checkbox plus a 1-9 value now (user request). Whatever
+        /// key mod the selection holds must show up here as ticked-plus-N, and none of them as
+        /// unticked — this is the direction a user actually sees, since a stored 7K has to load
+        /// back into the collapsed control.
+        /// </summary>
+        [Test]
+        public void TheKeyCountControlReflectsWhicheverKeyModIsSelected()
+        {
+            AddStep("play a mania difficulty", () => playing(3));
+
+            AddAssert("unticked with nothing selected",
+                () => !panel.KeyOverrideCheckbox.Current.Value && keyModsOn().Count == 0);
+
+            AddStep("a stored 7K loads", () => config.SetValue(JukeBoxSetting.ChartMods, "7K"));
+
+            AddAssert("ticked, showing 7",
+                () => panel.KeyOverrideCheckbox.Current.Value && panel.KeyCountSlider.Current.Value == 7);
+
+            AddStep("a stored 3K loads instead", () => config.SetValue(JukeBoxSetting.ChartMods, "3K"));
+
+            AddAssert("still ticked, now showing 3",
+                () => panel.KeyOverrideCheckbox.Current.Value && panel.KeyCountSlider.Current.Value == 3);
+            AddAssert("and exactly one key mod is on", () => keyModsOn().SequenceEqual(new[] { ChartMod.Key3 }));
+
+            AddStep("a stored selection with no key mod loads", () => config.SetValue(JukeBoxSetting.ChartMods, "MR"));
+
+            AddAssert("unticked", () => !panel.KeyOverrideCheckbox.Current.Value);
+            AddAssert("but the control remembers the count it last showed", () => panel.KeyCountSlider.Current.Value == 3);
+        }
+
+        /// <summary>
+        /// Out of range is unreachable rather than clamped after the fact: the value is a bounded
+        /// bindable, so there is no state in which a number outside 1-9 is accepted and silently
+        /// corrected somewhere the user cannot see.
+        /// </summary>
+        [Test]
+        public void TheKeyCountValueIsBoundedToOneThroughNine()
+        {
+            AddStep("play a mania difficulty", () => playing(3));
+
+            AddAssert("the control declares 1-9 as its own bounds", () =>
+            {
+                var bounded = (BindableNumber<int>)panel.KeyCountSlider.Current;
+                return bounded.MinValue == ChartModCatalog.min_key_count && bounded.MaxValue == ChartModCatalog.max_key_count;
+            });
+
+            AddAssert("and osu!mania offers a mod for every value in that range and none outside it",
+                () => Enumerable.Range(ChartModCatalog.min_key_count, ChartModCatalog.max_key_count - ChartModCatalog.min_key_count + 1)
+                                .All(k => ChartModCatalog.KeyCountMod(k) != null)
+                      && ChartModCatalog.KeyCountMod(0) == null
+                      && ChartModCatalog.KeyCountMod(10) == null);
+        }
+
+        /// <summary>
+        /// The control→selection direction. It is not reachable by clicking today — the key counts
+        /// only act on converted beatmaps, so the whole control is greyed (see
+        /// <see cref="ConversionOnlyModsAreMarkedInapplicable"/>) — so the test lifts exactly the
+        /// disable that state applies, standing in for the live control this becomes if playing a
+        /// map in another mode is ever added. Without this the wiring would ship unexercised.
+        /// </summary>
+        [Test]
+        public void TickingTheControlSelectsExactlyOneKeyMod()
+        {
+            AddStep("play a mania difficulty", () => playing(3));
+
+            AddStep("make the control live, as it would be for a convert", () => panel.AssumeConvertedBeatmap = true);
+            AddAssert("it really is live now", () => !panel.KeyOverrideInert);
+
+            AddStep("tick the override", () => panel.KeyOverrideCheckbox.Current.Value = true);
+            AddStep("pick 7", () => panel.KeyCountSlider.Current.Value = 7);
+
+            AddAssert("exactly 7K is selected", () => keyModsOn().SequenceEqual(new[] { ChartMod.Key7 }));
+            AddAssert("and it persisted as the acronym", () => config.Get<string>(JukeBoxSetting.ChartMods) == "7K");
+
+            AddStep("pick 3 instead", () => panel.KeyCountSlider.Current.Value = 3);
+            AddAssert("exactly 3K now, 7K went with it", () => keyModsOn().SequenceEqual(new[] { ChartMod.Key3 }));
+
+            AddStep("untick the override", () => panel.KeyOverrideCheckbox.Current.Value = false);
+            AddAssert("no key mod selected", () => keyModsOn().Count == 0);
+            AddAssert("and nothing key-shaped persisted", () => !config.Get<string>(JukeBoxSetting.ChartMods).Contains("K"));
+        }
+
+        private IReadOnlyList<ChartMod> keyModsOn()
+            => ChartModCatalog.KeyCountMods.Where(m => chartMods.Enabled(m).Value).ToArray();
 
         [Test]
         public void ElementTogglesDriveTheSharedVisibilityService()
