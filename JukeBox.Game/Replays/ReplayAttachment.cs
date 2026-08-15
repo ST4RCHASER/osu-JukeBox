@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using osu.Game.Scoring;
 
 namespace JukeBox.Game.Replays;
@@ -36,6 +37,24 @@ public class ReplayAttachment
     /// while the "Played by X" credit still shows.
     /// </summary>
     public Score? Score { get; init; }
+
+    /// <summary>
+    /// The play's mods as short names ("HD", "HR", "DT"), in osu!'s own display order. Empty for a
+    /// no-mod play, or when the replay never decoded. Shown on the queue card and under the
+    /// "Played by" line in the playback panel.
+    /// </summary>
+    public IReadOnlyList<string> ModAcronyms { get; init; } = Array.Empty<string>();
+
+    /// <summary>
+    /// How much faster the play ran than the beatmap's own timing — 1.5 under DT/NC, 0.75 under
+    /// HT/DC, 1 otherwise. Applied to actual PLAYBACK (see <see cref="Playback.PlaybackController.ReplayRate"/>)
+    /// rather than to the chart, so the music speeds up with the gameplay and the two stay in sync,
+    /// which is what the rate mods do in osu! itself.
+    /// </summary>
+    public double Rate { get; init; } = 1;
+
+    /// <summary>Whether <see cref="Rate"/> should shift pitch too — see <see cref="ReplayMods.ShiftsPitch"/>.</summary>
+    public bool RateShiftsPitch { get; init; }
 
     /// <summary>When the play happened, per the replay header.</summary>
     public DateTimeOffset PlayedAt { get; init; }
