@@ -125,6 +125,7 @@ public partial class NowPlayingPanel : CompositeDrawable
     private SpriteText titleText = null!;
     private SpriteText artistText = null!;
     private SpriteText mapperText = null!;
+    private SpriteText replayText = null!;
 
     // Last text actually written to elapsedText/totalText, as whole seconds — SpriteText.Text
     // re-lays-out glyphs on every write, so Update() (which runs every frame) only touches these
@@ -176,6 +177,9 @@ public partial class NowPlayingPanel : CompositeDrawable
     internal SpriteText ArtistText => artistText;
 
     internal SpriteText MapperText => mapperText;
+
+    /// <summary>Test-only: the "Played by X" credit shown for a set queued from a dropped replay.</summary>
+    internal SpriteText ReplayText => replayText;
 
     /// <summary>Test-only: the song block's own drawables, so a test can assert what the block is
     /// made of (no accent rule, three text lines) without reaching into its layout.</summary>
@@ -271,6 +275,16 @@ public partial class NowPlayingPanel : CompositeDrawable
                                         Truncate = true,
                                         Font = FontUsage.Default.With(size: Theme.CaptionTextSize),
                                         Colour = Theme.TextTertiary,
+                                    },
+                                    // Only present for a set queued by dropping a .osr; blank
+                                    // otherwise, and a blank SpriteText collapses to zero height
+                                    // so the block closes up exactly as it did before.
+                                    replayText = new SpriteText
+                                    {
+                                        RelativeSizeAxes = Axes.X,
+                                        Truncate = true,
+                                        Font = FontUsage.Default.With(size: Theme.CaptionTextSize),
+                                        Colour = Theme.Accent,
                                     },
                                 },
                             },
@@ -537,11 +551,13 @@ public partial class NowPlayingPanel : CompositeDrawable
         string title = change.NewValue?.DisplayTitle ?? string.Empty;
         string artist = change.NewValue?.DisplayArtist ?? string.Empty;
         string creator = change.NewValue?.Creator ?? string.Empty;
+        string player = change.NewValue?.Replay?.PlayerName ?? string.Empty;
 
         songInfo.FadeOut(Theme.DurationFast, Theme.EaseExit).OnComplete(_ =>
         {
             titleText.Text = title;
             artistText.Text = artist;
+            replayText.Text = player.Length > 0 ? $"Played by {player}" : string.Empty;
             // Sets served without a creator (and the nothing-playing state) leave this blank rather
             // than printing a credit to nobody; SpriteText collapses to zero height, so the flow
             // above simply closes up.

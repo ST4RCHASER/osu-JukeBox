@@ -276,6 +276,10 @@ namespace JukeBox.Game
             var queue = new MusicQueue();
             dependencies.Cache(queue);
 
+            // Session-lifetime registry of dropped .osr replays, keyed by the difficulty each was
+            // played on. Cached before the visuals stack can resolve it (see BeatmapVisuals).
+            dependencies.Cache(new Replays.ReplayStore());
+
             var radio = new RadioService(mirror);
             dependencies.Cache(radio);
 

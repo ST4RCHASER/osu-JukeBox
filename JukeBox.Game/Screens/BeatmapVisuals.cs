@@ -6,6 +6,7 @@ using JukeBox.Game.Beatmaps;
 using JukeBox.Game.Configuration;
 using JukeBox.Game.LazerPlayer;
 using JukeBox.Game.Playback;
+using JukeBox.Game.Replays;
 using osu.Framework.Allocation;
 using osu.Framework.Bindables;
 using osu.Framework.Graphics;
@@ -110,6 +111,11 @@ public partial class BeatmapVisuals : CompositeDrawable
 
     [Resolved(canBeNull: true)]
     private BeatmapOffsetStore? offsetStore { get; set; }
+
+    // canBeNull like the rest: a bare test scene has no replay registry, which simply means no
+    // difficulty ever has a replay and the chart is always autoplay-driven.
+    [Resolved(canBeNull: true)]
+    private ReplayStore? replays { get; set; }
 
     // MainScreen's playerBox live pixel size (see its own [Cached] remarks) — resolved as
     // nullable since only MainScreen's real hosting caches it; falls back to this Drawable's
@@ -527,7 +533,17 @@ public partial class BeatmapVisuals : CompositeDrawable
         bool wantLayer = (renderChart.Value || playHitSounds.Value) && chartWorking != null && osuFile != null;
 
         if (wantLayer && chartLayer == null)
-            chartContainer.Add(chartLayer = new LazerChartLayer(chartWorking!, osuFile!));
+        {
+            // Only a replay registered against THIS difficulty applies: a dropped .osr identifies
+            // one exact .osu by checksum, so switching to any other difficulty of the same set
+            // correctly falls back to autoplay (and switching back restores the replay).
+            var replay = replays?.ForOsuFile(osuFile);
+
+            if (replay?.Score != null)
+                Logger.Log($"Playing back {replay.PlayerName}'s replay on '{Path.GetFileName(osuFile)}' instead of autoplay");
+
+            chartContainer.Add(chartLayer = new LazerChartLayer(chartWorking!, osuFile!, replay?.Score));
+        }
         else if (!wantLayer && chartLayer != null)
         {
             chartContainer.Remove(chartLayer, true);

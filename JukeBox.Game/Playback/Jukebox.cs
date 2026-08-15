@@ -355,6 +355,16 @@ public partial class Jukebox : Component
                 continue;
             }
 
+            // A set carrying a dropped replay must play the EXACT difficulty that replay was
+            // recorded on — identified by checksum at import time — not the set's default one,
+            // which is generally a different diff entirely. Done after PlayAsync rather than
+            // instead of it so the normal path stays untouched; SwitchDifficultyAsync keeps the
+            // clock running and reloads the track only if that difficulty uses different audio.
+            string? replayDiff = next.Replay?.OsuFile;
+
+            if (replayDiff != null && replayDiff != cached.PreferredOsuFile && cached.OsuFiles.Contains(replayDiff))
+                await playback.SwitchDifficultyAsync(replayDiff).ConfigureAwait(false);
+
             Schedule(() =>
             {
                 NowPlaying.Value = next;

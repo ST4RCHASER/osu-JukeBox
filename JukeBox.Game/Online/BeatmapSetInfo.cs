@@ -28,6 +28,17 @@ public class BeatmapSetInfo
     public NamedIdInfo? Language { get; set; }
     public AvailabilityInfo? Availability { get; set; }
     public List<BeatmapInfo> Beatmaps { get; set; } = new();
+
+    /// <summary>
+    /// A replay the user dropped onto the window that resolved to this set, or null for every set
+    /// that came from an ordinary search/download. Lives on this type — rather than alongside the
+    /// queue — because this is the object that actually travels: <see cref="Playback.MusicQueue"/>
+    /// holds these, <see cref="Playback.Jukebox.NowPlaying"/> publishes one, and the queue card and
+    /// playback panel both read their "Played by X" credit straight off it, with no parallel
+    /// bookkeeping to keep in step. Never serialised — no mirror has a field for it.
+    /// </summary>
+    [JsonIgnore]
+    public Replays.ReplayAttachment? Replay { get; set; }
     // Prefer the romanized Title/Artist: the default font has no CJK (or other non-Latin) glyph
     // coverage, so preferring TitleUnicode/ArtistUnicode drew as "????" tofu boxes whenever a set's
     // metadata was non-Latin. Fall back to the unicode variant only when the romanized one is
