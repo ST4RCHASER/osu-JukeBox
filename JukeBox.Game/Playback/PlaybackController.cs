@@ -11,6 +11,7 @@ using osu.Framework.Audio.Track;
 using osu.Framework.Bindables;
 using osu.Framework.Graphics;
 using osu.Framework.IO.Stores;
+using osu.Framework.Logging;
 using osu.Framework.Platform;
 using osu.Framework.Timing;
 
@@ -131,19 +132,14 @@ public partial class PlaybackController : Component
     // TrackCompleted never firing again.
     public virtual async Task<bool> PlayAsync(CachedBeatmapSet set)
     {
-        if (set.AudioFile == null)
+        if (set.AudioFile == null && !set.HasVirtualAudio)
             return false;
 
         int myGeneration = Interlocked.Increment(ref generation);
 
-        string directory = set.Directory;
-        string fileName = Path.GetFileName(set.AudioFile);
-
-        var (store, track) = await Task.Run(() =>
-        {
-            var s = audio.GetTrackStore(new StorageBackedResourceStore(new NativeStorage(directory, host)));
-            return (store: s, track: s.Get(fileName));
-        }).ConfigureAwait(false);
+        var (store, track) = set.AudioFile == null
+            ? await loadVirtualTrackAsync(set, set.PreferredOsuFile).ConfigureAwait(false)
+            : await loadFileTrackAsync(set.Directory, set.AudioFile).ConfigureAwait(false);
 
         if (track == null)
         {
@@ -198,6 +194,43 @@ public partial class PlaybackController : Component
         return await swapped.Task.ConfigureAwait(false);
     }
 
+    private Task<(ITrackStore Store, Track? Track)> loadFileTrackAsync(string directory, string audioFile)
+    {
+        string fileName = Path.GetFileName(audioFile);
+
+        return Task.Run(() =>
+        {
+            var s = audio.GetTrackStore(new StorageBackedResourceStore(new NativeStorage(directory, host)));
+            return (Store: s, Track: (Track?)s.Get(fileName));
+        });
+    }
+
+    /// <summary>
+    /// The track for a keysound-only set (<see cref="CachedBeatmapSet.HasVirtualAudio"/>): a
+    /// silent track whose only job is to be a clock of the right length. Everything downstream —
+    /// the storyboard, the chart, seeking, the rate adjustments, <see cref="TrackCompleted"/> —
+    /// runs off it exactly as it does off a real one, which is why this is a track rather than a
+    /// bespoke clock: no other code path has to know the difference. The sound itself comes
+    /// entirely from the chart's keysounds and the storyboard's <c>Sample</c> events.
+    /// </summary>
+    private Task<(ITrackStore Store, Track? Track)> loadVirtualTrackAsync(CachedBeatmapSet set, string? osuFile)
+        => Task.Run(() =>
+        {
+            // Read off the update thread with the rest of the load: this parses the whole .osu
+            // (and .osb) looking for the last hit object and storyboard event.
+            double length = BeatmapDurationScanner.ComputeLength(set, osuFile);
+
+            Logger.Log($"Virtual audio: '{Path.GetFileName(osuFile) ?? set.Directory}' has no music file — playing a {length / 1000:0.#}s silent track (keysounds and storyboard samples supply the audio)");
+
+            // A store of its own, exactly as the file path builds one, so the swap below can
+            // dispose it alongside its track like any other. Its backing storage is never read
+            // from — GetVirtual synthesises the track — but it must not be null: the no-argument
+            // overload hands back the GLOBAL track store, and disposing that on the next swap
+            // takes every subsequent track in the app down with it.
+            var s = audio.GetTrackStore(new StorageBackedResourceStore(new NativeStorage(set.Directory, host)));
+            return (Store: s, Track: (Track?)s.GetVirtual(length, $"virtual:{set.SetId}"));
+        });
+
     /// <summary>
     /// Switches the selected difficulty of the currently playing set WITHOUT restarting playback:
     /// the clock keeps running, so visuals rebuilt off <see cref="SelectedOsuFile"/> continue at
@@ -224,12 +257,28 @@ public partial class PlaybackController : Component
         // Same audio (or no resolvable audio — keep whatever's playing): just retarget visuals.
         if (newAudio == null || string.Equals(Path.GetFullPath(newAudio), currentAudioPath != null ? Path.GetFullPath(currentAudioPath) : null, StringComparison.OrdinalIgnoreCase))
         {
+            // A keysound-only set has no per-difficulty track to swap in, but its silent track's
+            // LENGTH is difficulty-derived — a longer difficulty would otherwise be cut off where
+            // the previous one ended. Grown, never shrunk, so the switch can't strand the clock
+            // past the end of its own track. Computed here rather than inside the schedule
+            // callback below: it reads the .osu off disk.
+            double? grownLength = null;
+
+            if (set.HasVirtualAudio)
+                grownLength = await Task.Run(() => BeatmapDurationScanner.ComputeLength(set, osuPath)).ConfigureAwait(false);
+
             var selected = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             Schedule(() =>
             {
                 bool stillCurrent = Current.Value == set;
                 if (stillCurrent)
+                {
+                    if (grownLength > currentTrack?.Length)
+                        currentTrack.Length = grownLength.Value;
+
                     SelectedOsuFile.Value = osuPath;
+                }
+
                 selected.SetResult(stillCurrent);
             });
             return await selected.Task.ConfigureAwait(false);
@@ -238,14 +287,7 @@ public partial class PlaybackController : Component
         // Different audio: load the new track and continue at the same position.
         int myGeneration = Interlocked.Increment(ref generation);
 
-        string directory = Path.GetDirectoryName(newAudio) ?? set.Directory;
-        string fileName = Path.GetFileName(newAudio);
-
-        var (store, track) = await Task.Run(() =>
-        {
-            var s = audio.GetTrackStore(new StorageBackedResourceStore(new NativeStorage(directory, host)));
-            return (store: s, track: s.Get(fileName));
-        }).ConfigureAwait(false);
+        var (store, track) = await loadFileTrackAsync(Path.GetDirectoryName(newAudio) ?? set.Directory, newAudio).ConfigureAwait(false);
 
         if (track == null)
         {
