@@ -13,12 +13,29 @@ using osu.Framework.Logging;
 
 namespace JukeBox.Game.Beatmaps;
 
+/// <summary>
+/// How far along a set's in-flight download is. <see cref="Indeterminate"/> means the mirror never
+/// advertised a <c>Content-Length</c> (or hasn't sent the first byte yet), so there is no honest
+/// denominator to draw a bar against — UI shows a spinner instead of a percentage in that case.
+/// </summary>
+public readonly record struct DownloadProgress(double Value, bool Indeterminate);
+
 public class BeatmapCache
 {
     private readonly string root;
     private readonly IBeatmapMirror mirror;
     private readonly bool noVideo;
     private readonly ConcurrentDictionary<int, Task<CachedBeatmapSet>> inflight = new();
+
+    /// <summary>
+    /// Per-set download progress for whatever is currently in flight, written from the mirror's
+    /// download thread and read by UI on the update thread — a <see cref="ConcurrentDictionary{TKey,TValue}"/>
+    /// (rather than a bindable) precisely because those are different threads: readers take a
+    /// lock-free snapshot of an immutable value, with no cross-thread event dispatch to marshal.
+    /// Entries appear when a download starts and are removed when it finishes or fails, so
+    /// <see cref="TryGetDownloadProgress"/> returning false means "not downloading".
+    /// </summary>
+    private readonly ConcurrentDictionary<int, DownloadProgress> downloadProgress = new();
 
     private static readonly EnumerationOptions osu_enum_options = new() { RecurseSubdirectories = true, MatchCasing = MatchCasing.CaseInsensitive };
 
@@ -41,6 +58,14 @@ public class BeatmapCache
     /// </summary>
     public bool IsDownloading(int setId) => inflight.ContainsKey(setId) && !IsCached(setId);
 
+    /// <summary>
+    /// Snapshots how far <paramref name="setId"/>'s download has got, or returns false when nothing
+    /// is downloading for it (never started, already cached, or finished/failed). Safe to call from
+    /// any thread; callers on the update thread can poll it every frame.
+    /// </summary>
+    public bool TryGetDownloadProgress(int setId, out DownloadProgress progress)
+        => downloadProgress.TryGetValue(setId, out progress);
+
     private static bool hasOsuFiles(string dir)
         => Directory.Exists(dir) && Directory.EnumerateFiles(dir, "*.osu", osu_enum_options).Any();
 
@@ -62,8 +87,19 @@ public class BeatmapCache
 
             string tmpOsz = Path.Combine(root, $"{setId}.osz.part");
             Directory.CreateDirectory(root);
+
+            // Published before the request goes out (not on the first progress callback) so UI can
+            // show *something* for the round trip spent waiting on response headers — which on a
+            // cold mirror is a visible fraction of the whole wait.
+            downloadProgress[setId] = new DownloadProgress(0, true);
+
             await using (var fs = File.Create(tmpOsz))
-                await mirror.DownloadAsync(setId, noVideo, fs, ct).ConfigureAwait(false);
+                await mirror.DownloadAsync(setId, noVideo, fs, ct, (read, total) => reportProgress(setId, read, total)).ConfigureAwait(false);
+
+            // The extract/scan that follows has no meaningful percentage of its own, so the row
+            // falls back to the indeterminate spinner rather than sitting frozen at 100%.
+            downloadProgress[setId] = new DownloadProgress(1, true);
+
             string tmpDir = dir + ".extracting";
             if (Directory.Exists(tmpDir)) Directory.Delete(tmpDir, true);
             ZipFile.ExtractToDirectory(tmpOsz, tmpDir);
@@ -71,7 +107,18 @@ public class BeatmapCache
             Directory.Move(tmpDir, dir);
             return LoadFromDirectory(setId, dir);
         }
-        finally { inflight.TryRemove(setId, out _); }
+        finally
+        {
+            inflight.TryRemove(setId, out _);
+            downloadProgress.TryRemove(setId, out _);
+        }
+    }
+
+    private void reportProgress(int setId, long read, long? total)
+    {
+        downloadProgress[setId] = total is > 0
+            ? new DownloadProgress(Math.Clamp((double)read / total.Value, 0, 1), false)
+            : new DownloadProgress(0, true);
     }
 
     public CachedBeatmapSet LoadFromDirectory(int setId, string dir)

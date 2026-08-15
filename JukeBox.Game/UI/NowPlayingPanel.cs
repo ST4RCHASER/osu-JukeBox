@@ -2,6 +2,7 @@
 
 using System;
 using System.Threading.Tasks;
+using JukeBox.Game.Beatmaps;
 using JukeBox.Game.Online;
 using JukeBox.Game.Playback;
 using osu.Framework.Allocation;
@@ -12,6 +13,7 @@ using osu.Framework.Graphics.Shapes;
 using osu.Framework.Graphics.Sprites;
 using osu.Framework.Graphics.Textures;
 using osu.Framework.Logging;
+using osu.Game.Graphics.UserInterface;
 using osuTK;
 using osuTK.Graphics;
 
@@ -46,6 +48,15 @@ public partial class NowPlayingPanel : CompositeDrawable
     /// <summary>Room for the progress bar's hit area plus the elapsed/total labels below it.</summary>
     private const float progress_block_height = ProgressSliderBar.HitAreaHeight + Theme.CaptionTextSize + 4;
 
+    /// <summary>Height of the status line — its caption text plus a little breathing room, which is
+    /// also what the loading spinner beside it is sized against.</summary>
+    private const float status_row_height = Theme.CaptionTextSize + 6;
+
+    private const float status_spinner_size = 14;
+
+    /// <summary>Room reserved at the right of the status line for the "42%" readout.</summary>
+    private const float status_percent_width = 40;
+
     [Resolved]
     private PlaybackController playback { get; set; } = null!;
 
@@ -61,6 +72,12 @@ public partial class NowPlayingPanel : CompositeDrawable
     // must keep constructing/resolving this panel fine with no store present at all.
     [Resolved(canBeNull: true)]
     private OnlineThumbnailStore? thumbnailStore { get; set; }
+
+    // canBeNull for the same reason as thumbnailStore: a test scene that only drives NowPlaying/
+    // Status directly needs no cache at all. Without one the status line still shows the jukebox's
+    // own "Downloading …" text and spinner, just never a percentage.
+    [Resolved(canBeNull: true)]
+    private BeatmapCache? cache { get; set; }
 
     /// <summary>Test seam (JukeBox.Game.Tests has InternalsVisibleTo): replaces
     /// <see cref="osu.Framework.Platform.GameHost.OpenUrlExternally"/>, mirroring
@@ -94,7 +111,16 @@ public partial class NowPlayingPanel : CompositeDrawable
     private DifficultySwitcher difficultySwitcher = null!;
     private TransportRow transport = null!;
     private SpriteText statusText = null!;
+    private Container statusTextContainer = null!;
+    private SpriteText statusPercentText = null!;
+    private LoadingSpinner statusSpinner = null!;
     private FillFlowContainer songInfo = null!;
+
+    // Last state pushed into the status line's spinner/percentage by updateDownloadIndicator(),
+    // which runs every frame — a percent of -1 means "no measurable progress to show". Guards both
+    // the SpriteText write (which re-lays out glyphs) and the padding write behind an actual change.
+    private bool lastStatusBusy;
+    private int lastStatusPercent = -1;
     private SpriteText titleText = null!;
     private Box titleUnderline = null!;
     private SpriteText artistText = null!;
@@ -132,6 +158,15 @@ public partial class NowPlayingPanel : CompositeDrawable
     internal SpriteText ElapsedText => elapsedText;
 
     internal SpriteText TotalText => totalText;
+
+    /// <summary>Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the
+    /// downloading/buffering indicator beside the status line — see
+    /// <see cref="updateDownloadIndicator"/>.</summary>
+    internal bool DownloadSpinnerShown => statusSpinner.State.Value == Visibility.Visible;
+
+    internal string StatusText => statusText.Text.ToString();
+
+    internal string DownloadPercentText => statusPercentText.Alpha > 0 ? statusPercentText.Text.ToString() : string.Empty;
 
     [BackgroundDependencyLoader]
     private void load()
@@ -233,15 +268,51 @@ public partial class NowPlayingPanel : CompositeDrawable
                         },
                     },
                 },
-                statusText = new SpriteText
+                // The status line is a fixed-height band rather than an auto-sizing one so the
+                // spinner (anchored to its vertical centre) and the percentage on the far right
+                // have something stable to sit in, and so the stack below doesn't shift by a pixel
+                // as the line's own content comes and goes.
+                new Container
                 {
                     RelativeSizeAxes = Axes.X,
-                    Truncate = true,
-                    Font = FontUsage.Default.With(size: Theme.CaptionTextSize),
-                    Colour = Theme.TextTertiary,
-                    // See songInfo's AlwaysPresent comment above — refreshStatus() fades this to 0
-                    // then immediately back to 1.
-                    AlwaysPresent = true,
+                    Height = status_row_height,
+                    Children = new Drawable[]
+                    {
+                        statusSpinner = new LoadingSpinner
+                        {
+                            Anchor = Anchor.CentreLeft,
+                            Origin = Anchor.CentreLeft,
+                            Size = new Vector2(status_spinner_size),
+                        },
+                        statusTextContainer = new Container
+                        {
+                            RelativeSizeAxes = Axes.Both,
+                            Child = statusText = new SpriteText
+                            {
+                                Anchor = Anchor.CentreLeft,
+                                Origin = Anchor.CentreLeft,
+                                RelativeSizeAxes = Axes.X,
+                                Truncate = true,
+                                Font = FontUsage.Default.With(size: Theme.CaptionTextSize),
+                                Colour = Theme.TextTertiary,
+                                // See songInfo's AlwaysPresent comment above — refreshStatus() fades
+                                // this to 0 then immediately back to 1.
+                                AlwaysPresent = true,
+                            },
+                        },
+                        // Kept out of statusText rather than appended to it: the percentage ticks
+                        // many times a second, and refreshStatus crossfades on every text change —
+                        // folding the two together would leave the status line permanently
+                        // mid-crossfade for the whole download.
+                        statusPercentText = new SpriteText
+                        {
+                            Anchor = Anchor.CentreRight,
+                            Origin = Anchor.CentreRight,
+                            Font = FontUsage.Default.With(size: Theme.CaptionTextSize),
+                            Colour = Theme.Accent,
+                            Alpha = 0,
+                        },
+                    },
                 },
                 // The transport is a cluster, not a row of full-width controls, so it's centred in
                 // its own full-width wrapper (a FillFlowContainer positions its children along the
@@ -320,6 +391,8 @@ public partial class NowPlayingPanel : CompositeDrawable
     {
         base.Update();
 
+        updateDownloadIndicator();
+
         // Skip the write entirely while the user is actively dragging: see the comment on
         // `progress` above for why writing to it here would otherwise fight the live drag.
         if (!progressBar.IsDragged)
@@ -367,6 +440,63 @@ public partial class NowPlayingPanel : CompositeDrawable
 
         int totalSeconds = (int)(ms / 1000);
         return $"{totalSeconds / 60}:{totalSeconds % 60:D2}";
+    }
+
+    /// <summary>
+    /// The "this song isn't playing yet, it's still coming down" indicator: a
+    /// <see cref="LoadingSpinner"/> runs beside the status line for as long as the jukebox reports
+    /// it is busy with the current pick, and a percentage joins it once the mirror has advertised a
+    /// total to measure against (<see cref="Playback.Jukebox.DownloadingSetId"/> paired with
+    /// <see cref="BeatmapCache.TryGetDownloadProgress"/>). Both clear the moment
+    /// <see cref="Playback.Jukebox.Status"/> does, which is when playback actually starts.
+    /// </summary>
+    private void updateDownloadIndicator()
+    {
+        bool busy = jukebox.Status.Value != null;
+        int? downloadingId = jukebox.DownloadingSetId.Value;
+
+        int percent = -1;
+
+        if (busy
+            && downloadingId != null
+            && cache != null
+            && cache.TryGetDownloadProgress(downloadingId.Value, out var progress)
+            && !progress.Indeterminate)
+        {
+            percent = (int)(progress.Value * 100);
+        }
+
+        if (busy == lastStatusBusy && percent == lastStatusPercent)
+            return;
+
+        if (busy != lastStatusBusy)
+        {
+            // LoadingSpinner is a VisibilityContainer — it spins/fades itself in and out through
+            // Show()/Hide() rather than a raw Alpha write.
+            if (busy)
+                statusSpinner.Show();
+            else
+                statusSpinner.Hide();
+        }
+
+        if (percent != lastStatusPercent)
+        {
+            statusPercentText.Alpha = percent < 0 ? 0 : 1;
+
+            if (percent >= 0)
+                statusPercentText.Text = $"{percent}%";
+        }
+
+        lastStatusBusy = busy;
+        lastStatusPercent = percent;
+
+        statusTextContainer.Padding = new MarginPadding
+        {
+            // The spinner sits over the text's left edge, and the percentage over its right — both
+            // need their room carved out of the truncating text rather than overlapping it.
+            Left = busy ? status_spinner_size + 5 : 0,
+            Right = percent < 0 ? 0 : status_percent_width,
+        };
     }
 
     private void refreshStatus()

@@ -41,6 +41,24 @@ public partial class Jukebox : Component
     public readonly Bindable<string?> Status = new();
 
     /// <summary>
+    /// The set id whose download the current advance round is waiting on, or null when it isn't
+    /// waiting on one. Set and cleared alongside <see cref="Status"/>; separate from it because a
+    /// percentage changes far too often to push through a bindable — UI pairs this id with
+    /// <see cref="BeatmapCache.TryGetDownloadProgress"/>, which it can poll cheaply, to turn
+    /// "Downloading {title}…" into "Downloading {title}… 42%".
+    /// </summary>
+    public readonly Bindable<int?> DownloadingSetId = new();
+
+    /// <summary>
+    /// Raised on the update thread when a set is newly added to the queue via
+    /// <see cref="EnqueueAndMaybePlayAsync"/> — for the "Added to queue: X" toast. Not raised for a
+    /// pick that was already queued (<see cref="MusicQueue.Enqueue"/> dedupes by set id), since
+    /// nothing changed. Subscribers live as long as this component does, matching how
+    /// <see cref="PlaybackController.TrackCompleted"/> is consumed below.
+    /// </summary>
+    public event Action<BeatmapSetInfo>? Enqueued;
+
+    /// <summary>
     /// Cache size limit in bytes, checked after every successful <see cref="BeatmapCache.GetAsync"/>
     /// via <see cref="BeatmapCache.EvictToLimit"/>. Set from <c>JukeBoxSetting.CacheSizeGb</c> by
     /// the owner (see <see cref="JukeBoxGameBase"/>); this class has no config dependency itself.
@@ -139,7 +157,8 @@ public partial class Jukebox : Component
     /// </remarks>
     public async Task EnqueueAndMaybePlayAsync(BeatmapSetInfo set)
     {
-        queue.Enqueue(set);
+        if (queue.Enqueue(set))
+            Enqueued?.Invoke(set);
 
         // Fire-and-forget: start caching this set immediately rather than waiting for its turn
         // at the head of the queue, so a queued download is already underway (or done) by the
@@ -247,6 +266,18 @@ public partial class Jukebox : Component
         }
     }
 
+    /// <summary>
+    /// Drops the "still working on it" feedback — on the update thread, so every caller is already
+    /// inside a <c>Schedule</c>. The two always move together: a percentage with no status line to
+    /// attach it to (or a status line whose percentage keeps ticking after the round is over) would
+    /// each read as a stuck download.
+    /// </summary>
+    private void clearStatus()
+    {
+        Status.Value = null;
+        DownloadingSetId.Value = null;
+    }
+
     private async Task advanceRoundAsync()
     {
         // Cleared once per round (not per pop-attempt below) so a round that eventually
@@ -282,7 +313,12 @@ public partial class Jukebox : Component
             if (!wasCached)
             {
                 string downloadingTitle = next.DisplayTitle;
-                Schedule(() => Status.Value = $"Downloading {downloadingTitle}…");
+                int downloadingId = next.Id;
+                Schedule(() =>
+                {
+                    Status.Value = $"Downloading {downloadingTitle}…";
+                    DownloadingSetId.Value = downloadingId;
+                });
             }
 
             CachedBeatmapSet cached;
@@ -295,7 +331,7 @@ public partial class Jukebox : Component
             {
                 string message = $"Failed to load '{next.DisplayTitle}': {ex.Message}";
                 Schedule(() => LastError.Value = message);
-                Schedule(() => Status.Value = null);
+                Schedule(clearStatus);
                 continue;
             }
 
@@ -310,15 +346,15 @@ public partial class Jukebox : Component
                 // candidate instead of wedging.
                 string message = $"No playable audio for '{next.DisplayTitle}'";
                 Schedule(() => LastError.Value = message);
-                Schedule(() => Status.Value = null);
+                Schedule(clearStatus);
                 continue;
             }
 
             Schedule(() =>
             {
                 NowPlaying.Value = next;
-                Status.Value = null;
                 currentIsRadio = viaRadio;
+                clearStatus();
             });
 
             // Fire-and-forget prefetch of the new queue head, so it's likely already cached

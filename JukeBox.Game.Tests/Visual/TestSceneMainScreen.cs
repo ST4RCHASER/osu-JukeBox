@@ -706,6 +706,26 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("queue panel height == 1", () => screen.ChildrenOfType<QueuePanel>().Single().Height == 1f);
         }
 
+        // Queueing something used to be entirely silent — with the listing overlay covering the
+        // queue, a pick could look like it did nothing at all. The toast must also stay visually
+        // distinct from the error toast that shares the same presentation.
+        [Test]
+        public void EnqueueShowsAToastDistinctFromErrorToasts()
+        {
+            AddStep("enqueue a set", () => jukebox.EnqueueAndMaybePlayAsync(
+                new BeatmapSetInfo { Id = 4242, Title = "Toasted", Artist = "Artist" }));
+
+            AddUntilStep("toast names the set", () => toast("Added to queue: Toasted") != null);
+            AddAssert("toast is not error-coloured", () => toast("Added to queue: Toasted")!.Colour == Theme.Accent);
+
+            AddStep("report an error", () => jukebox.LastError.Value = "Something broke");
+            AddUntilStep("error toast shown", () => toast("Something broke") != null);
+            AddAssert("error toast stays red", () => toast("Something broke")!.Colour == Theme.Error);
+        }
+
+        private SpriteText? toast(string message)
+            => screen.ChildrenOfType<SpriteText>().FirstOrDefault(t => t.Text.ToString() == message);
+
         // Never exercised (queue stays empty and the mirror returns no candidates, so
         // Jukebox.Start()'s automatic radio round finds nothing and just retries later) — only
         // present so Jukebox/RadioService/BeatmapCache have a mirror to construct against without
@@ -718,7 +738,7 @@ namespace JukeBox.Game.Tests.Visual
             public Task<List<BeatmapSetInfo>> SearchAsync(SearchRequest request, CancellationToken ct = default)
                 => Task.FromResult(new List<BeatmapSetInfo>(Sets));
 
-            public Task DownloadAsync(int setId, bool noVideo, Stream destination, CancellationToken ct = default)
+            public Task DownloadAsync(int setId, bool noVideo, Stream destination, CancellationToken ct = default, DownloadProgressCallback? progress = null)
                 => throw new NotSupportedException("not exercised by this test scene");
         }
     }

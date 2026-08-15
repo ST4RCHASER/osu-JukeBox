@@ -17,7 +17,7 @@ namespace JukeBox.Game.Online
         public Task<List<BeatmapSetInfo>> SearchAsync(SearchRequest r, CancellationToken ct = default)
             => tryEach(m => m.SearchAsync(r, ct));
 
-        public async Task DownloadAsync(int setId, bool noVideo, Stream destination, CancellationToken ct = default)
+        public async Task DownloadAsync(int setId, bool noVideo, Stream destination, CancellationToken ct = default, DownloadProgressCallback? progress = null)
         {
             var errors = new List<Exception>();
             foreach (var m in mirrors)
@@ -32,7 +32,9 @@ namespace JukeBox.Game.Online
 
                 try
                 {
-                    await m.DownloadAsync(setId, noVideo, destination, ct).ConfigureAwait(false);
+                    // Progress is forwarded as-is, so a fallback attempt simply re-reports from
+                    // zero against its own mirror's Content-Length — matching the rewind above.
+                    await m.DownloadAsync(setId, noVideo, destination, ct, progress).ConfigureAwait(false);
                     return;
                 }
                 catch (Exception e) { errors.Add(e); }
