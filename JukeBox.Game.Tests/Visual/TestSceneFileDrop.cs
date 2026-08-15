@@ -13,6 +13,8 @@ using JukeBox.Game.Import;
 using JukeBox.Game.LazerPlayer;
 using JukeBox.Game.Online;
 using JukeBox.Game.Playback;
+using JukeBox.Game.Replays;
+using JukeBox.Game.Tests.Import;
 using NUnit.Framework;
 using osu.Framework.Allocation;
 using osu.Framework.Graphics;
@@ -45,6 +47,8 @@ namespace JukeBox.Game.Tests.Visual
         private PlaybackController playback = null!;
         private Jukebox jukebox = null!;
         private DroppedFileImporter importer = null!;
+        private ReplayStore replayStore = null!;
+        private FixtureMirror mirror = null!;
 
         // CreateChildDependencies runs once for the whole fixture, so everything [Resolved] hands
         // out is created once here and reset (never recreated) between tests — see the same note
@@ -55,8 +59,14 @@ namespace JukeBox.Game.Tests.Visual
             Directory.CreateDirectory(tmp);
 
             queue = new MusicQueue();
-            cache = new BeatmapCache(Path.Combine(tmp, "cache"), new EmptyMirror());
+            mirror = new FixtureMirror();
+            cache = new BeatmapCache(Path.Combine(tmp, "cache"), mirror);
             playback = new PlaybackController();
+            replayStore = new ReplayStore();
+
+            // Radio gets its own always-empty mirror: `mirror` is scripted per-test for the
+            // checksum lookup, and a radio pick landing on those results would start playing
+            // something no test asked for.
             jukebox = new Jukebox(queue, new RadioService(new EmptyMirror()), cache, playback);
 
             var dependencies = new DependencyContainer(base.CreateChildDependencies(parent));
@@ -64,6 +74,8 @@ namespace JukeBox.Game.Tests.Visual
             dependencies.CacheAs(cache);
             dependencies.CacheAs(playback);
             dependencies.CacheAs(jukebox);
+            dependencies.CacheAs(replayStore);
+            dependencies.CacheAs<IBeatmapMirror>(mirror);
             return dependencies;
         }
 
@@ -95,7 +107,10 @@ namespace JukeBox.Game.Tests.Visual
                 // still holding the slot.
                 playback.Stop();
                 playback.Current.Value = null;
+                playback.SelectedOsuFile.Value = null;
+                jukebox.NowPlaying.Value = null;
                 queue.Items.Clear();
+                mirror.Reset();
             });
 
             AddStep("create importer", () => importerHost.Child = importer = new DroppedFileImporter());
@@ -242,6 +257,67 @@ namespace JukeBox.Game.Tests.Visual
         }
 
         [Test]
+        public void DroppingAnOsrResolvesTheBeatmapByChecksumAndQueuesItWithTheReplay()
+        {
+            string osr = null!;
+
+            AddStep("publish a set the replay's checksum resolves to", () => osr = makeReplayFor("replayed", setId: 606060, player: "Cookiezi"));
+            AddStep("drop the replay", () => importer.Import(osr));
+
+            AddUntilStep("toast credits the player", () => lastMessage == "Added: Replayed Song — played by Cookiezi");
+            AddAssert("the checksum lookup was field-restricted", () => mirror.LastSearch?.Option == "checksum");
+            AddAssert("and searched on the replay's beatmap hash", () => mirror.LastSearch?.Query == mirror.RegisteredMd5);
+
+            AddUntilStep("the resolved set is playing", () => playback.Current.Value?.SetId == 606060);
+
+            AddAssert("the queued set carries the replay", () => queuedOrPlayingReplay()?.PlayerName == "Cookiezi");
+            AddAssert("with real frames decoded", () => queuedOrPlayingReplay()?.Score?.Replay?.Frames.Count > 0);
+
+            AddAssert("registered against the exact difficulty played", () =>
+            {
+                var attachment = queuedOrPlayingReplay();
+                return attachment?.OsuFile != null && replayStore.ForOsuFile(attachment.OsuFile) == attachment;
+            });
+
+            AddUntilStep("playback selected that difficulty, not the set default", () =>
+                playback.SelectedOsuFile.Value != null
+                && playback.SelectedOsuFile.Value == queuedOrPlayingReplay()?.OsuFile);
+        }
+
+        [Test]
+        public void AReplayWhoseBeatmapNoMirrorKnowsReportsAClearError()
+        {
+            string osr = null!;
+
+            AddStep("build a replay for a beatmap no mirror serves", () =>
+            {
+                mirror.SetSearchResults(new List<BeatmapSetInfo>());
+                osr = makeReplayFor("orphan", setId: 111222, player: "Ghost", publishToMirror: false);
+            });
+
+            AddStep("drop it", () => importer.Import(osr));
+
+            AddUntilStep("failure names the player and the checksum", () => lastMessage.StartsWith("No beatmap found for Ghost's replay"));
+            AddAssert("nothing queued", () => queue.Items.Count == 0);
+        }
+
+        [Test]
+        public void DroppingSomethingThatIsNotAReplayReportsIt()
+        {
+            string osr = null!;
+
+            AddStep("write a bogus .osr", () =>
+            {
+                osr = Path.Combine(tmp, "bogus.osr");
+                File.WriteAllText(osr, "definitely not a replay");
+            });
+
+            AddStep("drop it", () => importer.Import(osr));
+            AddUntilStep("reported as unreadable", () => lastMessage.StartsWith("Not a readable replay:"));
+            AddAssert("nothing queued", () => queue.Items.Count == 0);
+        }
+
+        [Test]
         public void DroppingAnUnsupportedFileReportsItRatherThanFailingSilently()
         {
             string other = null!;
@@ -272,6 +348,58 @@ namespace JukeBox.Game.Tests.Visual
             AddUntilStep("failure reported", () => lastMessage.StartsWith("Import failed:"));
             AddAssert("nothing queued", () => queue.Items.Count == 0);
         }
+
+        /// <summary>The replay attachment for the dropped set, wherever it currently is — still
+        /// queued, or already the now-playing set.</summary>
+        private ReplayAttachment? queuedOrPlayingReplay()
+            => jukebox.NowPlaying.Value?.Replay ?? queue.Items.Select(i => i.Replay).FirstOrDefault(r => r != null);
+
+        /// <summary>
+        /// Builds a two-difficulty set, a .osz for it, and a genuine .osr recorded on the set's
+        /// SECOND difficulty — deliberately not the one <see cref="CachedBeatmapSet.PreferredOsuFile"/>
+        /// would pick, so "playback selects the difficulty the replay was played on" is actually
+        /// under test rather than trivially true.
+        /// </summary>
+        /// <param name="name">Base name for the fixture's build directory, .osz and .osr.</param>
+        /// <param name="setId">Beatmapset id the mirror serves the archive under.</param>
+        /// <param name="player">Player name recorded into the replay.</param>
+        /// <param name="publishToMirror">False leaves the mirror with no result for the checksum,
+        /// exercising the "no beatmap found" path.</param>
+        private string makeReplayFor(string name, int setId, string player, bool publishToMirror = true)
+        {
+            string dir = Path.Combine(tmp, "build_" + name);
+            Directory.CreateDirectory(dir);
+
+            // Sorted first, so this is the set's default difficulty — and NOT the one played.
+            File.WriteAllText(Path.Combine(dir, "map [Easy].osu"), osuWithObjects("Easy"));
+
+            string played = Path.Combine(dir, "map [Hard].osu");
+            File.WriteAllText(played, osuWithObjects("Hard"));
+
+            writeSilentWav(Path.Combine(dir, "audio.wav"), 1);
+
+            string osz = Path.Combine(tmp, name + ".osz");
+            ZipFile.CreateFromDirectory(dir, osz);
+
+            if (publishToMirror)
+            {
+                mirror.Publish(setId, osz,
+                    new BeatmapSetInfo { Id = setId, Title = "Replayed Song", Artist = "Some Artist", Creator = "Some Mapper" },
+                    ReplayFixture.Md5OfFile(played));
+            }
+
+            string osr = Path.Combine(tmp, name + ".osr");
+            ReplayFixture.Write(osr, played, player);
+            return osr;
+        }
+
+        private static string osuWithObjects(string version) =>
+            "osu file format v14\n\n"
+            + "[General]\nAudioFilename: audio.wav\nMode: 0\n\n"
+            + $"[Metadata]\nTitle:Replayed Song\nArtist:Some Artist\nCreator:Some Mapper\nVersion:{version}\n\n"
+            + "[Difficulty]\nHPDrainRate:5\nCircleSize:4\nOverallDifficulty:8\nApproachRate:9\nSliderMultiplier:1.4\nSliderTickRate:1\n\n"
+            + "[TimingPoints]\n0,500,4,2,0,60,1,0\n\n"
+            + "[HitObjects]\n256,192,1000,1,0,0:0:0:0:\n128,96,1500,1,0,0:0:0:0:\n320,240,2000,1,0,0:0:0:0:\n";
 
         private string makeOsz(string name, int? setId, string title)
         {
@@ -320,8 +448,7 @@ namespace JukeBox.Game.Tests.Visual
             writer.Write(new byte[dataSize]);
         }
 
-        /// <summary>No search results, and any download attempt fails — a dropped set must be
-        /// served entirely off the local import.</summary>
+        /// <summary>No search results, and any download attempt fails.</summary>
         private class EmptyMirror : IBeatmapMirror
         {
             public string Name => "empty";
@@ -331,6 +458,57 @@ namespace JukeBox.Game.Tests.Visual
 
             public Task DownloadAsync(int setId, bool noVideo, Stream destination, CancellationToken ct = default, DownloadProgressCallback? progress = null)
                 => throw new IOException($"no mirror download expected (set {setId})");
+        }
+
+        /// <summary>
+        /// Serves a scripted search result and the .osz behind it, and records the last request so
+        /// a test can assert HOW the lookup was issued (the checksum search is field-restricted —
+        /// a mirror that answered a plain text query would look identical from the outside).
+        /// </summary>
+        private class FixtureMirror : IBeatmapMirror
+        {
+            private readonly Dictionary<int, string> archives = new();
+            private List<BeatmapSetInfo> searchResults = new();
+
+            public string Name => "fixture";
+
+            /// <summary>The last request this mirror was asked to search for; null before any.</summary>
+            public SearchRequest? LastSearch { get; private set; }
+
+            /// <summary>The beatmap checksum the currently-registered set's replay was recorded on.</summary>
+            public string? RegisteredMd5 { get; private set; }
+
+            public void Reset()
+            {
+                archives.Clear();
+                searchResults = new List<BeatmapSetInfo>();
+                LastSearch = null;
+                RegisteredMd5 = null;
+            }
+
+            public void Publish(int setId, string oszPath, BeatmapSetInfo set, string beatmapMd5)
+            {
+                archives[setId] = oszPath;
+                searchResults = new List<BeatmapSetInfo> { set };
+                RegisteredMd5 = beatmapMd5;
+            }
+
+            public void SetSearchResults(List<BeatmapSetInfo> sets) => searchResults = sets;
+
+            public Task<List<BeatmapSetInfo>> SearchAsync(SearchRequest request, CancellationToken ct = default)
+            {
+                LastSearch = request;
+                return Task.FromResult(searchResults);
+            }
+
+            public async Task DownloadAsync(int setId, bool noVideo, Stream destination, CancellationToken ct = default, DownloadProgressCallback? progress = null)
+            {
+                if (!archives.TryGetValue(setId, out string? path))
+                    throw new IOException($"fixture mirror has no set {setId}");
+
+                await using var fs = File.OpenRead(path);
+                await fs.CopyToAsync(destination, ct);
+            }
         }
     }
 }

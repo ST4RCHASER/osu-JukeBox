@@ -30,6 +30,7 @@ namespace JukeBox.Game.Tests.Import
 
         private string skinsRoot => Path.Combine(tmp, "skins");
 
+        /// <param name="name">Skin name, also used for the archive's own file name.</param>
         /// <param name="wrapped">Zip the skin's files one level down inside a folder, the way an
         /// .osk exported from the parent directory looks.</param>
         private string makeOsk(string name, bool wrapped = false)

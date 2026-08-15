@@ -2,15 +2,20 @@
 
 using System;
 using System.IO;
+using System.Linq;
+using System.Security.Cryptography;
 using System.Threading.Tasks;
 using JukeBox.Game.Beatmaps;
 using JukeBox.Game.Configuration;
+using JukeBox.Game.Online;
 using JukeBox.Game.Playback;
+using JukeBox.Game.Replays;
 using osu.Framework.Allocation;
 using osu.Framework.Bindables;
 using osu.Framework.Graphics;
 using osu.Framework.Logging;
 using osu.Framework.Platform;
+using osu.Game.Scoring;
 
 namespace JukeBox.Game.Import;
 
@@ -49,6 +54,12 @@ public partial class DroppedFileImporter : Component
 
     [Resolved]
     private JukeBoxConfigManager config { get; set; } = null!;
+
+    [Resolved]
+    private IBeatmapMirror mirror { get; set; } = null!;
+
+    [Resolved]
+    private ReplayStore replays { get; set; } = null!;
 
     private IWindow? subscribedWindow;
 
@@ -97,14 +108,12 @@ public partial class DroppedFileImporter : Component
                     await importSkinArchiveAsync(path).ConfigureAwait(false);
                     break;
 
-                case DroppedFileKind.Unsupported:
-                    Notify($"Can't import {Path.GetFileName(path)} — drop a .osz, .osk or .osr", isError: true);
+                case DroppedFileKind.Replay:
+                    await importReplayAsync(path).ConfigureAwait(false);
                     break;
 
                 default:
-                    // Phase 3 fills this in; every kind that reaches here is one the classifier
-                    // recognises but nothing handles yet.
-                    Notify($"Nothing handles {kind} yet", isError: true);
+                    Notify($"Can't import {Path.GetFileName(path)} — drop a .osz, .osk or .osr", isError: true);
                     break;
             }
         }
@@ -155,6 +164,117 @@ public partial class DroppedFileImporter : Component
         }).ConfigureAwait(false);
 
         Notify($"Skin applied: {name}", isError: false);
+    }
+
+    /// <summary>
+    /// Imports a dropped .osr: read its header, find the beatmap it was played on, make sure that
+    /// beatmap is cached, decode the replay against it, and queue the set with the replay attached
+    /// so playback renders the real play instead of autoplay.
+    /// </summary>
+    private async Task importReplayAsync(string path)
+    {
+        OsrHeader header;
+
+        try
+        {
+            header = await Task.Run(() => OsrReader.ReadHeader(path)).ConfigureAwait(false);
+        }
+        catch (InvalidDataException e)
+        {
+            Notify($"Not a readable replay: {e.Message}", isError: true);
+            return;
+        }
+
+        string player = header.PlayerName.Length > 0 ? header.PlayerName : "an unknown player";
+
+        var found = await findSetByChecksumAsync(header.BeatmapMd5).ConfigureAwait(false);
+
+        if (found == null)
+        {
+            // Unsubmitted maps, and maps the mirror simply doesn't index, have no set to find —
+            // there is genuinely nothing to play, so say so rather than queueing a wrong beatmap.
+            Notify($"No beatmap found for {player}'s replay (checksum {header.BeatmapMd5[..8]}…)", isError: true);
+            return;
+        }
+
+        var cached = await cache.GetAsync(found.Id).ConfigureAwait(false);
+
+        // The replay names ONE .osu by checksum; the set generally has several. Matching here is
+        // what lets playback select the difficulty actually played.
+        string? osuFile = await Task.Run(() => cached.OsuFiles.FirstOrDefault(f => md5OfFile(f) == header.BeatmapMd5)).ConfigureAwait(false);
+        Score? score = null;
+
+        if (osuFile == null)
+            Logger.Log($"[drop] set {found.Id} has no difficulty matching the replay's checksum — falling back to autoplay on its default difficulty", level: LogLevel.Important);
+        else
+        {
+            try
+            {
+                score = await Task.Run(() => new JukeBoxScoreDecoder(osuFile).Decode(path)).ConfigureAwait(false);
+            }
+            catch (Exception e)
+            {
+                // The set and difficulty are still worth queueing (with the credit shown) even if
+                // the frames themselves won't decode — the user gets the map they dropped.
+                Logger.Error(e, $"[drop] failed to decode replay '{path}' — queueing the beatmap with autoplay instead");
+            }
+        }
+
+        var attachment = new ReplayAttachment
+        {
+            PlayerName = header.PlayerName,
+            BeatmapMd5 = header.BeatmapMd5,
+            OsuFile = osuFile,
+            Score = score,
+            PlayedAt = header.PlayedAt,
+        };
+
+        replays.Register(attachment);
+        found.Replay = attachment;
+
+        await onUpdateThread(() => jukebox.EnqueueAndMaybePlayAsync(found, announce: false)).ConfigureAwait(false);
+
+        Notify($"Added: {found.DisplayTitle} — played by {player}", isError: false);
+    }
+
+    /// <summary>
+    /// Finds the beatmapset a replay's beatmap checksum belongs to. NeriNyan's legacy search takes
+    /// <c>option=checksum</c>, which matches the .osu's own MD5 — the same field-restricting
+    /// mechanism the map-ID lookup uses with <c>option=setId</c>. The retry widens the status
+    /// filter, since the default only covers ranked maps and people replay loved/graveyard ones
+    /// too. The fallback mirrors ignore <c>option</c> entirely, so a chain that falls through to
+    /// them returns nothing useful and is treated as "not found".
+    /// </summary>
+    private async Task<Online.BeatmapSetInfo?> findSetByChecksumAsync(string md5)
+    {
+        foreach (string status in new[] { "ranked", "any" })
+        {
+            try
+            {
+                var results = await mirror.SearchAsync(new SearchRequest
+                {
+                    Query = md5,
+                    Option = "checksum",
+                    Status = status,
+                    PageSize = 5,
+                }).ConfigureAwait(false);
+
+                if (results.Count > 0)
+                    return results[0];
+            }
+            catch (Exception e)
+            {
+                Logger.Error(e, $"[drop] checksum lookup for {md5} failed (status={status})");
+            }
+        }
+
+        return null;
+    }
+
+    private static string md5OfFile(string path)
+    {
+        using var stream = File.OpenRead(path);
+        return Convert.ToHexStringLower(MD5.HashData(stream));
     }
 
     /// <summary>

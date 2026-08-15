@@ -670,6 +670,57 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("no difficulty dots", () => !queuePanel.ChildrenOfType<Circle>().Any());
         }
 
+        // A set queued by dropping someone's .osr credits the player. The panel has room for both
+        // credits, so the mapper line stays and the player is added beneath it.
+        [Test]
+        public void SongBlockCreditsTheReplayPlayerUnderTheMapper()
+        {
+            AddStep("set NowPlaying with a replay attached", () => jukebox.NowPlaying.Value = new BeatmapSetInfo
+            {
+                Id = 8,
+                Title = "Blue Zenith",
+                Artist = "xi",
+                Creator = "Asphyxia",
+                Replay = new JukeBox.Game.Replays.ReplayAttachment { PlayerName = "Cookiezi" },
+            });
+
+            AddUntilStep("player credited", () => nowPlaying.ReplayText.Text.ToString() == "Played by Cookiezi");
+            AddAssert("mapper credit kept", () => nowPlaying.MapperText.Text.ToString() == "mapped by Asphyxia");
+            AddAssert("player reads below the mapper",
+                () => nowPlaying.ReplayText.ScreenSpaceDrawQuad.TopLeft.Y
+                      >= nowPlaying.MapperText.ScreenSpaceDrawQuad.TopLeft.Y);
+
+            AddStep("set NowPlaying with no replay", () => jukebox.NowPlaying.Value = new BeatmapSetInfo
+            {
+                Id = 9,
+                Title = "Plain",
+                Creator = "Someone",
+            });
+
+            AddUntilStep("credit clears", () => nowPlaying.ReplayText.Text.ToString().Length == 0);
+        }
+
+        // The queue row is a fixed-height three-line card, so the replay credit takes the mapper
+        // line's place there rather than adding a fourth line (see QueuePanel.QueueRow).
+        [Test]
+        public void QueueRowCreditsTheReplayPlayerInPlaceOfTheMapper()
+        {
+            AddStep("enqueue a set with a replay attached", () => queue.Enqueue(new BeatmapSetInfo
+            {
+                Id = 998,
+                Title = "Replayed Row",
+                Artist = "Row Artist",
+                Creator = "Row Mapper",
+                Replay = new JukeBox.Game.Replays.ReplayAttachment { PlayerName = "Rafis" },
+            }));
+
+            AddUntilStep("row is laid out", () => queuePanel.RowCount == 1);
+
+            AddAssert("player credited", () => rowTexts().Contains("Played by Rafis"));
+            AddAssert("mapper line given over to it", () => !rowTexts().Contains("mapped by Row Mapper"));
+            AddAssert("title still shown", () => rowTexts().Contains("Replayed Row"));
+        }
+
         private List<string> rowTexts() => queuePanel.ChildrenOfType<SpriteText>().Select(t => t.Text.ToString()).ToList();
 
         // Builds a minimal but real .osz (a zip containing a *.osu file) so BeatmapCache.GetAsync
