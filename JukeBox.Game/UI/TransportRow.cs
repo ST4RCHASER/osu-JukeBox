@@ -35,8 +35,16 @@ internal partial class TransportRow : FillFlowContainer
     private const double seek_step_ms = 5000;
     private const float button_size = 34;
 
+    /// <summary>How far a disabled control is dimmed — the same value
+    /// <see cref="DifficultySwitcher"/> dims its locked dropdown by, so "you can't use this right
+    /// now" looks the same wherever it appears.</summary>
+    private const float disabled_alpha = 0.55f;
+
     private readonly PlaybackController playback;
     private readonly IconButton playPause;
+
+    private readonly Jukebox? jukebox;
+    private readonly IconButton? skipNext;
 
     /// <summary>The trailing open-in-browser button, when <c>openInBrowser</c> was supplied — see
     /// <see cref="NowPlayingPanel.BrowserButton"/>, which forwards to it.</summary>
@@ -79,7 +87,9 @@ internal partial class TransportRow : FillFlowContainer
 
         if (jukebox != null)
         {
-            Add(new IconButton
+            this.jukebox = jukebox;
+
+            Add(skipNext = new IconButton
             {
                 Icon = FontAwesome.Solid.StepForward,
                 Size = new Vector2(button_size),
@@ -100,6 +110,21 @@ internal partial class TransportRow : FillFlowContainer
                 Action = openInBrowser,
             });
             BrowserButton = browser;
+        }
+    }
+
+    protected override void LoadComplete()
+    {
+        base.LoadComplete();
+
+        // Bound here rather than in the constructor because ClickableContainer.Action's setter
+        // writes Enabled itself (Enabled.Value = action != null) — binding before Action is
+        // assigned would be overwritten by it.
+        if (jukebox != null && skipNext != null)
+        {
+            skipNext.Enabled.BindTo(jukebox.CanSkipNext);
+            skipNext.Enabled.BindValueChanged(
+                e => skipNext.FadeTo(e.NewValue ? 1 : disabled_alpha, Theme.DurationFast, Theme.EaseExit), true);
         }
     }
 

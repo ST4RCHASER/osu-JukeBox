@@ -410,6 +410,210 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("failure reported for the silent set", () => jukebox.LastError.Value != null && jukebox.LastError.Value.Contains("Silent"));
         }
 
+        #region next-button feedback
+
+        /// <summary>
+        /// Every line the status has shown since recording began, in order. Transient phases (the
+        /// prepare especially) are far too quick to catch by polling, so the phase tests assert
+        /// against the recorded SEQUENCE rather than trying to sample a moment.
+        /// </summary>
+        private List<string?> statusLog = null!;
+
+        private void recordStatus() => AddStep("record status changes", () =>
+        {
+            statusLog = new List<string?>();
+            jukebox.Status.BindValueChanged(e => statusLog.Add(e.NewValue), true);
+        });
+
+        /// <summary>Whether the recorded lines contain these, in this order (other lines may sit
+        /// between them).</summary>
+        private bool loggedInOrder(params string[] expected)
+        {
+            int i = 0;
+
+            foreach (string? line in statusLog)
+            {
+                if (i < expected.Length && line != null && line.StartsWith(expected[i], StringComparison.Ordinal))
+                    i++;
+            }
+
+            return i == expected.Length;
+        }
+
+        // The reported bug, verbatim: "when has no queue and i try click next it's nothing happen
+        // for 5 secs no download status show i think is looking up need to show status". The radio
+        // search is the longest phase of an empty-queue round and was the only one that announced
+        // nothing at all — no line, no spinner — so the app looked hung.
+        [Test]
+        public void TheLookupPhaseAnnouncesItselfInsteadOfSittingSilent()
+        {
+            AddStep("radio has a candidate, but searching hangs", () =>
+            {
+                mirror.SetSearchResults(new List<BeatmapSetInfo> { set1 });
+                mirror.GateSearch();
+            });
+
+            recordStatus();
+            AddStep("next, with an empty queue", () => jukebox.SkipCurrent());
+
+            AddUntilStep("the lookup is announced", () => jukebox.Status.Value == "Looking for a song…");
+            AddAssert("with no percentage to attach, since no set is picked yet", () => jukebox.DownloadingSetId.Value == null);
+
+            AddStep("let the search finish", () => mirror.ReleaseSearch());
+            AddUntilStep("set1 plays", () => playback.Current.Value?.SetId == set1.Id);
+            AddAssert("and the line is handed back", () => jukebox.Status.Value == null);
+        }
+
+        // The phases in order, on one empty-queue round: look up, download, prepare. The prepare
+        // phase covers the gap between the last byte arriving and audio starting (extract + track
+        // load), during which the download line used to sit at 100% reading as stuck.
+        [Test]
+        public void EachPhaseOfAnEmptyQueueRoundAnnouncesInOrder()
+        {
+            AddStep("radio has a candidate", () => mirror.SetSearchResults(new List<BeatmapSetInfo> { set1 }));
+
+            recordStatus();
+            AddStep("next, with an empty queue", () => jukebox.SkipCurrent());
+            AddUntilStep("set1 plays", () => playback.Current.Value?.SetId == set1.Id);
+
+            AddAssert("looking up, then downloading, then preparing",
+                () => loggedInOrder("Looking for a song…", "Downloading One…", "Preparing One…"));
+            AddAssert("and the line is empty at the end", () => jukebox.Status.Value == null);
+        }
+
+        // The fast path stays visually still. A cache hit reaches playback in milliseconds, so a
+        // line that flashes on and back off for every skip through cached songs would be worse than
+        // no line — and it would flicker the spinner and the next button along with it.
+        [Test]
+        public void ACacheHitAnnouncesNothingAtAll()
+        {
+            AddStep("play set1 once, so it is cached", () => jukebox.EnqueueAndMaybePlayAsync(set1));
+            AddUntilStep("set1 playing", () => playback.Current.Value?.SetId == set1.Id);
+            AddUntilStep("its download line is gone", () => jukebox.Status.Value == null);
+
+            recordStatus();
+            AddStep("queue and advance to it again, now cached", () =>
+            {
+                queue.Enqueue(set1);
+                jukebox.AdvanceAsync();
+            });
+            AddUntilStep("set1 playing again", () => playback.Current.Value?.SetId == set1.Id);
+
+            AddAssert("nothing was ever put on the line", () => statusLog.All(l => l == null));
+        }
+
+        // The user's second ask: "when it downloading please grayout next button". Applied to the
+        // LOOKUP with an empty queue — see CanSkipNext's own doc for why that is the phase where
+        // pressing next genuinely cannot change anything.
+        [Test]
+        public void NextIsDisabledWhileLookingUpWithAnEmptyQueue()
+        {
+            AddStep("radio has a candidate, but searching hangs", () =>
+            {
+                mirror.SetSearchResults(new List<BeatmapSetInfo> { set1 });
+                mirror.GateSearch();
+            });
+
+            AddAssert("next starts available", () => jukebox.CanSkipNext.Value);
+
+            AddStep("next, with an empty queue", () => jukebox.SkipCurrent());
+            AddUntilStep("next goes unavailable while the lookup runs", () => !jukebox.CanSkipNext.Value);
+
+            AddStep("let the search finish", () => mirror.ReleaseSearch());
+            AddUntilStep("set1 plays", () => playback.Current.Value?.SetId == set1.Id);
+            AddAssert("and next is available again", () => jukebox.CanSkipNext.Value);
+        }
+
+        // The failure the brief called out, and the realistic one right now: every mirror down.
+        // It must not sit silent forever OR leave next permanently dead — the state has to be
+        // visible and recoverable.
+        [Test]
+        public void AFailedLookupReportsAnErrorAndLeavesNextUsable()
+        {
+            AddStep("every search attempt fails", () =>
+            {
+                mirror.SetSearchResults(new List<BeatmapSetInfo> { set1 });
+                mirror.SearchFails = true;
+            });
+
+            AddStep("next, with an empty queue", () => jukebox.SkipCurrent());
+
+            AddUntilStep("the failure is reported", () => jukebox.LastError.Value == "No tracks available; retrying radio shortly.");
+            AddAssert("the lookup line is not left behind under it", () => jukebox.Status.Value == null);
+            AddAssert("and next is usable again, so the user is not stuck", () => jukebox.CanSkipNext.Value);
+
+            // Recoverable: the round retries by itself, and once the mirror comes back it plays.
+            AddStep("the mirror comes back", () => mirror.SearchFails = false);
+            AddUntilStep("a later retry succeeds on its own", () => playback.Current.Value?.SetId == set1.Id);
+        }
+
+        // Guards the instant-skip work (per-caller cache tokens) against being undone by the
+        // disabled treatment: with something queued there is a real song to skip TO, so next stays
+        // live even while a download is in flight — and still actually skips.
+        [Test]
+        public void NextStaysAvailableAndWorksWhileAQueuedSongDownloads()
+        {
+            AddStep("gate set1's download, with set2 waiting behind it", () =>
+            {
+                mirror.GateDownload(1);
+                queue.Enqueue(set1);
+                queue.Enqueue(set2);
+                jukebox.AdvanceAsync();
+            });
+
+            AddUntilStep("set1's download is announced", () => jukebox.Status.Value == "Downloading One…");
+            AddAssert("next stays available during it", () => jukebox.CanSkipNext.Value);
+
+            AddStep("press next", () => jukebox.SkipCurrent());
+            AddUntilStep("set2 plays, without waiting for set1's download", () => playback.Current.Value?.SetId == set2.Id);
+        }
+
+        // The queue half of CanSkipNext: enqueueing during a lookup hands the user something
+        // concrete to skip to, so next must come back without waiting for the search.
+        [Test]
+        public void EnqueueingDuringALookupMakesNextAvailableAgain()
+        {
+            AddStep("searching hangs, with no candidates behind it", () => mirror.GateSearch());
+
+            AddStep("next, with an empty queue", () => jukebox.SkipCurrent());
+            AddUntilStep("next goes unavailable", () => !jukebox.CanSkipNext.Value);
+
+            AddStep("enqueue something", () => queue.Enqueue(set1));
+            AddAssert("next is available again immediately", () => jukebox.CanSkipNext.Value);
+
+            AddStep("release the search", () => mirror.ReleaseSearch());
+        }
+
+        // A superseded lookup must be called off, not run to completion. RadioService's retry loop
+        // caught everything, cancellation included, so a cancelled search was treated as a failed
+        // attempt: the round waited out all three retries and then reported "no tracks available"
+        // for a search nobody wanted.
+        [Test]
+        public void ASupersededLookupIsCalledOffRatherThanBurningItsRetries()
+        {
+            AddStep("searching hangs", () => mirror.GateSearch());
+            AddStep("next, with an empty queue", () => jukebox.SkipCurrent());
+            AddUntilStep("the lookup is running", () => jukebox.Status.Value == "Looking for a song…");
+
+            AddStep("supersede it with a queued song", () =>
+            {
+                queue.Enqueue(set1);
+                jukebox.AdvanceAsync();
+            });
+
+            AddUntilStep("set1 plays", () => playback.Current.Value?.SetId == set1.Id);
+
+            // The count is the whole point, and the reason a "was it cancelled at all" assertion
+            // would not do: the cancellation reaches the mirror either way. What the rethrow changes
+            // is whether RadioService treats it as a failed attempt and tries again — without it,
+            // all three attempts are cancelled in turn and the search then reports "no tracks
+            // available" for a round nobody is waiting on. (That error is real but transient: the
+            // superseding round clears it on entry, which is exactly why it cannot be asserted on.)
+            AddAssert("the search stopped at the first attempt", () => mirror.SearchesCancelled == 1);
+        }
+
+        #endregion
+
         // Regression test for the "queued song doesn't play until radio song ends" UX complaint:
         // a set the user explicitly enqueued should interrupt radio filler immediately (SkipCurrent
         // semantics), rather than wait for the radio-picked track to finish on its own.
@@ -629,8 +833,42 @@ namespace JukeBox.Game.Tests.Visual
                     tcs.TrySetResult(true);
             }
 
-            public Task<List<BeatmapSetInfo>> SearchAsync(SearchRequest r, CancellationToken ct = default)
-                => Task.FromResult(searchResults);
+            private TaskCompletionSource<bool>? searchGate;
+
+            /// <summary>Whether every search attempt throws — the realistic "all mirrors are down"
+            /// case (NeriNyan 530, catboy TLS-blocked), which drives RadioService through its
+            /// retries to a null pick.</summary>
+            public bool SearchFails;
+
+            /// <summary>How many searches were aborted by their token, as opposed to failing.</summary>
+            public int SearchesCancelled;
+
+            /// <summary>Holds every search open until released, so the lookup phase — otherwise far
+            /// too quick to observe — can be inspected while it is in flight.</summary>
+            public void GateSearch() => searchGate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            public void ReleaseSearch() => searchGate?.TrySetResult(true);
+
+            public async Task<List<BeatmapSetInfo>> SearchAsync(SearchRequest r, CancellationToken ct = default)
+            {
+                if (searchGate != null)
+                {
+                    try
+                    {
+                        await searchGate.Task.WaitAsync(ct).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        Interlocked.Increment(ref SearchesCancelled);
+                        throw;
+                    }
+                }
+
+                if (SearchFails)
+                    throw new IOException("fixture mirror search is down");
+
+                return searchResults;
+            }
 
             /// <summary>How many downloads were aborted rather than finishing — "the caller stopped
             /// waiting" and "the request was actually cancelled" are different claims.</summary>

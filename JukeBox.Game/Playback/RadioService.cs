@@ -46,6 +46,14 @@ public class RadioService
 
                 return candidates[rng(0, candidates.Count)];
             }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                // Being called off is not a failed attempt. Without this the blanket catch below
+                // swallowed it and burned the remaining retries on a search nobody is waiting for
+                // any more — so a caller that cancels (an advance round superseded mid-lookup) both
+                // waited out the retries and got a null "no tracks available" for its trouble.
+                throw;
+            }
             catch
             {
                 // failed attempt; try again

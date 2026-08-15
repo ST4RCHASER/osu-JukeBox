@@ -22,6 +22,7 @@ using osu.Framework.Graphics.Shapes;
 using osu.Framework.Graphics.Sprites;
 using osu.Framework.Graphics.UserInterface;
 using osu.Framework.Testing;
+using osu.Framework.Utils;
 using osu.Game.Graphics;
 using osuTK;
 using osuTK.Graphics;
@@ -243,6 +244,43 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("nothing in the title row opens a browser", () =>
                 nowPlaying.ChildrenOfType<IconButton>()
                           .Count(b => b.Icon.Equals(FontAwesome.Solid.ExternalLinkAlt)) == 1);
+        }
+
+        // The button half of the "grey out next while it's fetching" ask. Jukebox owning the
+        // decision (CanSkipNext) is only half a fix — this pins that the control actually follows
+        // it, dims to the app's established disabled alpha, and genuinely refuses the click rather
+        // than merely looking unavailable.
+        [Test]
+        public void SkipNextFollowsCanSkipNextAndRefusesTheClickWhileDisabled()
+        {
+            IconButton skip = null!;
+
+            AddStep("find the skip-next button", () => skip = nowPlaying.Transport
+                .ChildrenOfType<IconButton>().Single(b => b.Icon.Equals(FontAwesome.Solid.StepForward)));
+
+            AddAssert("enabled and at full opacity to begin with", () => skip.Enabled.Value && skip.Alpha == 1);
+
+            AddStep("jukebox reports next can do nothing", () => jukebox.CanSkipNext.Value = false);
+            AddAssert("the button is disabled", () => !skip.Enabled.Value);
+            AddUntilStep("and dimmed to the shared disabled alpha", () => Precision.AlmostEquals(skip.Alpha, 0.55f, 0.01f));
+
+            // Observed through LastError rather than through what is playing: this fixture's mirror
+            // has nothing to find, so an advance that actually runs reports "no tracks available",
+            // whereas a refused click leaves the line untouched. That holds whatever earlier tests
+            // in the fixture left playing, which a playback-state assertion did not.
+            AddStep("clear any previous error", () => jukebox.LastError.Value = null);
+            AddStep("click the disabled button", () => skip.TriggerClick());
+            AddWaitStep("give an advance time to report", 5);
+            AddAssert("no advance ran", () => jukebox.LastError.Value == null);
+
+            AddStep("jukebox reports next is usable again", () => jukebox.CanSkipNext.Value = true);
+            AddAssert("the button is enabled", () => skip.Enabled.Value);
+            AddUntilStep("and back to full opacity", () => Precision.AlmostEquals(skip.Alpha, 1f, 0.01f));
+
+            // Positive control: the same click now does reach the jukebox, so the assertion above
+            // is about the disabled state rather than about TriggerClick never working here.
+            AddStep("click the enabled button", () => skip.TriggerClick());
+            AddUntilStep("that advance did run", () => jukebox.LastError.Value != null);
         }
 
         [Test]
