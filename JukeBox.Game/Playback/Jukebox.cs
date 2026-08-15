@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using JukeBox.Game.Beatmaps;
 using JukeBox.Game.Online;
@@ -321,6 +322,40 @@ public partial class Jukebox : Component
         DownloadingSetId.Value = null;
     }
 
+    /// <summary>
+    /// Which advance round currently owns the status line. Every write goes through
+    /// <see cref="showDownloadStatus"/>/<see cref="releaseStatus"/> carrying the round's own token,
+    /// and a write whose token is stale does nothing.
+    ///
+    /// <para>
+    /// This is what stops a dead download's title sitting under a different song. A round announces
+    /// "Downloading X…" before fetching and clears it on each of its own exits — but an exception
+    /// thrown anywhere after that announcement (a playback fault, the replay difficulty switch, the
+    /// prefetch read) used to escape to the loop's handler, which reports an error and returns
+    /// WITHOUT clearing. The next round then clears LastError, the panel falls back to Status, and
+    /// the stale line reappears under whatever is playing by then — with nothing left that would
+    /// ever clear it.
+    /// </para>
+    /// </summary>
+    private int statusOwner;
+
+    private void showDownloadStatus(int owner, string title, int setId) => Schedule(() =>
+    {
+        if (owner != Volatile.Read(ref statusOwner))
+            return;
+
+        Status.Value = $"Downloading {title}…";
+        DownloadingSetId.Value = setId;
+    });
+
+    /// <summary>Clears the status IF <paramref name="owner"/> still owns it — a superseded round
+    /// releasing late must not wipe the status the current one has already put up.</summary>
+    private void releaseStatus(int owner) => Schedule(() =>
+    {
+        if (owner == Volatile.Read(ref statusOwner))
+            clearStatus();
+    });
+
     private async Task advanceRoundAsync()
     {
         // Cleared once per round (not per pop-attempt below) so a round that eventually
@@ -328,6 +363,23 @@ public partial class Jukebox : Component
         // success is still visible for the rest of the round (see the failing-set test).
         Schedule(() => LastError.Value = null);
 
+        // Taking ownership of the status line for this round. The finally below is the one thing
+        // that guarantees it is handed back however this round ends — returning, falling out of the
+        // loop, or throwing past every handler in it.
+        int owner = Interlocked.Increment(ref statusOwner);
+
+        try
+        {
+            await advanceRoundBodyAsync(owner).ConfigureAwait(false);
+        }
+        finally
+        {
+            releaseStatus(owner);
+        }
+    }
+
+    private async Task advanceRoundBodyAsync(int owner)
+    {
         while (true)
         {
             // Routed through onUpdateThread: this loop's first iteration runs synchronously on
@@ -354,15 +406,7 @@ public partial class Jukebox : Component
             bool wasCached = cache.IsCached(next.Id);
 
             if (!wasCached)
-            {
-                string downloadingTitle = next.DisplayTitle;
-                int downloadingId = next.Id;
-                Schedule(() =>
-                {
-                    Status.Value = $"Downloading {downloadingTitle}…";
-                    DownloadingSetId.Value = downloadingId;
-                });
-            }
+                showDownloadStatus(owner, next.DisplayTitle, next.Id);
 
             CachedBeatmapSet cached;
 
@@ -374,7 +418,7 @@ public partial class Jukebox : Component
             {
                 string message = $"Failed to load '{next.DisplayTitle}': {ex.Message}";
                 Schedule(() => LastError.Value = message);
-                Schedule(clearStatus);
+                releaseStatus(owner);
                 continue;
             }
 
@@ -402,7 +446,7 @@ public partial class Jukebox : Component
                 // candidate instead of wedging.
                 string message = $"No playable audio for '{next.DisplayTitle}'";
                 Schedule(() => LastError.Value = message);
-                Schedule(clearStatus);
+                releaseStatus(owner);
                 continue;
             }
 

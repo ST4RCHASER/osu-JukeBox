@@ -182,6 +182,129 @@ namespace JukeBox.Game.Tests.Visual
             AddUntilStep("a second round ran (guard was released, not wedged)", () => queue.Items.Count == 0);
         }
 
+        // The reported bug: "downloading status stuck when i skip when download". A round writes
+        // "Downloading X…" before fetching, and clears it on each of its own exits — but an
+        // exception thrown ANYWHERE after that write (PlayAsync, the replay difficulty switch, the
+        // prefetch read) escapes to the loop's catch, which surfaces an error and never clears the
+        // status. The next round then clears LastError, the panel falls back to Status, and a dead
+        // download's title sits under whatever is now playing.
+        [Test]
+        public void AStatusIsNotLeftBehindWhenARoundFailsUnexpectedly()
+        {
+            AddStep("swap in a playback controller that throws unexpectedly", () =>
+            {
+                playback = new ThrowingPlaybackController();
+                jukebox = new Jukebox(queue, radio, cache, playback);
+                Children = new Drawable[] { playback, jukebox };
+            });
+
+            AddStep("enqueue set1 (round writes its download status, then PlayAsync throws)",
+                () => jukebox.EnqueueAndMaybePlayAsync(set1));
+
+            AddUntilStep("the round failed", () => jukebox.LastError.Value?.Contains("Unexpected error") == true);
+
+            AddUntilStep("no download status left behind", () => jukebox.Status.Value == null);
+            AddUntilStep("and no download id left behind", () => jukebox.DownloadingSetId.Value == null);
+        }
+
+        // The status a round puts up must belong to the song that round is actually working on. A
+        // superseded round releasing its status late must not wipe the CURRENT one's — which is why
+        // every write carries the round's own token rather than writing unconditionally.
+        [Test]
+        public void ASupersededRoundsLateReleaseDoesNotWipeTheCurrentStatus()
+        {
+            AddStep("gate both downloads", () =>
+            {
+                mirror.GateDownload(1);
+                mirror.GateDownload(2);
+            });
+
+            AddStep("enqueue set1 (its round announces the download and blocks)",
+                () => jukebox.EnqueueAndMaybePlayAsync(set1));
+            AddUntilStep("set1's download announced", () => jukebox.Status.Value == "Downloading One…");
+
+            AddStep("queue set2 and skip mid-download", () =>
+            {
+                queue.Enqueue(set2);
+                jukebox.SkipCurrent();
+            });
+
+            AddStep("let set1's download finish", () => mirror.ReleaseGate(1));
+
+            // set2's round is now the owner and is blocked on its own download, so the line has to
+            // read set2 — not blank (set1's round releasing over the top) and not still set1.
+            AddUntilStep("the line follows the song actually being worked on now",
+                () => jukebox.Status.Value == "Downloading Two…" && jukebox.DownloadingSetId.Value == set2.Id);
+
+            AddStep("let set2's download finish", () => mirror.ReleaseGate(2));
+
+            AddUntilStep("set2 plays", () => playback.Current.Value?.SetId == set2.Id);
+            AddUntilStep("and the status clears with it", () => jukebox.Status.Value == null);
+        }
+
+        // Skipping repeatedly through downloading songs has to settle on the state of whatever is
+        // actually current at the end — not on a leftover from any of the rounds skipped past.
+        [Test]
+        public void RapidSkippingThroughDownloadsSettlesOnTheCurrentSong()
+        {
+            AddStep("gate every download", () =>
+            {
+                mirror.GateDownload(1);
+                mirror.GateDownload(2);
+                mirror.GateDownload(4);
+            });
+
+            AddStep("queue three and start", () =>
+            {
+                queue.Enqueue(set2);
+                queue.Enqueue(set4);
+                jukebox.EnqueueAndMaybePlayAsync(set1);
+            });
+
+            AddUntilStep("first download announced", () => jukebox.Status.Value != null);
+
+            AddStep("skip three times in a row", () =>
+            {
+                jukebox.SkipCurrent();
+                jukebox.SkipCurrent();
+                jukebox.SkipCurrent();
+            });
+
+            AddStep("release everything", () =>
+            {
+                mirror.ReleaseGate(1);
+                mirror.ReleaseGate(2);
+                mirror.ReleaseGate(4);
+            });
+
+            AddUntilStep("playback settles on something", () => playback.Current.Value != null);
+            AddUntilStep("queue drained", () => queue.Items.Count == 0);
+
+            // The point of the test: whatever ended up playing, no download line is left over — and
+            // if one IS shown it names a download that is genuinely still running.
+            AddUntilStep("no stale download line", () => jukebox.Status.Value == null
+                                                        || jukebox.DownloadingSetId.Value is int id && cache.IsDownloading(id));
+        }
+
+        // The fix must not work by suppressing the status: a download that IS the current one still
+        // has to announce itself, and keep announcing while it runs.
+        [Test]
+        public void TheCurrentSongsDownloadStillAnnouncesItself()
+        {
+            AddStep("gate set1's download", () => mirror.GateDownload(1));
+            AddStep("enqueue set1", () => jukebox.EnqueueAndMaybePlayAsync(set1));
+
+            AddUntilStep("announced", () => jukebox.Status.Value == "Downloading One…");
+            AddAssert("with the id the progress readout needs", () => jukebox.DownloadingSetId.Value == set1.Id);
+
+            AddWaitStep("while it keeps downloading", 20);
+            AddAssert("still announced", () => jukebox.Status.Value == "Downloading One…");
+
+            AddStep("release", () => mirror.ReleaseGate(1));
+            AddUntilStep("plays", () => playback.Current.Value?.SetId == set1.Id);
+            AddUntilStep("and the line clears once it is playing", () => jukebox.Status.Value == null);
+        }
+
         // Regression test for the silent-stall bug: a set with no loadable audio (AudioFilename
         // missing, or pointing at a file that doesn't exist) used to make PlaybackController.PlayAsync
         // return silently, and Jukebox would count the round a success anyway — NowPlaying got set,
