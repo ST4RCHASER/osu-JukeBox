@@ -904,6 +904,30 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("error toast stays red", () => toast("Something broke")!.AccentColour == Theme.Error);
         }
 
+        // The last mile of the video fallback: BeatmapVisuals reporting an unplayable video has to
+        // actually reach the user. Driven through the notifier rather than a real broken beatmap —
+        // the visual stack's own reporting is covered in TestSceneBeatmapVisuals, and what's under
+        // test here is that MainScreen turns that report into exactly one toast.
+        [Test]
+        public void AnUnplayableVideoBecomesExactlyOneToast()
+        {
+            AddStep("report an unplayable video", () => screen.VideoNotifier.ReportUnplayableVideo(777));
+
+            AddUntilStep("a toast says so", () => screen.Toasts.LiveToasts.Any(t => t.Message.Contains("video can't be played")));
+            AddAssert("and it is error-coloured",
+                () => screen.Toasts.LiveToasts.First(t => t.Message.Contains("video can't be played")).AccentColour == Theme.Error);
+
+            AddStep("report the same set again", () => screen.VideoNotifier.ReportUnplayableVideo(777));
+            AddWaitStep("give a second toast time to appear", 5);
+            AddAssert("still only one toast for it",
+                () => screen.Toasts.LiveToasts.Count(t => t.Message.Contains("video can't be played")) == 1);
+
+            // A different beatmap is a different problem and does get its own notice.
+            AddStep("report a different set", () => screen.VideoNotifier.ReportUnplayableVideo(778));
+            AddUntilStep("which is announced too",
+                () => screen.Toasts.LiveToasts.Count(t => t.Message.Contains("video can't be played")) == 2);
+        }
+
         /// <summary>
         /// Toasts belong to the WINDOW's bottom-right, not the player's (user request). The player
         /// box moves and resizes with the sidebars, focus mode and PlayfieldZoom; the strip must not
