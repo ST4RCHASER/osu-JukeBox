@@ -130,6 +130,13 @@ public partial class MainScreen : Screen
 
     private const float tab_slide_offset = 20;
 
+    /// <summary>
+    /// The toast strip's depth. Lower is nearer the viewer in osu!framework, and every other child
+    /// of this screen leaves its depth at 0 — so a single negative value states "always in front"
+    /// outright, rather than leaving it to depend on the order of a list somebody may reorder.
+    /// </summary>
+    private const float toast_depth = -1;
+
     /// <summary>See showTabBody: the departing body needs to lose its opacity fast, which is ease-OUT
     /// rather than <see cref="Theme.EaseExit"/>'s ease-IN.</summary>
     private const Easing tab_exit_easing = Easing.OutQuint;
@@ -333,13 +340,6 @@ public partial class MainScreen : Screen
                                 },
                             },
                         },
-                        // Toasts live INSIDE the player box, above the visuals — that single
-                        // choice is what keeps them permanently clear of the side columns and
-                        // their controls in the three-column layout (the box IS the centre cell),
-                        // while letting them ride the box out to full-bleed in focus mode for
-                        // free, with no layout wiring of their own. They are inset far enough
-                        // (Theme.PanelPadding) that the box's masking never reaches their shadow.
-                        toastOverlay = new ToastOverlay(),
                     },
                 },
             },
@@ -426,6 +426,15 @@ public partial class MainScreen : Screen
             fullscreenListing,
             mapIdOverlay,
             fileImportOverlay,
+            // Toasts are the LAST word in the draw order, and deliberately at the screen's top
+            // level rather than inside playerBox (user request). Inside the box they anchored to
+            // the PLAYER's bottom-right, which moves with the sidebars, focus mode and
+            // PlayfieldZoom, and they were painted under the fullscreen listing — a notification
+            // hidden by the thing you are using tells you nothing. At this level they anchor to
+            // the WINDOW, and the negative Depth puts them in front of every overlay including the
+            // two modals: a transient message in the corner never obstructs a modal's own controls,
+            // and being hidden behind one is the failure this is fixing.
+            toastOverlay = new ToastOverlay { Depth = toast_depth },
         };
 
         // Fire-and-forget by design: SetPicked is a synchronous event, and EnqueueAndMaybePlayAsync's
