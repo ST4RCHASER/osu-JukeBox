@@ -125,6 +125,35 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
     /// <summary>The hosted lazer DrawableRuleset (test hook).</summary>
     internal DrawableRuleset? DrawableRuleset => drawableRuleset;
 
+    private LazerSkinProvider? skinProvider;
+    private BeatmapSkinGate? beatmapSkinGate;
+
+    /// <summary>
+    /// Test hook (JukeBox.Game.Tests has InternalsVisibleTo): the COMPOSED skin chain, in the order
+    /// lazer will consult it — highest priority first. Read straight off the containers that were
+    /// actually built (<see cref="ISkinSource.AllSources"/> walks a provider's own sources and then
+    /// its parent's), so a test asserting the order is asserting the real chain rather than a
+    /// second description of it that could stay right while the chain drifted.
+    ///
+    /// <para>
+    /// Read from the beatmap-skin gate when there is one, since that is the innermost link and
+    /// therefore the whole chain; from the user-skin provider otherwise. The per-element visibility
+    /// filter is deliberately not the starting point — it is a lookup interceptor rather than a
+    /// skin, and including it would put an implementation detail of a different feature in the
+    /// middle of every assertion about skin priority.
+    /// </para>
+    /// </summary>
+    internal IReadOnlyList<ISkin> SkinChain
+        => ((ISkinSource?)beatmapSkinGate ?? skinProvider)?.AllSources.ToArray() ?? Array.Empty<ISkin>();
+
+    /// <summary>
+    /// The same chain with each entry unwrapped to the skin underneath it: every source is wrapped
+    /// in the ruleset's own skin transformer (see <see cref="LazerSkinProvider"/>), and it is the
+    /// skin inside that a test means when it says "Classic comes after the user's skin".
+    /// </summary>
+    internal IReadOnlyList<ISkin> UnwrappedSkinChain
+        => SkinChain.Select(s => s is SkinTransformer transformer ? transformer.Skin : s).ToArray();
+
     /// <summary>Whether the osu! replay-analysis overlay got attached (test hook).</summary>
     internal bool HasAnalysisOverlay => this.ChildrenOfType<osu.Game.Rulesets.Osu.UI.ReplayAnalysisOverlay>().Any();
 
@@ -278,7 +307,7 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
             userSkins.Add(classic);
         }
 
-        var skinProvider = new LazerSkinProvider(ruleset, playableBeatmap, userSkins, rulesetResources)
+        skinProvider = new LazerSkinProvider(ruleset, playableBeatmap, userSkins, rulesetResources)
         {
             RelativeSizeAxes = Axes.Both,
         };
@@ -325,7 +354,7 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
                 gateSources.Add(ruleset.CreateSkinTransformer(classic, playableBeatmap) ?? classic);
             }
 
-            var gated = new BeatmapSkinGate(gateSources)
+            var gated = beatmapSkinGate = new BeatmapSkinGate(gateSources)
             {
                 RelativeSizeAxes = Axes.Both,
                 Child = rulesetHost,
