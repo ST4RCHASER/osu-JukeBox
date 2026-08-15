@@ -129,10 +129,50 @@ public partial class DifficultySwitcher : CompositeDrawable
     /// difficulty's identity within a set. Null (no pill, no sort key) whenever the set is playing
     /// without online metadata: a local folder or a dropped .osz, or a mirror response that carried
     /// no beatmap list.
+    ///
+    /// <para>
+    /// The name is not always identical on both sides, which is why the exact comparison has a
+    /// fallback — see <see cref="ManiaKeyPrefix"/>.
+    /// </para>
     /// </summary>
-    private double? starsFor(DifficultyInfo difficulty) => ratingsForCurrentSet()?
-        .FirstOrDefault(b => b.Version == difficulty.Version && b.Mode == RulesetIcons.ModeString(difficulty.Mode))
-        ?.DifficultyRating;
+    private double? starsFor(DifficultyInfo difficulty)
+    {
+        var ratings = ratingsForCurrentSet();
+
+        if (ratings == null)
+            return null;
+
+        string mode = RulesetIcons.ModeString(difficulty.Mode);
+        var sameMode = ratings.Where(b => b.Mode == mode).ToList();
+
+        var exact = sameMode.FirstOrDefault(b => b.Version == difficulty.Version);
+
+        if (exact != null)
+            return exact.DifficultyRating;
+
+        // Undecorated fallback. Ambiguity is possible in principle (a set carrying both
+        // "[4K] Insane" and "[7K] Insane" collapses to one name), and a wrong rating is worse than
+        // none — a difficulty would be sorted into the wrong place and labelled with a number that
+        // isn't its own — so a tie yields nothing rather than a guess.
+        var undecorated = sameMode.Where(b => StripManiaKeyPrefix(b.Version) == difficulty.Version).ToList();
+
+        return undecorated.Count == 1 ? undecorated[0].DifficultyRating : null;
+    }
+
+    /// <summary>
+    /// osu-web's mania key-count decoration: it prefixes a mania difficulty's name with the key
+    /// count (<c>"[4K] Chicken's HEAVENLY"</c>) unless the mapper already put one in the name
+    /// (<c>"14K DP Easy"</c> is served unchanged). The .osu file on disk never carries it — it is
+    /// added when the beatmap is served — so a mania set whose difficulties are plainly named
+    /// matched NOTHING here, losing its star pills, its rating order and its hardest-difficulty
+    /// default. Both the official API and the mirrors serve the decorated name, since the mirrors
+    /// proxy the same data, so this was never specific to one search backend.
+    /// </summary>
+    internal static readonly System.Text.RegularExpressions.Regex ManiaKeyPrefix =
+        new System.Text.RegularExpressions.Regex(@"^\[\d{1,2}K\]\s*", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>Test seam (JukeBox.Game.Tests has InternalsVisibleTo) for <see cref="ManiaKeyPrefix"/>.</summary>
+    internal static string StripManiaKeyPrefix(string version) => ManiaKeyPrefix.Replace(version, string.Empty);
 
     /// <summary>
     /// The online beatmap list for the set playing RIGHT NOW, or null if there isn't one yet.

@@ -634,6 +634,132 @@ namespace JukeBox.Game.Tests.Visual
 
         private string[] listedVersions() => dropdown().Items.Select(d => d!.Version).ToArray();
 
+        /// <summary>
+        /// A mania set as it really arrives: the .osu files on disk carry plain difficulty names,
+        /// while osu! (and every mirror, which proxies the same data) serves them decorated with the
+        /// key count. Names and ratings are the real ones from beatmapset 653740, "WHITEOUT".
+        /// </summary>
+        private CachedBeatmapSet maniaSet(int setId = 120)
+        {
+            var set = new CachedBeatmapSet { SetId = setId, Directory = tmp, AudioFile = fixtureSet.AudioFile, PreferredOsuFile = "novice.osu" };
+            set.OsuFiles.AddRange(new[] { "basic.osu", "novice.osu", "advanced.osu", "exhaust.osu", "heavenly.osu" });
+            set.Difficulties.Add(new DifficultyInfo { Path = "basic.osu", Version = "Makii's BASIC", Mode = 3 });
+            set.Difficulties.Add(new DifficultyInfo { Path = "novice.osu", Version = "NOVICE", Mode = 3 });
+            set.Difficulties.Add(new DifficultyInfo { Path = "advanced.osu", Version = "Amii's ADVANCED", Mode = 3 });
+            set.Difficulties.Add(new DifficultyInfo { Path = "exhaust.osu", Version = "Virtue's EXHAUST", Mode = 3 });
+            set.Difficulties.Add(new DifficultyInfo { Path = "heavenly.osu", Version = "Chicken's HEAVENLY", Mode = 3 });
+            return set;
+        }
+
+        private static BeatmapSetInfo maniaRatings(int setId = 120) => new BeatmapSetInfo
+        {
+            Id = setId,
+            Title = "WHITEOUT",
+            Beatmaps =
+            {
+                new BeatmapInfo { Mode = "mania", Version = "[4K] Makii's BASIC", DifficultyRating = 1.26 },
+                new BeatmapInfo { Mode = "mania", Version = "[4K] NOVICE", DifficultyRating = 2.03 },
+                new BeatmapInfo { Mode = "mania", Version = "[4K] Amii's ADVANCED", DifficultyRating = 3.15 },
+                new BeatmapInfo { Mode = "mania", Version = "[4K] Virtue's EXHAUST", DifficultyRating = 3.95 },
+                new BeatmapInfo { Mode = "mania", Version = "[4K] Chicken's HEAVENLY", DifficultyRating = 5.25 },
+            },
+        };
+
+        // osu-web prefixes a mania difficulty's name with its key count; the .osu file on disk never
+        // carries that, so a plainly-named mania set matched nothing at all — no pills, alphabetical
+        // order, and no hardest-difficulty default. Exactly the user's screenshot.
+        [Test]
+        public void ManiaDifficultiesMatchThroughOsuWebsKeyCountPrefix()
+        {
+            AddStep("play a mania set", () =>
+            {
+                playback.Current.Value = maniaSet();
+                playback.SelectedOsuFile.Value = "novice.osu";
+                jukebox.NowPlaying.Value = maniaRatings();
+            });
+
+            AddUntilStep("every row picks up its pill", () => menuRows()
+                .Where(r => difficultyOf(r) != null)
+                .All(r => r.ChildrenOfType<CircularContainer>().Any()));
+
+            AddAssert("sorted easiest-first despite the decorated names",
+                () => listedVersions().SequenceEqual(new[]
+                {
+                    "Makii's BASIC", "NOVICE", "Amii's ADVANCED", "Virtue's EXHAUST", "Chicken's HEAVENLY",
+                }));
+
+            AddAssert("BASIC is labelled with its own 1.26",
+                () => pillTextOf(playback.Current.Value!.Difficulties.Single(d => d.Version == "Makii's BASIC")) == "1.26");
+
+            AddUntilStep("and playback started on the 5.25 difficulty",
+                () => playback.SelectedOsuFile.Value == "heavenly.osu");
+        }
+
+        // Mappers who put the key count in the name themselves get it served back unchanged, so the
+        // exact match must keep working — the prefix rule must not eat a name's own leading text.
+        [Test]
+        public void ManiaDifficultiesThatAlreadyNameTheirKeyCountStillMatch()
+        {
+            AddStep("play a set named like beatmapset 1974347", () =>
+            {
+                var set = new CachedBeatmapSet { SetId = 121, Directory = tmp, AudioFile = fixtureSet.AudioFile, PreferredOsuFile = "e.osu" };
+                set.OsuFiles.AddRange(new[] { "e.osu", "h.osu" });
+                set.Difficulties.Add(new DifficultyInfo { Path = "e.osu", Version = "10K Easy", Mode = 3 });
+                set.Difficulties.Add(new DifficultyInfo { Path = "h.osu", Version = "14K DP Hard", Mode = 3 });
+
+                playback.Current.Value = set;
+                playback.SelectedOsuFile.Value = "e.osu";
+                jukebox.NowPlaying.Value = new BeatmapSetInfo
+                {
+                    Id = 121,
+                    Beatmaps =
+                    {
+                        new BeatmapInfo { Mode = "mania", Version = "10K Easy", DifficultyRating = 2.40 },
+                        new BeatmapInfo { Mode = "mania", Version = "14K DP Hard", DifficultyRating = 4.10 },
+                    },
+                };
+            });
+
+            AddUntilStep("both rows rated", () => menuRows()
+                .Count(r => difficultyOf(r) != null && r.ChildrenOfType<CircularContainer>().Any()) == 2);
+            AddAssert("easy keeps its own rating",
+                () => pillTextOf(playback.Current.Value!.Difficulties.Single(d => d.Version == "10K Easy")) == "2.40");
+        }
+
+        // A wrong rating is worse than none: it would sort a difficulty into the wrong place and
+        // label it with a number that isn't its own. Two key variants sharing one name collapse to
+        // the same undecorated string, so that difficulty gets no pill rather than a coin flip.
+        [Test]
+        public void AmbiguousUndecoratedManiaNamesYieldNoRating()
+        {
+            AddStep("play a set with 4K and 7K difficulties sharing a name", () =>
+            {
+                var set = new CachedBeatmapSet { SetId = 122, Directory = tmp, AudioFile = fixtureSet.AudioFile, PreferredOsuFile = "i.osu" };
+                set.OsuFiles.AddRange(new[] { "i.osu", "n.osu" });
+                set.Difficulties.Add(new DifficultyInfo { Path = "i.osu", Version = "Insane", Mode = 3 });
+                set.Difficulties.Add(new DifficultyInfo { Path = "n.osu", Version = "Normal", Mode = 3 });
+
+                playback.Current.Value = set;
+                playback.SelectedOsuFile.Value = "i.osu";
+                jukebox.NowPlaying.Value = new BeatmapSetInfo
+                {
+                    Id = 122,
+                    Beatmaps =
+                    {
+                        new BeatmapInfo { Mode = "mania", Version = "[4K] Insane", DifficultyRating = 4.10 },
+                        new BeatmapInfo { Mode = "mania", Version = "[7K] Insane", DifficultyRating = 5.60 },
+                        new BeatmapInfo { Mode = "mania", Version = "[4K] Normal", DifficultyRating = 2.20 },
+                    },
+                };
+            });
+
+            AddUntilStep("the unambiguous difficulty is rated", () => menuRows()
+                .Any(r => difficultyOf(r)?.Version == "Normal" && r.ChildrenOfType<CircularContainer>().Any()));
+            AddAssert("the ambiguous one is left unrated", () => menuRows()
+                .Single(r => difficultyOf(r)?.Version == "Insane")
+                .ChildrenOfType<CircularContainer>().Any() == false);
+        }
+
         // Sorted easiest-first: the list used to come out in scan order, which is alphabetical by
         // filename, so a set read as Hard / Insane / Normal — nonsense as a difficulty ladder.
         [Test]
