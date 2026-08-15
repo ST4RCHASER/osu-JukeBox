@@ -385,7 +385,7 @@ public partial class QueuePanel : CompositeDrawable
                                 Font = FontUsage.Default.With(size: Theme.CaptionTextSize - 1),
                                 Colour = set.Replay != null ? Theme.Accent : Theme.TextTertiary,
                                 Text = set.Replay != null
-                                    ? $"Played by {set.Replay.PlayerName}"
+                                    ? replayCredit(set.Replay)
                                     : $"mapped by {set.Creator}",
                             },
                         },
@@ -545,6 +545,17 @@ public partial class QueuePanel : CompositeDrawable
             else
                 spinner.Hide();
         }
+
+        /// <summary>
+        /// "Played by Cookiezi · HD HR DT" — the mods share this one line rather than getting their
+        /// own, since the row is a fixed three-line card. The text truncates like every other line
+        /// here, so a long mod list on a narrow column simply clips after the player's name, which
+        /// is the part that identifies the entry.
+        /// </summary>
+        private static string replayCredit(Replays.ReplayAttachment replay)
+            => replay.ModAcronyms.Count > 0
+                ? $"Played by {replay.PlayerName} · {string.Join(" ", replay.ModAcronyms)}"
+                : $"Played by {replay.PlayerName}";
 
         public void TriggerRemove() => removeButton.TriggerClick();
 

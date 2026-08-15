@@ -118,6 +118,10 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
     /// <summary>Number of hit objects in the playable (converted) beatmap, 0 until loaded (test hook).</summary>
     internal int ObjectCount => playableBeatmap?.HitObjects.Count ?? 0;
 
+    /// <summary>The mod-converted beatmap gameplay actually runs on (test hook) — lets a test see
+    /// that a replay's difficulty mods reached the conversion, not just the mods list.</summary>
+    internal IBeatmap? PlayableBeatmap => playableBeatmap;
+
     /// <summary>The hosted lazer DrawableRuleset (test hook).</summary>
     internal DrawableRuleset? DrawableRuleset => drawableRuleset;
 
@@ -295,36 +299,31 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
     }
 
     /// <summary>
-    /// The replay's own mods, minus the two families this app can't honour:
-    ///
-    /// <list type="bullet">
-    /// <item><b>Rate-changing mods</b> (DT/NC/HT/DC, anything <see cref="IApplicableToRate"/>).
-    /// The music is played by our own <see cref="Playback.PlaybackController"/> at the track's
-    /// natural rate (or whatever the user's speed slider says), and the chart runs off that same
-    /// clock — so applying a rate mod here would speed the CHART up relative to audio that didn't
-    /// change, i.e. desync rather than authenticity. The replay's frames are absolute timestamps
-    /// and land correctly against the unmodified clock.</item>
-    /// <item><b>Autoplay</b>, which would fight the replay for control of the input handler.</item>
-    /// </list>
+    /// The replay's own mods, in full — the difficulty-affecting ones that change what is drawn
+    /// (HR's flipped playfield, EZ/HR's altered approach and size, mania key mods), the visual ones
+    /// (HD's fades, FL's flashlight), AND the rate-changing ones, which reach the ruleset for
+    /// completeness even though they change nothing here: lazer applies those to the TRACK, which
+    /// in this app is <see cref="Playback.PlaybackController.ReplayRate"/>'s job. Only autoplay is
+    /// dropped, since it would fight the replay for the input handler.
     ///
     /// <para>
-    /// Everything else — the difficulty-affecting mods that actually change what is drawn (HR's
-    /// flipped playfield, EZ/HR's altered approach/size, mania key mods, HD/FL's visuals) — is
-    /// applied, which is what makes the replay's cursor line up with the objects it was aiming at.
-    /// A mod list that fails to materialise (an unrecognised or unconvertible mod) degrades to no
-    /// mods rather than failing the whole chart.
+    /// Applying the real mod list is what makes the replay's cursor line up with the objects it was
+    /// aiming at. A mod list that fails to materialise (an unrecognised or unconvertible mod)
+    /// degrades to no mods rather than failing the whole chart.
     /// </para>
     /// </summary>
     private IReadOnlyList<Mod> replayMods(Ruleset ruleset)
     {
         try
         {
-            var kept = replayScore!.ScoreInfo.Mods
-                                   .Where(m => m is not ModAutoplay && m is not IApplicableToRate)
-                                   .ToArray();
+            var kept = Replays.ReplayMods.ForGameplay(replayScore);
 
-            if (kept.Length > 0)
-                osu.Framework.Logging.Logger.Log($"[LazerChartLayer] replay mods applied: {string.Join(", ", kept.Select(m => m.Acronym))}");
+            if (kept.Count > 0)
+            {
+                osu.Framework.Logging.Logger.Log(
+                    $"[LazerChartLayer] replay mods applied: {string.Join(", ", kept.Select(m => m.Acronym))}"
+                    + $" (playback rate {Replays.ReplayMods.RateFor(kept):0.##}×)");
+            }
 
             return kept;
         }

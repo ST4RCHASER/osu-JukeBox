@@ -11,6 +11,7 @@ using System.Threading.Tasks;
 using JukeBox.Game.Beatmaps;
 using JukeBox.Game.Online;
 using JukeBox.Game.Playback;
+using JukeBox.Game.Replays;
 using NUnit.Framework;
 using osu.Framework.Graphics;
 using osu.Framework.Testing;
@@ -257,6 +258,58 @@ namespace JukeBox.Game.Tests.Visual
             AddWaitStep("let a few frames pass", 5);
             AddAssert("set2 announced exactly once", () => announced.Count(a => a.Id == set2.Id) == 1);
             AddAssert("nothing else announced", () => announced.Count == 2);
+        }
+
+        // A replay's rate mods have to move actual PLAYBACK, not the chart: in osu! a rate mod
+        // speeds up the track and gameplay follows the track's clock, which is this app's
+        // arrangement too. Speeding the chart alone would desync it from music that never changed.
+        [Test]
+        public void AReplaysRateModsSetThePlaybackRateAndReleaseItAfterwards()
+        {
+            var doubleTimeSet = new BeatmapSetInfo
+            {
+                Id = 1,
+                Title = "One",
+                Replay = new ReplayAttachment { PlayerName = "Cookiezi", Rate = 1.5, RateShiftsPitch = true },
+            };
+
+            AddAssert("nothing forcing a rate to begin with", () => playback.ReplayRate.Value == 1);
+
+            AddStep("enqueue the replay's set", () => jukebox.EnqueueAndMaybePlayAsync(doubleTimeSet));
+            AddUntilStep("its set is playing", () => playback.Current.Value?.SetId == doubleTimeSet.Id);
+            AddAssert("playback runs at the replay's rate", () => playback.ReplayRate.Value == 1.5);
+
+            AddStep("queue an ordinary set and advance", () =>
+            {
+                queue.Enqueue(set2);
+                jukebox.SkipCurrent();
+            });
+
+            AddUntilStep("the ordinary set is playing", () => playback.Current.Value?.SetId == set2.Id);
+            AddAssert("the forced rate was released", () => playback.ReplayRate.Value == 1,
+                "a previous replay's rate must never leak into the next song");
+        }
+
+        // The user's own speed slider is a separate adjustment, so the two multiply — and crucially
+        // the slider itself is never moved behind the user's back.
+        [Test]
+        public void AReplaysRateDoesNotClobberTheUsersOwnSpeedSetting()
+        {
+            var doubleTimeSet = new BeatmapSetInfo
+            {
+                Id = 4,
+                Title = "Four",
+                Replay = new ReplayAttachment { PlayerName = "Cookiezi", Rate = 1.5, RateShiftsPitch = true },
+            };
+
+            AddStep("user sets their own speed to 0.5x", () => playback.PlaybackRate.Value = 0.5);
+            AddStep("enqueue the replay's set", () => jukebox.EnqueueAndMaybePlayAsync(doubleTimeSet));
+            AddUntilStep("its set is playing", () => playback.Current.Value?.SetId == doubleTimeSet.Id);
+
+            AddAssert("the user's slider is untouched", () => playback.PlaybackRate.Value == 0.5);
+            AddAssert("and the replay rate sits alongside it", () => playback.ReplayRate.Value == 1.5);
+
+            AddStep("restore the default speed", () => playback.PlaybackRate.Value = 1);
         }
 
         // Builds a fixture .osz whose only difficulty has no AudioFilename key at all, so
