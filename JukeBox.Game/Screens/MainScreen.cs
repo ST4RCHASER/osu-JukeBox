@@ -16,6 +16,7 @@ using osu.Framework.Input.Events;
 using osu.Framework.Logging;
 using osu.Framework.Screens;
 using osuTK;
+using osuTK.Graphics;
 using osuTK.Input;
 
 namespace JukeBox.Game.Screens;
@@ -487,6 +488,8 @@ public partial class MainScreen : Screen
             if (e.NewValue != null)
                 showToast(e.NewValue);
         });
+
+        jukebox.Enqueued += set => showToast($"Added to queue: {set.DisplayTitle}", Theme.Accent);
     }
 
     /// <summary>
@@ -762,7 +765,9 @@ public partial class MainScreen : Screen
         return null;
     }
 
-    private void showToast(string message)
+    /// <summary><paramref name="colour"/> defaults to <see cref="Theme.Error"/> so failures stay
+    /// unmistakably red; informational toasts (the enqueue notification) pass the accent instead.</summary>
+    private void showToast(string message, Color4? colour = null)
     {
         var text = new SpriteText
         {
@@ -770,7 +775,7 @@ public partial class MainScreen : Screen
             Origin = Anchor.TopCentre,
             Y = 16,
             Font = FontUsage.Default.With(size: 20),
-            Colour = Theme.Error,
+            Colour = colour ?? Theme.Error,
             Text = message,
             Alpha = 0,
             Scale = new Vector2(Theme.PopScale),
