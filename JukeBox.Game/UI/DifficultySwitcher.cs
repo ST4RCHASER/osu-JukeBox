@@ -262,10 +262,6 @@ public partial class DifficultySwitcher : CompositeDrawable
         /// InternalsVisibleTo).</summary>
         internal LocalisableString GenerateItemTextForTest(DifficultyInfo? item) => GenerateItemText(item);
 
-        /// <summary>Test-only: the badge strip this dropdown would draw for an item, so a test can
-        /// assert its contents without opening the menu.</summary>
-        internal Drawable? BadgesForTest(DifficultyInfo? item) => badgesFor(item);
-
         protected override DropdownHeader CreateHeader() => header = new DifficultyDropdownHeader();
 
         protected override DropdownMenu CreateMenu() => new DifficultyMenu(badgesFor);
@@ -284,15 +280,23 @@ public partial class DifficultySwitcher : CompositeDrawable
 
             private partial class DifficultyMenuItem : DrawableOsuDropdownMenuItem
             {
-                private readonly Drawable? badges;
+                // Captured on the way out of CreateContent() rather than read back off the
+                // inherited Content field, which is unreachable by name here: lazer nests a TYPE
+                // called Content inside this class, and it shadows the field.
+                private BadgedContent content = null!;
 
                 public DifficultyMenuItem(MenuItem item, Drawable? badges)
                     : base(item)
                 {
-                    this.badges = badges;
+                    // The badges are applied HERE rather than passed to CreateContent(), because the
+                    // framework calls CreateContent() from DrawableMenuItem's own constructor —
+                    // before this body runs, so a field assigned here would still be null when the
+                    // content is built. That is exactly how these rows silently lost their badges
+                    // while the closed header (populated after construction) kept its own.
+                    content.SetBadges(badges);
                 }
 
-                protected override Drawable CreateContent() => new BadgedContent(badges);
+                protected override Drawable CreateContent() => content = new BadgedContent();
 
                 /// <summary>Lazer's own row content with the badges slotted in ahead of its label.
                 /// The label's left padding tracks the badge strip's measured width rather than a
@@ -305,34 +309,37 @@ public partial class DifficultySwitcher : CompositeDrawable
 
                     private const float badge_gap = 6;
 
-                    private readonly Container? badgeContainer;
+                    private readonly Container badgeContainer;
 
-                    public BadgedContent(Drawable? badges)
+                    public BadgedContent()
                     {
-                        if (badges == null)
-                            return;
-
                         AddInternal(badgeContainer = new Container
                         {
                             Anchor = Anchor.CentreLeft,
                             Origin = Anchor.CentreLeft,
                             AutoSizeAxes = Axes.Both,
                             X = text_inset,
-                            Child = badges,
                         });
+                    }
+
+                    public void SetBadges(Drawable? badges)
+                    {
+                        badgeContainer.Clear();
+
+                        if (badges != null)
+                            badgeContainer.Add(badges);
                     }
 
                     protected override void Update()
                     {
                         base.Update();
 
-                        if (badgeContainer == null)
-                            return;
-
                         // Read a frame late (the container's own auto-size only resolves after this
                         // Update runs), which is invisible: the row settles on its very next frame,
                         // before any of it is interactive.
-                        float inset = text_inset + badgeContainer.DrawWidth + badge_gap;
+                        float inset = badgeContainer.Children.Count == 0
+                            ? text_inset
+                            : text_inset + badgeContainer.DrawWidth + badge_gap;
 
                         if (!Precision.AlmostEquals(Label.Padding.Left, inset))
                             Label.Padding = new MarginPadding { Left = inset };
