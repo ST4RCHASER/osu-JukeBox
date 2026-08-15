@@ -17,6 +17,7 @@ using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Platform;
 using osu.Framework.Testing;
+using osu.Game.Rulesets.Mods;
 
 namespace JukeBox.Game.Tests.Visual
 {
@@ -150,6 +151,76 @@ namespace JukeBox.Game.Tests.Visual
             AddUntilStep("the toggles came back", () => !panel.ModsLocked);
             AddAssert("with the user's own selection intact", () => panel.ModCheckbox(ChartMod.Hidden).Current.Value);
             AddAssert("and no replay note left", () => panel.ReplayModsNote.Length == 0);
+        }
+
+        /// <summary>
+        /// Mod rows narrow to what the playing ruleset actually offers, asked of lazer rather than
+        /// declared. The key counts, Co-op and Fade In really are osu!mania-only; Mirror and Random
+        /// are NOT — lazer gives Mirror to osu! and osu!catch and Random to osu! and osu!taiko, so
+        /// scoping those two to mania would have hidden working toggles.
+        /// </summary>
+        [TestCase(0, false, true, true)]
+        [TestCase(1, false, false, true)]
+        [TestCase(2, false, true, false)]
+        [TestCase(3, true, true, true)]
+        public void ModRowsNarrowToWhatTheRulesetOffers(int mode, bool maniaOnly, bool mirror, bool random)
+        {
+            AddStep($"play a mode-{mode} difficulty", () => playing(mode));
+
+            AddAssert("the shared mods are always offered",
+                () => new[] { ChartMod.Easy, ChartMod.HalfTime, ChartMod.HardRock, ChartMod.Hidden, ChartMod.DoubleTime, ChartMod.Nightcore, ChartMod.Flashlight }
+                    .All(panel.ModOffered));
+
+            AddAssert($"mania-only mods offered: {maniaOnly}",
+                () => new[] { ChartMod.Key1, ChartMod.Key4, ChartMod.Key7, ChartMod.Key9, ChartMod.DualStages, ChartMod.FadeIn }
+                    .All(m => panel.ModOffered(m) == maniaOnly));
+
+            AddAssert($"Mirror offered: {mirror}", () => panel.ModOffered(ChartMod.Mirror) == mirror);
+            AddAssert($"Random offered: {random}", () => panel.ModOffered(ChartMod.Random) == random);
+        }
+
+        /// <summary>Grouped by lazer's own <see cref="ModType"/>, which is also what stable's mania
+        /// mod screen shows — its "Special" column is lazer's Conversion.</summary>
+        [Test]
+        public void ModsAreGroupedByLazersOwnCategories()
+        {
+            AddStep("play a mania difficulty", () => playing(3));
+
+            AddAssert("the three categories are all on screen",
+                () => panel.ModCategoryVisible(ModType.DifficultyReduction)
+                      && panel.ModCategoryVisible(ModType.DifficultyIncrease)
+                      && panel.ModCategoryVisible(ModType.Conversion));
+
+            AddAssert("Fade In sits with the difficulty increases, not the conversions",
+                () => ChartModCatalog.TypeOf(ChartMod.FadeIn) == ModType.DifficultyIncrease);
+
+            AddAssert("the key counts, Co-op, Mirror and Random are conversions",
+                () => new[] { ChartMod.Key4, ChartMod.DualStages, ChartMod.Mirror, ChartMod.Random }
+                    .All(m => ChartModCatalog.TypeOf(m) == ModType.Conversion));
+        }
+
+        /// <summary>
+        /// The key counts and Co-op can only act on a converted beatmap, and this app never renders
+        /// one — so rather than offering toggles that silently do nothing, the tab greys them and
+        /// explains why. Mirror and Random sit in the same category and stay live.
+        /// </summary>
+        [Test]
+        public void ConversionOnlyModsAreMarkedInapplicable()
+        {
+            AddStep("play a mania difficulty", () => playing(3));
+
+            AddAssert("key counts and Co-op refuse input",
+                () => new[] { ChartMod.Key1, ChartMod.Key4, ChartMod.Key9, ChartMod.DualStages }.All(panel.ModInert));
+
+            AddAssert("and the reason is on screen", () => panel.ConvertsOnlyNoteVisible);
+
+            AddAssert("Mirror and Random are still live",
+                () => !panel.ModCheckbox(ChartMod.Mirror).Current.Disabled
+                      && !panel.ModCheckbox(ChartMod.Random).Current.Disabled);
+
+            AddStep("switch to an osu! difficulty", () => playing(0));
+
+            AddAssert("the note goes with the rows it explains", () => !panel.ConvertsOnlyNoteVisible);
         }
 
         [Test]

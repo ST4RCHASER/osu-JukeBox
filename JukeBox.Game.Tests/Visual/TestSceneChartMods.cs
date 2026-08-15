@@ -82,6 +82,8 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("clear the selection", () =>
             {
                 config.SetValue(JukeBoxSetting.ChartMods, string.Empty);
+                playback.Current.Value = null;
+                playback.SelectedOsuFile.Value = null;
                 jukebox.NowPlaying.Value = null;
                 layerHost.Clear();
             });
@@ -358,5 +360,287 @@ namespace JukeBox.Game.Tests.Visual
                 });
             }
         }
+
+        // ---- osu!mania ----
+
+        /// <summary>Only one key count can be in force at a time, which is lazer's own rule (every
+        /// ManiaModKeyN lists all the others among its exclusions) rather than one asserted here.</summary>
+        [Test]
+        public void KeyModsAreMutuallyExclusive()
+        {
+            AddStep("play a mania difficulty", () => playingMania());
+
+            AddStep("select 4K", () => selection.Enabled(ChartMod.Key4).Value = true);
+            AddAssert("4K on", () => selection.Enabled(ChartMod.Key4).Value);
+
+            AddStep("select 7K", () => selection.Enabled(ChartMod.Key7).Value = true);
+
+            AddAssert("7K on", () => selection.Enabled(ChartMod.Key7).Value);
+            AddAssert("4K switched itself off", () => !selection.Enabled(ChartMod.Key4).Value);
+            AddAssert("exactly one key mod is on",
+                () => selection.Selected.Count(m => m.Acronym().EndsWith("K", StringComparison.Ordinal)) == 1);
+        }
+
+        /// <summary>
+        /// Fade In makes the notes appear late where Hidden makes them vanish early, so osu!mania
+        /// refuses to run both — <c>ManiaModFadeIn</c> names <c>ManiaModHidden</c> among its
+        /// exclusions. Co-op, by contrast, excludes NOTHING in lazer: it doubles the stage and is
+        /// meant to be combined, key mods included.
+        /// </summary>
+        [Test]
+        public void FadeInFightsHiddenButCoopFightsNothing()
+        {
+            AddStep("play a mania difficulty", () => playingMania());
+
+            AddStep("select HD", () => selection.Enabled(ChartMod.Hidden).Value = true);
+            AddStep("select Fade In", () => selection.Enabled(ChartMod.FadeIn).Value = true);
+
+            AddAssert("Fade In on", () => selection.Enabled(ChartMod.FadeIn).Value);
+            AddAssert("HD switched itself off", () => !selection.Enabled(ChartMod.Hidden).Value);
+
+            AddStep("select Co-op and 7K on top", () =>
+            {
+                selection.Enabled(ChartMod.DualStages).Value = true;
+                selection.Enabled(ChartMod.Key7).Value = true;
+            });
+
+            AddAssert("Co-op, 7K and Fade In all coexist",
+                () => selection.Enabled(ChartMod.DualStages).Value
+                      && selection.Enabled(ChartMod.Key7).Value
+                      && selection.Enabled(ChartMod.FadeIn).Value);
+        }
+
+        /// <summary>
+        /// The rules are genuinely per-ruleset, and this is the pair that proves it: osu! is happy
+        /// with HDFL (an ordinary play) while osu!mania forbids it, because ManiaModHidden lists
+        /// ModFlashlight among its exclusions and OsuModHidden does not. A single global answer
+        /// would be wrong in one direction or the other.
+        /// </summary>
+        [Test]
+        public void HiddenAndFlashlightCoexistInOsuButNotInMania()
+        {
+            AddStep("play an osu! difficulty", () => playingOsu());
+
+            AddStep("select HD + FL", () =>
+            {
+                selection.Enabled(ChartMod.Hidden).Value = true;
+                selection.Enabled(ChartMod.Flashlight).Value = true;
+            });
+
+            AddAssert("osu! keeps both",
+                () => selection.Enabled(ChartMod.Hidden).Value && selection.Enabled(ChartMod.Flashlight).Value);
+
+            // Even carried into a mania chart, the pair must not be BUILT there.
+            AddAssert("but a mania chart is only handed one of them",
+                () => selection.CreateFor(new ManiaRuleset()).Count(m => m.Acronym is "HD" or "FL") == 1);
+
+            AddStep("switch to a mania difficulty", () => playingMania());
+
+            AddAssert("mania calls the pair incompatible",
+                () => !selection.Compatible(ChartMod.Hidden, ChartMod.Flashlight));
+
+            // Re-picking FL there resolves it the way clicking it would (a bindable already at true
+            // fires nothing, so it has to actually move).
+            AddStep("re-pick FL under mania", () =>
+            {
+                selection.Enabled(ChartMod.Flashlight).Value = false;
+                selection.Enabled(ChartMod.Flashlight).Value = true;
+            });
+
+            AddAssert("mania switched HD off", () => !selection.Enabled(ChartMod.Hidden).Value);
+        }
+
+        /// <summary>A mania-only selection must never be applied to another ruleset's chart —
+        /// resolution is by acronym, and osu! simply has no "7K".</summary>
+        [Test]
+        public void ManiaOnlyModsNeverReachAnotherRulesetsChart()
+        {
+            AddStep("play a mania difficulty", () => playingMania());
+
+            AddStep("select 7K + Co-op + Fade In", () =>
+            {
+                selection.Enabled(ChartMod.Key7).Value = true;
+                selection.Enabled(ChartMod.DualStages).Value = true;
+                selection.Enabled(ChartMod.FadeIn).Value = true;
+            });
+
+            AddAssert("mania builds all three",
+                () => selection.CreateFor(new ManiaRuleset()).Select(m => m.Acronym).OrderBy(a => a)
+                               .SequenceEqual(new[] { "7K", "DS", "FI" }));
+
+            foreach (Ruleset ruleset in new Ruleset[] { new OsuRuleset(), new TaikoRuleset(), new CatchRuleset() })
+            {
+                var captured = ruleset;
+                AddAssert($"{captured.ShortName} builds none of them", () => selection.CreateFor(captured).Count == 0);
+            }
+
+            AddAssert("and the selection itself was left intact",
+                () => selection.Enabled(ChartMod.Key7).Value && selection.Enabled(ChartMod.DualStages).Value);
+        }
+
+        /// <summary>
+        /// osu!'s own rule, measured rather than assumed: the key counts and Co-op reach the
+        /// beatmap only through <c>IApplicableToBeatmapConverter</c>, and mania's converter ignores
+        /// a requested column count for a map that is ALREADY mania. Stable behaves the same way.
+        ///
+        /// <para>
+        /// This app always renders a beatmap in the ruleset its own .osu declares, so a convert
+        /// never happens and these mods can never bite here. They still reach the ruleset's mod
+        /// list — nothing is filtered out behind the user's back — but the column count stays put,
+        /// which is why the Chart tab greys the rows and says so.
+        /// </para>
+        /// </summary>
+        [Test]
+        public void KeyModsAndCoopOnlyEverApplyToConvertedBeatmaps()
+        {
+            string dir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+
+            AddAssert("the catalogue knows they are converts-only",
+                () => ChartModCatalog.AppliesOnlyToConverts(ChartMod.Key7)
+                      && ChartModCatalog.AppliesOnlyToConverts(ChartMod.DualStages));
+
+            AddAssert("and that Mirror and Random are not",
+                () => !ChartModCatalog.AppliesOnlyToConverts(ChartMod.Mirror)
+                      && !ChartModCatalog.AppliesOnlyToConverts(ChartMod.Random));
+
+            AddStep("build an unmodded 4K chart", () =>
+            {
+                Directory.CreateDirectory(dir);
+                playingMania();
+                buildManiaLayer(dir);
+            });
+
+            AddUntilStep("layer loaded", () => layer.IsLoaded && layer.PlayableBeatmap != null);
+            AddAssert("the map is 4 columns in one stage",
+                () => maniaBeatmap().TotalColumns == 4 && maniaBeatmap().Stages.Count == 1);
+
+            AddStep("select 7K + Co-op", () =>
+            {
+                selection.Enabled(ChartMod.Key7).Value = true;
+                selection.Enabled(ChartMod.DualStages).Value = true;
+            });
+
+            AddStep("rebuild", () =>
+            {
+                layerHost.Clear();
+                buildManiaLayer(dir);
+            });
+
+            AddUntilStep("modded layer loaded", () => layer.IsLoaded && layer.PlayableBeatmap != null);
+
+            AddAssert("both still reached the ruleset's mod list",
+                () => layer.DrawableRuleset!.Mods.Select(m => m.Acronym).ToHashSet().IsSupersetOf(new[] { "7K", "DS" }));
+
+            AddAssert("but a native mania map keeps its own stage",
+                () => maniaBeatmap().TotalColumns == 4 && maniaBeatmap().Stages.Count == 1);
+
+            AddStep("clean up", () => layerHost.Clear());
+        }
+
+        /// <summary>Mirror and Random reorder the columns rather than adding any, so they are proven
+        /// by reaching the ruleset and by Mirror actually flipping the converted note positions.</summary>
+        [Test]
+        public void MirrorReachesTheRulesetAndFlipsTheConvertedColumns()
+        {
+            string dir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+            int[] unmoddedColumns = Array.Empty<int>();
+
+            AddStep("build an unmodded 4K chart", () =>
+            {
+                Directory.CreateDirectory(dir);
+                playingMania();
+                buildManiaLayer(dir);
+            });
+
+            AddUntilStep("layer loaded", () => layer.IsLoaded && layer.PlayableBeatmap != null);
+            AddStep("record the columns", () => unmoddedColumns = columns());
+
+            AddStep("select Mirror", () => selection.Enabled(ChartMod.Mirror).Value = true);
+            AddStep("rebuild", () =>
+            {
+                layerHost.Clear();
+                buildManiaLayer(dir);
+            });
+
+            AddUntilStep("mirrored layer loaded", () => layer.IsLoaded && layer.PlayableBeatmap != null);
+
+            AddAssert("Mirror reached the ruleset", () => layer.DrawableRuleset!.Mods.Any(m => m.Acronym == "MR"));
+            AddAssert("and every note moved to its mirrored column",
+                () => columns().SequenceEqual(unmoddedColumns.Select(c => maniaBeatmap().TotalColumns - 1 - c)));
+
+            AddStep("clean up", () => layerHost.Clear());
+        }
+
+        [Test]
+        public void ManiaSelectionRoundTripsThroughConfig()
+        {
+            AddStep("play a mania difficulty", () => playingMania());
+
+            AddStep("select 7K + Co-op + Mirror", () =>
+            {
+                selection.Enabled(ChartMod.Key7).Value = true;
+                selection.Enabled(ChartMod.DualStages).Value = true;
+                selection.Enabled(ChartMod.Mirror).Value = true;
+            });
+
+            AddAssert("persisted as acronyms", () => config.Get<string>(JukeBoxSetting.ChartMods) == "7K,DS,MR");
+
+            AddStep("a config written by something else lands", () => config.SetValue(JukeBoxSetting.ChartMods, "FI,3K"));
+
+            AddAssert("the selection followed it",
+                () => selection.Selected.SequenceEqual(new[] { ChartMod.FadeIn, ChartMod.Key3 }));
+        }
+
+        private osu.Game.Rulesets.Mania.Beatmaps.ManiaBeatmap maniaBeatmap()
+            => (osu.Game.Rulesets.Mania.Beatmaps.ManiaBeatmap)layer.PlayableBeatmap!;
+
+        private int[] columns()
+            => layer.PlayableBeatmap!.HitObjects
+                    .OfType<osu.Game.Rulesets.Mania.Objects.ManiaHitObject>()
+                    .Select(h => h.Column)
+                    .ToArray();
+
+        private void buildManiaLayer(string dir)
+        {
+            manual.CurrentTime = 0;
+
+            string osu = Path.Combine(dir, "mods [3].osu");
+
+            // CircleSize is the column count in mania, so this is a 4K map. The x positions place
+            // one note in each of the four columns (128 units apart across a 512-wide playfield).
+            File.WriteAllText(osu,
+                "osu file format v14\n\n[General]\nAudioFilename: audio.wav\nMode: 3\n\n"
+                + "[Metadata]\nTitle:test\nArtist:test\nCreator:test\nVersion:test\n\n"
+                + "[Difficulty]\nHPDrainRate:5\nCircleSize:4\nOverallDifficulty:5\nApproachRate:5\nSliderMultiplier:1.4\nSliderTickRate:1\n\n"
+                + "[TimingPoints]\n0,500,4,1,0,100,1,0\n\n"
+                + "[HitObjects]\n64,192,1000,1,0\n192,192,1500,1,0\n320,192,2000,1,0\n448,192,2500,1,0\n");
+
+            layerHost.Child = new Container
+            {
+                RelativeSizeAxes = Axes.Both,
+                Clock = new FramedClock(manual),
+                Child = layer = new LazerChartLayer(new osu.Game.Beatmaps.FlatWorkingBeatmap(osu), osu),
+            };
+        }
+
+        /// <summary>Publishes a set whose selected difficulty is of the given mode — the selection
+        /// reads its mod rules off whatever ruleset is on screen (see
+        /// <see cref="ChartModSelection.CurrentRulesetId"/>).</summary>
+        private void playing(int mode)
+        {
+            playback.Current.Value = new CachedBeatmapSet
+            {
+                Directory = "/set",
+                PreferredOsuFile = $"/set/diff{mode}.osu",
+                OsuFiles = new List<string> { $"/set/diff{mode}.osu" },
+                Difficulties = new List<DifficultyInfo> { new DifficultyInfo { Path = $"/set/diff{mode}.osu", Version = $"mode {mode}", Mode = mode } },
+            };
+
+            playback.SelectedOsuFile.Value = $"/set/diff{mode}.osu";
+        }
+
+        private void playingMania() => playing(3);
+
+        private void playingOsu() => playing(0);
     }
 }
