@@ -425,7 +425,13 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("make the control live, as it would be for a convert", () => panel.AssumeConvertedBeatmap = true);
             AddAssert("it really is live now", () => !panel.KeyOverrideInert);
 
+            // The value is a dependent row: there is nothing to pick a count FOR until the
+            // override is on, so it stays inert while the checkbox is off.
+            AddAssert("the value is still inert while unticked", () => panel.KeyCountSlider.Current.Disabled);
+
             AddStep("tick the override", () => panel.KeyOverrideCheckbox.Current.Value = true);
+            AddAssert("the value became live with it", () => !panel.KeyCountSlider.Current.Disabled);
+
             AddStep("pick 7", () => panel.KeyCountSlider.Current.Value = 7);
 
             AddAssert("exactly 7K is selected", () => keyModsOn().SequenceEqual(new[] { ChartMod.Key7 }));
@@ -436,6 +442,7 @@ namespace JukeBox.Game.Tests.Visual
 
             AddStep("untick the override", () => panel.KeyOverrideCheckbox.Current.Value = false);
             AddAssert("no key mod selected", () => keyModsOn().Count == 0);
+            AddAssert("and the value went inert again", () => panel.KeyCountSlider.Current.Disabled);
             AddAssert("and nothing key-shaped persisted", () => !config.Get<string>(JukeBoxSetting.ChartMods).Contains("K"));
         }
 
