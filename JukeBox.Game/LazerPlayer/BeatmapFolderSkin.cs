@@ -26,7 +26,10 @@ internal class BeatmapFolderSkin : LegacySkin
         : base(
             new SkinInfo { Name = Path.GetFileName(configFile) },
             resources,
-            new StorageBackedResourceStore(new NativeStorage(Path.GetDirectoryName(configFile)!, host)),
+            // See SkinFolderResourceStore: beatmap folders reference their files with the same
+            // stable-era conventions skins do (a .osu's own event and skin references are written
+            // by the same editor), so they need the same normalisation.
+            new SkinFolderResourceStore(new NativeStorage(Path.GetDirectoryName(configFile)!, host)),
             Path.GetFileName(configFile))
     {
         // Known deviation from LegacyBeatmapSkin: its AllowDefaultComboColoursFallback=false
