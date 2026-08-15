@@ -23,29 +23,44 @@ namespace JukeBox.Game.LazerPlayer;
 /// The gameplay mods the Chart tab offers, identified by osu!'s own acronyms — which is also how
 /// they are persisted (see <see cref="JukeBoxSetting.ChartMods"/>) and how they are resolved into
 /// real ruleset mod instances, so a mod is never re-implemented here, only named.
+///
+/// <para>
+/// The acronym below is the ONLY thing written down about a mod. Everything else — its display
+/// name, which category it belongs to, which rulesets offer it, what it does to the track, and what
+/// it may not be worn with — is read back off lazer's own mod objects (see
+/// <see cref="ChartModCatalog"/>), so this list can never drift out of step with the game.
+/// </para>
 /// </summary>
 public enum ChartMod
 {
-    [Description("Easy")]
     Easy,
-
-    [Description("Half Time")]
     HalfTime,
-
-    [Description("Hard Rock")]
     HardRock,
-
-    [Description("Hidden")]
     Hidden,
-
-    [Description("Double Time")]
     DoubleTime,
-
-    [Description("Nightcore")]
     Nightcore,
-
-    [Description("Flashlight")]
     Flashlight,
+
+    /// <summary>osu!mania's Fade In — the notes appear late instead of vanishing early, which is
+    /// why lazer makes it incompatible with Hidden rather than a variant of it.</summary>
+    FadeIn,
+
+    Key1,
+    Key2,
+    Key3,
+    Key4,
+    Key5,
+    Key6,
+    Key7,
+    Key8,
+    Key9,
+
+    /// <summary>osu!mania's Dual Stages — stable calls this "Co-op", which is the name the UI
+    /// uses; lazer's own <c>Mod.Name</c> for it is "Dual Stages".</summary>
+    DualStages,
+
+    Mirror,
+    Random,
 }
 
 public static class ChartModExtensions
@@ -60,15 +75,163 @@ public static class ChartModExtensions
         ChartMod.DoubleTime => "DT",
         ChartMod.Nightcore => "NC",
         ChartMod.Flashlight => "FL",
+        ChartMod.FadeIn => "FI",
+        ChartMod.Key1 => "1K",
+        ChartMod.Key2 => "2K",
+        ChartMod.Key3 => "3K",
+        ChartMod.Key4 => "4K",
+        ChartMod.Key5 => "5K",
+        ChartMod.Key6 => "6K",
+        ChartMod.Key7 => "7K",
+        ChartMod.Key8 => "8K",
+        ChartMod.Key9 => "9K",
+        ChartMod.DualStages => "DS",
+        ChartMod.Mirror => "MR",
+        ChartMod.Random => "RD",
         _ => throw new ArgumentOutOfRangeException(nameof(mod), mod, null),
     };
 
-    public static string Label(this ChartMod mod)
-        => typeof(ChartMod).GetField(mod.ToString())?
-                           .GetCustomAttributes(typeof(DescriptionAttribute), false)
-                           .OfType<DescriptionAttribute>()
-                           .FirstOrDefault()?.Description
-           ?? mod.ToString();
+    public static string Label(this ChartMod mod) => ChartModCatalog.LabelFor(mod);
+}
+
+/// <summary>
+/// Everything about a <see cref="ChartMod"/> that lazer already knows, read off real mod instances
+/// once at startup rather than restated here: its name, its <see cref="ModType"/> (which is how the
+/// Chart tab groups the rows), which rulesets actually offer it, and whether two of them may be
+/// worn together.
+/// </summary>
+public static class ChartModCatalog
+{
+    private static readonly ChartMod[] all_mods = Enum.GetValues<ChartMod>();
+
+    /// <summary>Online ruleset ids, in the order the app uses everywhere else.</summary>
+    private static readonly int[] ruleset_ids = { 0, 1, 2, 3 };
+
+    /// <summary>
+    /// Every ruleset's own mods, by acronym. Reference instances only: they are used to ASK lazer
+    /// questions (name, type, exclusions, track adjustments) and are never handed to a
+    /// DrawableRuleset, which always gets fresh ones from <see cref="ChartModSelection.CreateFor"/>.
+    /// </summary>
+    private static readonly Dictionary<int, Dictionary<string, Mod>> prototypes_by_ruleset =
+        ruleset_ids.ToDictionary(id => id, id => LazerChartLayer.CreateRuleset(id)
+                                                                .CreateAllMods()
+                                                                .GroupBy(m => m.Acronym)
+                                                                .ToDictionary(g => g.Key, g => g.First()));
+
+    /// <summary>
+    /// The rulesets that actually offer each mod — asked of <c>CreateAllMods()</c> rather than
+    /// declared here. Worth reading before assuming: the key mods, Dual Stages and Fade In really
+    /// are osu!mania-only, but <b>Mirror is also an osu! and osu!catch mod and Random is also an
+    /// osu! and osu!taiko mod</b>, so scoping those two to mania would hide working toggles.
+    /// </summary>
+    private static readonly Dictionary<ChartMod, int[]> rulesets_offering =
+        all_mods.ToDictionary(m => m, m => ruleset_ids.Where(id => prototypes_by_ruleset[id].ContainsKey(m.Acronym())).ToArray());
+
+    /// <summary>A reference instance from whichever ruleset offers this mod first, for the
+    /// questions whose answer doesn't depend on the ruleset (name, type, track adjustments).</summary>
+    private static Mod prototype(ChartMod mod)
+        => prototypes_by_ruleset[rulesets_offering[mod].First()][mod.Acronym()];
+
+    public static bool OfferedBy(ChartMod mod, int rulesetId) => rulesets_offering[mod].Contains(rulesetId);
+
+    /// <summary>
+    /// Whether this mod can only change a beatmap that is being CONVERTED into its ruleset, and so
+    /// does nothing to a beatmap already native to it. True for osu!mania's key counts and Co-op:
+    /// they reach the conversion through <see cref="IApplicableToBeatmapConverter"/> alone, and
+    /// <c>ManiaBeatmapConverter</c> only honours a requested column count when the map isn't
+    /// already mania. Mirror and Random, which rewrite the converted beatmap itself
+    /// (<see cref="IApplicableToBeatmap"/>), are unaffected by this and work on any map.
+    ///
+    /// <para>
+    /// This is osu!'s own rule, not ours — stable will not apply a key mod to a native mania map
+    /// either. It matters here because this app always renders a beatmap in the ruleset its .osu
+    /// declares (see <c>LazerChartLayer.CreateRuleset</c>), so a convert never happens and these
+    /// mods can never take effect. The Chart tab says so rather than offering a toggle that
+    /// silently does nothing.
+    /// </para>
+    /// </summary>
+    public static bool AppliesOnlyToConverts(ChartMod mod)
+    {
+        var type = prototype(mod).GetType();
+
+        return typeof(IApplicableToBeatmapConverter).IsAssignableFrom(type)
+               && !typeof(IApplicableToBeatmap).IsAssignableFrom(type);
+    }
+
+    /// <summary>Which of lazer's own mod categories this row belongs under.</summary>
+    public static ModType TypeOf(ChartMod mod) => prototype(mod).Type;
+
+    /// <summary>
+    /// The row's label: lazer's own <see cref="Mod.Name"/> plus the acronym, so the tab reads
+    /// exactly like the game. <see cref="ChartMod.DualStages"/> is the one deliberate departure —
+    /// lazer names it "Dual Stages" where every mania player (and stable's own mod screen) calls it
+    /// Co-op, so the label says both.
+    /// </summary>
+    public static string LabelFor(ChartMod mod)
+        => mod == ChartMod.DualStages
+            ? $"Co-op / {prototype(mod).Name} ({mod.Acronym()})"
+            : $"{prototype(mod).Name} ({mod.Acronym()})";
+
+    /// <summary>
+    /// Whether lazer allows these two together <b>in the given ruleset</b>. Per-ruleset because the
+    /// rules genuinely differ and a global answer is wrong in both directions: osu! is happy with
+    /// Hidden and Flashlight together (HDFL is an ordinary osu! play) while osu!mania forbids it,
+    /// since <c>ManiaModHidden</c> lists <c>ModFlashlight</c> among its exclusions and
+    /// <c>OsuModHidden</c> does not. Two mods that ruleset doesn't both offer cannot conflict in it.
+    /// </summary>
+    public static bool Compatible(ChartMod a, ChartMod b, int rulesetId)
+    {
+        if (!prototypes_by_ruleset.TryGetValue(rulesetId, out var available))
+            return true;
+
+        if (!available.TryGetValue(a.Acronym(), out var first) || !available.TryGetValue(b.Acronym(), out var second))
+            return true;
+
+        return ModUtils.CheckCompatibleSet(new[] { first, second });
+    }
+
+    /// <summary>
+    /// Narrows <paramref name="mods"/> to a set <paramref name="ruleset"/> actually accepts, keeping
+    /// earlier entries when a later one clashes. The Chart tab already resolves conflicts as the
+    /// user clicks, but it does so against the ruleset then on screen and the selection outlives
+    /// any one song — so a pair that is legal in osu! and illegal in osu!mania (Hidden with
+    /// Flashlight) would otherwise reach a mania chart. This is the last word before a mod is built.
+    /// </summary>
+    public static IReadOnlyList<Mod> Compatible(IEnumerable<Mod> mods, Ruleset ruleset)
+    {
+        var kept = new List<Mod>();
+
+        foreach (var mod in mods)
+        {
+            if (ModUtils.CheckCompatibleSet(kept.Append(mod)))
+                kept.Add(mod);
+            else
+                Logger.Log($"[chart mods] {mod.Acronym} dropped for {ruleset.ShortName} — incompatible with the rest of the selection there");
+        }
+
+        return kept;
+    }
+
+    /// <summary>The track adjustments a selection asks for, split into pitch-preserving tempo and
+    /// pitch-shifting frequency — see <see cref="ReplayMods.TrackAdjustmentsFor"/>.</summary>
+    public static (double Tempo, double Frequency) TrackAdjustmentsFor(IEnumerable<ChartMod> mods)
+        => ReplayMods.TrackAdjustmentsFor(mods.Select(prototype));
+
+    /// <summary>The categories the Chart tab shows, in lazer's own order, each with the mods that
+    /// belong to it (empty categories are simply never built).</summary>
+    public static IEnumerable<(ModType Type, IReadOnlyList<ChartMod> Mods)> Categories
+        => all_mods.GroupBy(TypeOf)
+                   .OrderBy(g => g.Key)
+                   .Select(g => (g.Key, (IReadOnlyList<ChartMod>)g.ToArray()));
+
+    /// <summary>Human heading for a category — lazer's enum names are PascalCase run-ons.</summary>
+    public static string CategoryName(ModType type) => type switch
+    {
+        ModType.DifficultyReduction => "Difficulty reduction",
+        ModType.DifficultyIncrease => "Difficulty increase",
+        ModType.Conversion => "Conversion",
+        _ => type.ToString(),
+    };
 }
 
 /// <summary>
@@ -225,29 +388,30 @@ public partial class ChartModSelection : osu.Framework.Graphics.Component
     }
 
     /// <summary>
-    /// Reference instances used only to ASK lazer questions about the mods (their exclusions, their
-    /// track adjustments) — never handed to a ruleset, which always gets fresh ones from
-    /// <see cref="CreateFor"/>. osu!'s are the reference because every ruleset's rate and difficulty
-    /// mods inherit their exclusion rules from the same base types.
+    /// Whether these two mods may be worn together on the chart currently on screen. Per-ruleset,
+    /// because the rules really do differ between them — see
+    /// <see cref="ChartModCatalog.Compatible(ChartMod, ChartMod, int)"/>.
     /// </summary>
-    private static readonly Dictionary<ChartMod, Mod> prototypes = buildPrototypes();
+    public bool Compatible(ChartMod a, ChartMod b) => ChartModCatalog.Compatible(a, b, CurrentRulesetId);
 
-    private static Dictionary<ChartMod, Mod> buildPrototypes()
+    /// <summary>
+    /// The online id of the ruleset the selected difficulty belongs to — what the mod rules and the
+    /// Chart tab's row visibility are both judged against. Falls back to osu! before anything is
+    /// playing, matching the tab's own fallback.
+    /// </summary>
+    public int CurrentRulesetId
     {
-        var available = new OsuRuleset().CreateAllMods().ToArray();
+        get
+        {
+            var set = playback?.Current.Value;
 
-        return all_mods.Select(m => (mod: m, instance: available.FirstOrDefault(a => a.Acronym == m.Acronym())))
-                       .Where(p => p.instance != null)
-                       .ToDictionary(p => p.mod, p => p.instance!);
-    }
+            if (set == null || set.Difficulties.Count == 0)
+                return 0;
 
-    /// <summary>Whether lazer allows these two mods together.</summary>
-    public static bool Compatible(ChartMod a, ChartMod b)
-    {
-        if (!prototypes.TryGetValue(a, out var first) || !prototypes.TryGetValue(b, out var second))
-            return true;
+            string? path = playback!.SelectedOsuFile.Value ?? set.PreferredOsuFile;
 
-        return ModUtils.CheckCompatibleSet(new[] { first, second });
+            return set.Difficulties.FirstOrDefault(d => d.Path == path)?.Mode ?? 0;
+        }
     }
 
     /// <summary>
@@ -260,16 +424,22 @@ public partial class ChartModSelection : osu.Framework.Graphics.Component
     {
         var available = ruleset.CreateAllMods().ToArray();
 
-        return Selected.Select(m => available.FirstOrDefault(a => a.Acronym == m.Acronym()))
-                       .Where(m => m != null)
-                       .Select(m => m!)
-                       .ToArray();
+        var resolved = Selected.Select(m => available.FirstOrDefault(a => a.Acronym == m.Acronym()))
+                               .Where(m => m != null)
+                               .Select(m => m!);
+
+        // Resolving by acronym is already what keeps a 7K selection out of an osu! chart — osu!
+        // simply has no "7K". The compatibility pass on top is for the subtler case of a pair that
+        // is legal where it was picked and illegal where it lands (see the overload's remarks).
+        return ChartModCatalog.Compatible(resolved, ruleset);
     }
 
     /// <summary>
     /// Pushes the selection's speed change onto playback. Rate is ruleset-independent (DT is 1.5×
-    /// everywhere), so it is read off osu!'s instances — and it applies whether or not the chart is
-    /// being rendered, because a rate mod is a change to the song, not to the drawing of it.
+    /// everywhere), so it is read off the catalogue's reference instances — and it applies whether
+    /// or not the chart is being rendered, because a rate mod is a change to the song, not to the
+    /// drawing of it. The conversion mods (key counts, Dual Stages, Mirror, Random) touch the track
+    /// not at all, and contribute nothing here for exactly that reason.
     /// </summary>
     private void updateRate()
     {
@@ -280,12 +450,7 @@ public partial class ChartModSelection : osu.Framework.Graphics.Component
         double frequency = 1;
 
         if (!replayActive.Value)
-        {
-            // Read off the reference instances rather than fresh ones: nothing here is applied to a
-            // ruleset, it is only being asked what each mod does to a track.
-            (tempo, frequency) = ReplayMods.TrackAdjustmentsFor(
-                Selected.Where(prototypes.ContainsKey).Select(m => prototypes[m]));
-        }
+            (tempo, frequency) = ChartModCatalog.TrackAdjustmentsFor(Selected);
 
         playback.ChartModTempo.Value = tempo;
         playback.ChartModFrequency.Value = frequency;

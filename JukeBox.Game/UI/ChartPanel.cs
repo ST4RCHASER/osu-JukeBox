@@ -19,6 +19,7 @@ using osu.Game.Graphics.Cursor;
 using osu.Game.Graphics.Sprites;
 using osu.Game.Overlays;
 using osu.Game.Overlays.Settings;
+using osu.Game.Rulesets.Mods;
 
 namespace JukeBox.Game.UI;
 
@@ -32,11 +33,13 @@ namespace JukeBox.Game.UI;
 /// <item><b>Chart</b> — "Render chart" and "Play hit sounds", MOVED here from Settings → Gameplay
 /// (same config keys, so existing values carry over and each setting still has exactly one
 /// control).</item>
-/// <item><b>Mods</b> — Easy / Half Time / Hard Rock / Hidden / Double Time / Nightcore /
-/// Flashlight, applied to the autoplay chart via <see cref="ChartModSelection"/>. Locked and greyed
-/// while a dropped replay is driving playback, which shows the replay's own mods instead — the same
-/// treatment (and the same underlying "is a replay playing" test) the difficulty switcher already
-/// uses.</item>
+/// <item><b>Mods</b> — applied to the autoplay chart via <see cref="ChartModSelection"/>, grouped
+/// into lazer's own <see cref="ModType"/> categories and narrowed to the mods the playing ruleset
+/// actually offers: Easy / Half Time / Hard Rock / Hidden / Double Time / Nightcore / Flashlight
+/// everywhere, plus osu!mania's key counts, Co-op (Dual Stages) and Fade In there, plus Mirror and
+/// Random wherever lazer has them. Locked and greyed while a dropped replay is driving playback,
+/// which shows the replay's own mods instead — the same treatment (and the same underlying "is a
+/// replay playing" test) the difficulty switcher already uses.</item>
 /// <item><b>Playfield elements</b> — one checkbox per <see cref="PlayfieldElement"/>, grouped by
 /// ruleset with only the group(s) that apply to what is playing on screen.</item>
 /// </list>
@@ -80,6 +83,18 @@ public partial class ChartPanel : CompositeDrawable
     private readonly Dictionary<ChartMod, SettingsCheckbox> modCheckboxes = new Dictionary<ChartMod, SettingsCheckbox>();
 
     /// <summary>
+    /// A wrapper per mod row, carrying the "does this ruleset even have this mod?" visibility —
+    /// kept OFF the checkbox itself, whose own <see cref="Drawable.Alpha"/> is the replay lock's
+    /// dimming. Two independent alphas that multiply, so a locked row that this ruleset doesn't
+    /// offer stays gone rather than reappearing at 0.55.
+    /// </summary>
+    private readonly Dictionary<ChartMod, Container> modRowHosts = new Dictionary<ChartMod, Container>();
+
+    /// <summary>One per <see cref="ModType"/> category actually built, hidden entirely when the
+    /// playing ruleset offers none of its mods.</summary>
+    private readonly Dictionary<ModType, Drawable> modCategories = new Dictionary<ModType, Drawable>();
+
+    /// <summary>
     /// Checkbox-facing adapters for the mod rows. The replay lock lives on THESE bindables'
     /// <see cref="Bindable{T}.Disabled"/>, never on the selection's own — a disabled bindable throws
     /// on any write, including the programmatic ones the selection itself makes when resolving
@@ -95,6 +110,10 @@ public partial class ChartPanel : CompositeDrawable
 
     private OsuSpriteText replayModsNote = null!;
 
+    /// <summary>Explains the permanently-inapplicable conversion mods; shown whenever any of those
+    /// rows is on screen. Null when no such category was built.</summary>
+    private OsuSpriteText? convertsOnlyNote;
+
     private readonly Bindable<CachedBeatmapSet?> currentSet = new Bindable<CachedBeatmapSet?>();
     private readonly Bindable<string?> selectedOsuFile = new Bindable<string?>();
     private readonly IBindable<bool> replayActive = new Bindable<bool>();
@@ -108,6 +127,12 @@ public partial class ChartPanel : CompositeDrawable
 
     internal SettingsCheckbox ModCheckbox(ChartMod mod) => modCheckboxes[mod];
 
+    /// <summary>Test-only: whether a mod's row is offered for what is currently playing.</summary>
+    internal bool ModOffered(ChartMod mod) => modRowHosts[mod].Alpha > 0;
+
+    /// <summary>Test-only: whether a mod category's block is on screen at all.</summary>
+    internal bool ModCategoryVisible(ModType type) => modCategories[type].Alpha > 0;
+
     internal SettingsCheckbox ElementCheckbox(PlayfieldElement element) => elementCheckboxes[element];
 
     /// <summary>Test-only: whether a ruleset's element group is currently on screen.</summary>
@@ -116,8 +141,23 @@ public partial class ChartPanel : CompositeDrawable
     /// <summary>Test-only: the "mods come from the replay" line, empty when no replay is playing.</summary>
     internal string ReplayModsNote => replayModsNote.Text.ToString();
 
-    /// <summary>Test-only: whether the mod rows are in their locked (replay) presentation.</summary>
-    internal bool ModsLocked => modUi.Values.All(b => b.Disabled) && modCheckboxes.Values.All(c => c.Alpha < 1);
+    /// <summary>
+    /// Test-only: whether the mod rows are in their locked (replay) presentation — EVERY mod's
+    /// toggle refuses to move, and every row actually on screen is dimmed. The dimming is only
+    /// asserted for offered rows because osu!framework does not update a subtree that isn't present,
+    /// so a row this ruleset doesn't offer never runs its fade — which is invisible either way, and
+    /// self-corrects the moment the row is shown.
+    /// </summary>
+    internal bool ModsLocked
+        => modUi.Values.All(b => b.Disabled)
+           && modCheckboxes.Where(pair => ModOffered(pair.Key)).All(pair => pair.Value.Alpha < 1);
+
+    /// <summary>Test-only: whether a row is marked inapplicable (greyed and refusing input) because
+    /// its mod can only act on a converted beatmap.</summary>
+    internal bool ModInert(ChartMod mod) => modUi[mod].Disabled && ChartModCatalog.AppliesOnlyToConverts(mod);
+
+    /// <summary>Test-only: whether the "only applies to converted beatmaps" line is showing.</summary>
+    internal bool ConvertsOnlyNoteVisible => convertsOnlyNote?.Alpha > 0;
 
     [BackgroundDependencyLoader]
     private void load()
@@ -175,17 +215,6 @@ public partial class ChartPanel : CompositeDrawable
 
     private Drawable createModsSection()
     {
-        foreach (var mod in Enum.GetValues<ChartMod>())
-        {
-            modUi[mod] = new BindableBool();
-            modCheckboxes[mod] = new SettingsCheckbox { LabelText = $"{mod.Label()} ({mod.Acronym()})" };
-        }
-
-        // The rows go straight into the section rather than into a wrapper flow of their own:
-        // lazer's SettingsSection lays its own children out with the row spacing every other
-        // settings row in the app has, and nesting a plain FillFlowContainer inside it swallowed
-        // that — the mod rows came out visibly tighter than the ones above and below them.
-        // Locking therefore dims each row (see updateReplayLock) instead of one wrapper.
         replayModsNote = new OsuSpriteText
         {
             // Alpha 0 (not removed) keeps it out of the flow entirely while no replay plays — a
@@ -201,12 +230,67 @@ public partial class ChartPanel : CompositeDrawable
             },
         };
 
-        return new LazerSection("Mods", FontAwesome.Solid.SlidersH)
+        var blocks = new List<Drawable> { replayModsNote };
+
+        // Grouped by lazer's own ModType rather than by a layout invented here — which lands on
+        // Difficulty reduction / Difficulty increase / Conversion, the same three rows stable's
+        // mania mod screen uses (its "Special" column is lazer's Conversion). Twenty toggles as one
+        // flat list would be unreadable; these are the game's own categories.
+        foreach (var (type, mods) in ChartModCatalog.Categories)
         {
-            Children = new Drawable[] { replayModsNote }
-                       .Concat(Enum.GetValues<ChartMod>().Select(m => (Drawable)modCheckboxes[m]))
-                       .ToArray(),
-        };
+            var rows = new List<Drawable>();
+
+            // The rows that can only ever act on a converted beatmap get a line saying so, right
+            // above them — see ChartModCatalog.AppliesOnlyToConverts.
+            if (mods.Any(ChartModCatalog.AppliesOnlyToConverts))
+            {
+                rows.Add(convertsOnlyNote = new OsuSpriteText
+                {
+                    Alpha = 0,
+                    Colour = Theme.TextTertiary,
+                    Font = OsuFont.GetFont(size: 12),
+                    Text = "Key counts and Co-op only apply to converted beatmaps — this map is already in its own mode.",
+                    Margin = new MarginPadding
+                    {
+                        Left = SettingsPanel.CONTENT_PADDING.Left,
+                        Right = SettingsPanel.CONTENT_PADDING.Right,
+                        Bottom = 6,
+                    },
+                });
+            }
+
+            foreach (var mod in mods)
+            {
+                modUi[mod] = new BindableBool();
+                modCheckboxes[mod] = new SettingsCheckbox { LabelText = mod.Label() };
+
+                // See modRowHosts: availability lives on this wrapper so it can't fight the
+                // replay lock's dimming of the checkbox inside it.
+                rows.Add(modRowHosts[mod] = new Container
+                {
+                    RelativeSizeAxes = Axes.X,
+                    AutoSizeAxes = Axes.Y,
+                    Child = modCheckboxes[mod],
+                });
+            }
+
+            var block = new Container
+            {
+                RelativeSizeAxes = Axes.X,
+                AutoSizeAxes = Axes.Y,
+                Child = new LazerSubsection(ChartModCatalog.CategoryName(type))
+                {
+                    RelativeSizeAxes = Axes.X,
+                    AutoSizeAxes = Axes.Y,
+                    Children = rows,
+                },
+            };
+
+            modCategories[type] = block;
+            blocks.Add(block);
+        }
+
+        return new LazerSection("Mods", FontAwesome.Solid.SlidersH) { Children = blocks };
     }
 
     private Drawable createElementsSection()
@@ -271,9 +355,75 @@ public partial class ChartPanel : CompositeDrawable
 
         currentSet.BindTo(playback.Current);
         selectedOsuFile.BindTo(playback.SelectedOsuFile);
-        currentSet.BindValueChanged(_ => updateVisibleElementGroups());
-        selectedOsuFile.BindValueChanged(_ => updateVisibleElementGroups());
-        updateVisibleElementGroups();
+        currentSet.BindValueChanged(_ => updateForCurrentRuleset());
+        selectedOsuFile.BindValueChanged(_ => updateForCurrentRuleset());
+        updateForCurrentRuleset();
+    }
+
+    /// <summary>Both halves of the tab narrow to what the chart on screen can actually use.</summary>
+    private void updateForCurrentRuleset()
+    {
+        int mode = currentMode();
+
+        updateVisibleModRows(mode);
+        updateVisibleElementGroups(mode);
+    }
+
+    /// <summary>
+    /// Only the mods the playing ruleset actually offers are shown, asked of lazer rather than
+    /// declared (see <see cref="ChartModCatalog.OfferedBy"/>) — so osu!mania's key counts, Dual
+    /// Stages and Fade In appear only there, while Mirror and Random appear wherever lazer really
+    /// has them, which is more rulesets than mania alone. A category whose every row is hidden goes
+    /// with them, header and all.
+    ///
+    /// <para>
+    /// A hidden row keeps its live bindable and its value: an unplayable selection is left alone
+    /// rather than cleared, so switching a mania set's difficulty away and back doesn't cost the
+    /// user their 7K. It cannot leak into another ruleset's chart either way —
+    /// <see cref="ChartModSelection.CreateFor"/> only ever materialises what that ruleset offers.
+    /// </para>
+    /// </summary>
+    private void updateVisibleModRows(int mode)
+    {
+        if (chartMods == null)
+            return;
+
+        foreach (var (mod, host) in modRowHosts)
+            host.Alpha = ChartModCatalog.OfferedBy(mod, mode) ? 1 : 0;
+
+        foreach (var (type, block) in modCategories)
+            block.Alpha = ChartModCatalog.Categories.First(c => c.Type == type).Mods.Any(m => ChartModCatalog.OfferedBy(m, mode)) ? 1 : 0;
+
+        if (convertsOnlyNote != null)
+        {
+            convertsOnlyNote.Alpha = ChartModCatalog.Categories
+                                                    .SelectMany(c => c.Mods)
+                                                    .Any(m => ChartModCatalog.AppliesOnlyToConverts(m) && ChartModCatalog.OfferedBy(m, mode))
+                ? 1
+                : 0;
+        }
+
+        updateModRowStates();
+    }
+
+    /// <summary>
+    /// A mod row refuses to move for either of two reasons, and both dim it the same way: a replay
+    /// is driving playback (so the mods are the replay's, not the user's), or the mod can only act
+    /// on a converted beatmap and this app never renders one (see
+    /// <see cref="ChartModCatalog.AppliesOnlyToConverts"/>). Kept in one place so the two can't
+    /// fight over the same bindable.
+    /// </summary>
+    private void updateModRowStates()
+    {
+        bool replayLocked = replayActive.Value;
+
+        foreach (var (mod, ui) in modUi)
+        {
+            bool inert = ChartModCatalog.AppliesOnlyToConverts(mod);
+
+            ui.Disabled = replayLocked || inert;
+            modCheckboxes[mod].FadeTo(replayLocked || inert ? locked_alpha : 1, Theme.HoverFadeDuration, Easing.OutQuint);
+        }
     }
 
     private void bindMods(ChartModSelection selection)
@@ -316,11 +466,7 @@ public partial class ChartPanel : CompositeDrawable
     {
         bool locked = replayActive.Value;
 
-        foreach (var ui in modUi.Values)
-            ui.Disabled = locked;
-
-        foreach (var row in modCheckboxes.Values)
-            row.FadeTo(locked ? locked_alpha : 1, Theme.HoverFadeDuration, Easing.OutQuint);
+        updateModRowStates();
 
         var acronyms = replayModAcronyms.Value;
 
@@ -340,10 +486,8 @@ public partial class ChartPanel : CompositeDrawable
     /// rather than removal, so the hidden rows keep their live config bindables across mode changes
     /// and the flow leaves no gap for them. Falls back to osu! when nothing is playing yet.
     /// </summary>
-    private void updateVisibleElementGroups()
+    private void updateVisibleElementGroups(int mode)
     {
-        int mode = currentMode();
-
         foreach (var entry in PlayfieldElementCatalog.All)
             elementCheckboxes[entry.Element].Alpha = entry.AppliesTo(mode) ? 1 : 0;
 
