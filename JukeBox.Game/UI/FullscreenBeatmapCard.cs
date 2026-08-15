@@ -87,6 +87,11 @@ public partial class FullscreenBeatmapCard : ClickableContainer
     [Resolved(canBeNull: true)]
     private OnlineThumbnailStore? thumbnailStore { get; set; }
 
+    // lazer's palette, for the star-rating spectrum the difficulty bars are coloured by — see
+    // StarRatingPill for why the app samples lazer's own gradient rather than banding it.
+    [Resolved]
+    private osu.Game.Graphics.OsuColour colours { get; set; } = null!;
+
     private Container content = null!;
     private Container coverContainer = null!;
     private IconButton previewButton = null!;
@@ -418,7 +423,7 @@ public partial class FullscreenBeatmapCard : ClickableContainer
                     Child = new Box
                     {
                         RelativeSizeAxes = Axes.Both,
-                        Colour = Theme.DifficultyColour(rating),
+                        Colour = colours.ForStarDifficulty(rating),
                     },
                 });
             }
@@ -483,7 +488,7 @@ public partial class FullscreenBeatmapCard : ClickableContainer
                     icon.Size = new Vector2(11);
                     icon.Colour = Theme.TextSecondary;
                 }),
-                StarRatingPill.Create(beatmap.DifficultyRating),
+                new StarRatingPill(beatmap.DifficultyRating),
                 new SpriteText
                 {
                     Anchor = Anchor.CentreLeft,

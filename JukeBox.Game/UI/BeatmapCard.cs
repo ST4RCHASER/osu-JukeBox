@@ -72,6 +72,11 @@ public partial class BeatmapCard : ClickableContainer
     [Resolved(canBeNull: true)]
     private OnlineThumbnailStore? thumbnailStore { get; set; }
 
+    // lazer's palette, for the star-rating spectrum the difficulty dots are coloured by — see
+    // StarRatingPill for why the app samples lazer's own gradient rather than banding it.
+    [Resolved]
+    private osu.Game.Graphics.OsuColour colours { get; set; } = null!;
+
     private Container content = null!;
     private Container coverContainer = null!;
     private Box hoverOverlay = null!;
@@ -293,7 +298,7 @@ public partial class BeatmapCard : ClickableContainer
                     Anchor = Anchor.CentreLeft,
                     Origin = Anchor.CentreLeft,
                     Size = new Vector2(dotSize),
-                    Colour = Theme.DifficultyColour(rating),
+                    Colour = colours.ForStarDifficulty(rating),
                 });
             }
 
