@@ -26,6 +26,32 @@ public class BeatmapSetInfo
     public System.DateTimeOffset? RankedDate { get; set; }
     public NamedIdInfo? Genre { get; set; }
     public NamedIdInfo? Language { get; set; }
+
+    /// <summary>
+    /// osu!'s own API serves genre and language as FLAT ids (<c>genre_id</c>/<c>language_id</c>)
+    /// where the mirrors nest them in the <see cref="Genre"/>/<see cref="Language"/> objects. Both
+    /// shapes are kept so one DTO deserialises either backend's response; read them through
+    /// <see cref="GenreIdOrNull"/>/<see cref="LanguageIdOrNull"/> rather than picking a shape.
+    /// </summary>
+    public int? GenreId { get; set; }
+
+    /// <summary>See <see cref="GenreId"/>.</summary>
+    public int? LanguageId { get; set; }
+
+    public int? GenreIdOrNull => GenreId ?? Genre?.Id;
+    public int? LanguageIdOrNull => LanguageId ?? Language?.Id;
+
+    /// <summary>
+    /// The official API's ready-made 30-second preview clip (<c>//b.ppy.sh/preview/…</c>), absent
+    /// from the mirrors' responses — which is why <see cref="Playback.PreviewPlayer"/> reconstructs
+    /// the same URL from the set id instead of relying on this. Kept because it is authoritative
+    /// when present.
+    /// </summary>
+    public string? PreviewUrl { get; set; }
+
+    /// <summary>Whether the set is flagged explicit. Only the official API reports this.</summary>
+    public bool Nsfw { get; set; }
+
     public AvailabilityInfo? Availability { get; set; }
     public List<BeatmapInfo> Beatmaps { get; set; } = new();
 
