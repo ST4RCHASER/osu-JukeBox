@@ -18,6 +18,7 @@ using NUnit.Framework;
 using osu.Framework.Allocation;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
+using osu.Framework.Graphics.Shapes;
 using osu.Framework.Graphics.Sprites;
 using osu.Framework.Graphics.UserInterface;
 using osu.Framework.Testing;
@@ -482,39 +483,34 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("header reflects the removal", () => queuePanel.HeaderText == "Queue (1)");
         }
 
-        // Regression coverage for per-row download status: a set with no cache entry and nothing
-        // in flight for it shows "waiting"; once a download for it is kicked off it shows
-        // "downloading…"; once GetAsync completes (extracted to disk with a *.osu file) it flips
-        // to "ready". Uses set id 999 — distinct from fixtureSet/fixtureSetLong's 1/2 and from
-        // whatever CreateChildDependencies' cache fixture osz was downloaded as — so nothing else
-        // in this fixture has touched its cache state.
+        // The row now speaks the compact card's language — cover, title, artist, mapper — but
+        // deliberately drops that card's status pill and difficulty dots: those help you CHOOSE a
+        // set in the search results, and say nothing once you have already queued it.
         [Test]
-        public void QueuePanelRowShowsDownloadingThenReadyStatus()
+        public void QueueRowShowsCardMetadataWithoutStatusPillOrDifficultyDots()
         {
-            const int waiting_id = 999;
-            const int downloading_id = 998;
-
-            AddStep("enqueue a set with no cache activity", () =>
-                queue.Enqueue(new BeatmapSetInfo { Id = waiting_id, Title = "Waiting", Artist = "Artist" }));
-
-            AddAssert("row shows waiting", () => queuePanel.StatusTextAt(indexOf(waiting_id)) == "waiting");
-
-            AddStep("enqueue another set and start caching it", () =>
+            AddStep("enqueue a ranked set with difficulties", () => queue.Enqueue(new BeatmapSetInfo
             {
-                queue.Enqueue(new BeatmapSetInfo { Id = downloading_id, Title = "Downloading", Artist = "Artist" });
-                _ = cache.GetAsync(downloading_id);
-            });
+                Id = 997,
+                Title = "Row Title",
+                Artist = "Row Artist",
+                Creator = "Row Mapper",
+                Status = "ranked",
+                Beatmaps = { new BeatmapInfo { DifficultyRating = 5.2 }, new BeatmapInfo { DifficultyRating = 2.1 } },
+            }));
 
-            AddUntilStep("row shows ready once GetAsync completes",
-                () => queuePanel.StatusTextAt(indexOf(downloading_id)) == "ready");
+            AddUntilStep("row is laid out", () => queuePanel.RowCount == 1);
+
+            AddAssert("title shown", () => rowTexts().Contains("Row Title"));
+            AddAssert("artist shown", () => rowTexts().Contains("Row Artist"));
+            AddAssert("mapper shown", () => rowTexts().Contains("mapped by Row Mapper"));
+            AddAssert("cover thumbnail present", () => queuePanel.ChildrenOfType<CoverThumbnail>().Any());
+
+            AddAssert("no status pill", () => !rowTexts().Contains("ranked"));
+            AddAssert("no difficulty dots", () => !queuePanel.ChildrenOfType<Circle>().Any());
         }
 
-        private int indexOf(int setId)
-        {
-            int index = queue.Items.ToList().FindIndex(i => i.Id == setId);
-            Assert.That(index, Is.Not.EqualTo(-1), $"set {setId} not found in queue");
-            return index;
-        }
+        private List<string> rowTexts() => queuePanel.ChildrenOfType<SpriteText>().Select(t => t.Text.ToString()).ToList();
 
         // Builds a minimal but real .osz (a zip containing a *.osu file) so BeatmapCache.GetAsync
         // has something genuine to download/extract/scan — mirrors BeatmapCacheTest.makeOsz.
@@ -569,7 +565,7 @@ namespace JukeBox.Game.Tests.Visual
             public Task<List<BeatmapSetInfo>> SearchAsync(SearchRequest request, CancellationToken ct = default)
                 => Task.FromResult(new List<BeatmapSetInfo>());
 
-            public Task DownloadAsync(int setId, bool noVideo, Stream destination, CancellationToken ct = default)
+            public Task DownloadAsync(int setId, bool noVideo, Stream destination, CancellationToken ct = default, DownloadProgressCallback? progress = null)
                 => throw new NotSupportedException("not exercised by this test scene");
         }
     }

@@ -19,7 +19,7 @@ namespace JukeBox.Game.Tests.Online
             if (Fail) throw new IOException("down");
             return Task.FromResult(new List<BeatmapSetInfo> { new BeatmapSetInfo { Id = 42 } });
         }
-        public Task DownloadAsync(int setId, bool noVideo, Stream destination, CancellationToken ct = default)
+        public Task DownloadAsync(int setId, bool noVideo, Stream destination, CancellationToken ct = default, DownloadProgressCallback progress = null)
         {
             if (Fail) throw new IOException("down");
             destination.WriteByte(1);
@@ -33,7 +33,7 @@ namespace JukeBox.Game.Tests.Online
         public string Name => "partial";
         public Task<List<BeatmapSetInfo>> SearchAsync(SearchRequest r, CancellationToken ct = default)
             => throw new NotSupportedException();
-        public Task DownloadAsync(int setId, bool noVideo, Stream destination, CancellationToken ct = default)
+        public Task DownloadAsync(int setId, bool noVideo, Stream destination, CancellationToken ct = default, DownloadProgressCallback progress = null)
         {
             destination.Write(partialBytes, 0, partialBytes.Length);
             throw new IOException("down after partial write");
@@ -46,7 +46,7 @@ namespace JukeBox.Game.Tests.Online
         public string Name => "ok";
         public Task<List<BeatmapSetInfo>> SearchAsync(SearchRequest r, CancellationToken ct = default)
             => throw new NotSupportedException();
-        public Task DownloadAsync(int setId, bool noVideo, Stream destination, CancellationToken ct = default)
+        public Task DownloadAsync(int setId, bool noVideo, Stream destination, CancellationToken ct = default, DownloadProgressCallback progress = null)
         {
             destination.Write(payload, 0, payload.Length);
             return Task.CompletedTask;
