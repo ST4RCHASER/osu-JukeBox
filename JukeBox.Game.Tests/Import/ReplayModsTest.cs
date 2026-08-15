@@ -91,15 +91,53 @@ namespace JukeBox.Game.Tests.Import
             Assert.That(ReplayMods.RateFor(mods), Is.EqualTo(expectedRate).Within(0.0001));
         }
 
-        // A .osr has no pitch flag, and every stable rate mod is a straight frequency change — so a
-        // rate change always shifts pitch, and no rate change never touches it.
-        [TestCase(double_time, true)]
-        [TestCase(nightcore, true)]
-        [TestCase(half_time, true)]
-        [TestCase(hidden | hard_rock, false)]
-        [TestCase(0, false)]
-        public void PitchShiftsExactlyWhenTheRateDoes(int legacyMods, bool expected)
-            => Assert.That(ReplayMods.ShiftsPitch(ReplayMods.ForGameplay(scoreWithLegacyMods(legacyMods))), Is.EqualTo(expected));
+        // osu!'s rate mods disagree about pitch, and getting it wrong is immediately audible.
+        // DoubleTime and HalfTime change SPEED ONLY (tempo); Nightcore and Daycore change pitch
+        // with it (frequency). Driving all of them through frequency made DT sound chipmunked,
+        // which it never does in the real game.
+        //
+        //                            legacy       tempo  frequency
+        [TestCase(double_time,                     1.5,   1.0)]
+        [TestCase(half_time,                       0.75,  1.0)]
+        [TestCase(nightcore | double_time,         1.0,   1.5)]
+        [TestCase(hidden | hard_rock | double_time, 1.5,  1.0)]
+        [TestCase(hidden | hard_rock,              1.0,   1.0)]
+        [TestCase(0,                               1.0,   1.0)]
+        public void RateModsSplitIntoPitchPreservingAndPitchShifting(int legacyMods, double expectedTempo, double expectedFrequency)
+        {
+            var (tempo, frequency) = ReplayMods.TrackAdjustmentsFor(ReplayMods.ForGameplay(scoreWithLegacyMods(legacyMods)));
+
+            Assert.That(tempo, Is.EqualTo(expectedTempo).Within(0.0001), "tempo (speed, pitch preserved)");
+            Assert.That(frequency, Is.EqualTo(expectedFrequency).Within(0.0001), "frequency (speed with pitch)");
+        }
+
+        // Whichever half carries it, the effective speed must come out the same — that is what
+        // keeps the chart in sync with the audio.
+        [TestCase(double_time, 1.5)]
+        [TestCase(nightcore | double_time, 1.5)]
+        [TestCase(half_time, 0.75)]
+        [TestCase(0, 1.0)]
+        public void BothHalvesMultiplyToTheEffectivePlaybackRate(int legacyMods, double expectedRate)
+        {
+            var mods = ReplayMods.ForGameplay(scoreWithLegacyMods(legacyMods));
+            var (tempo, frequency) = ReplayMods.TrackAdjustmentsFor(mods);
+
+            Assert.That(tempo * frequency, Is.EqualTo(expectedRate).Within(0.0001));
+
+            // ...and agree with lazer's own rate calculation, which is what the chart reasons about.
+            Assert.That(ReplayMods.RateFor(mods), Is.EqualTo(expectedRate).Within(0.0001));
+        }
+
+        [TestCase(double_time, 1.5)]
+        [TestCase(nightcore | double_time, 1.5)]
+        [TestCase(half_time, 0.75)]
+        public void TheAttachmentReportsTheCombinedRate(int legacyMods, double expectedRate)
+        {
+            var (tempo, frequency) = ReplayMods.TrackAdjustmentsFor(ReplayMods.ForGameplay(scoreWithLegacyMods(legacyMods)));
+            var attachment = new ReplayAttachment { RateTempo = tempo, RateFrequency = frequency };
+
+            Assert.That(attachment.Rate, Is.EqualTo(expectedRate).Within(0.0001));
+        }
 
         // Rate mods stay in the gameplay list even though they change nothing about the rendered
         // playfield — they are part of what the play WAS, which is what the UI reports.
@@ -148,7 +186,7 @@ namespace JukeBox.Game.Tests.Import
 
             Assert.That(none, Is.Empty);
             Assert.That(ReplayMods.RateFor(none), Is.EqualTo(1));
-            Assert.That(ReplayMods.ShiftsPitch(none), Is.False);
+            Assert.That(ReplayMods.TrackAdjustmentsFor(none), Is.EqualTo((1.0, 1.0)));
         }
 
         // Rate mods exist outside osu!std too, and the mapping is per-ruleset.

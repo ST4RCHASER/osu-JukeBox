@@ -15,6 +15,7 @@ using JukeBox.Game.Replays;
 using NUnit.Framework;
 using osu.Framework.Graphics;
 using osu.Framework.Testing;
+using osu.Framework.Utils;
 
 namespace JukeBox.Game.Tests.Visual
 {
@@ -270,14 +271,14 @@ namespace JukeBox.Game.Tests.Visual
             {
                 Id = 1,
                 Title = "One",
-                Replay = new ReplayAttachment { PlayerName = "Cookiezi", Rate = 1.5, RateShiftsPitch = true },
+                Replay = new ReplayAttachment { PlayerName = "Cookiezi", RateTempo = 1.5 },
             };
 
-            AddAssert("nothing forcing a rate to begin with", () => playback.ReplayRate.Value == 1);
+            AddAssert("nothing forcing a rate to begin with", () => playback.ReplayTempo.Value == 1 && playback.ReplayFrequency.Value == 1);
 
             AddStep("enqueue the replay's set", () => jukebox.EnqueueAndMaybePlayAsync(doubleTimeSet));
             AddUntilStep("its set is playing", () => playback.Current.Value?.SetId == doubleTimeSet.Id);
-            AddAssert("playback runs at the replay's rate", () => playback.ReplayRate.Value == 1.5);
+            AddAssert("playback runs at the replay's rate", () => playback.ReplayTempo.Value == 1.5);
 
             AddStep("queue an ordinary set and advance", () =>
             {
@@ -286,7 +287,7 @@ namespace JukeBox.Game.Tests.Visual
             });
 
             AddUntilStep("the ordinary set is playing", () => playback.Current.Value?.SetId == set2.Id);
-            AddAssert("the forced rate was released", () => playback.ReplayRate.Value == 1,
+            AddAssert("the forced rate was released", () => playback.ReplayTempo.Value == 1 && playback.ReplayFrequency.Value == 1,
                 "a previous replay's rate must never leak into the next song");
         }
 
@@ -299,7 +300,7 @@ namespace JukeBox.Game.Tests.Visual
             {
                 Id = 4,
                 Title = "Four",
-                Replay = new ReplayAttachment { PlayerName = "Cookiezi", Rate = 1.5, RateShiftsPitch = true },
+                Replay = new ReplayAttachment { PlayerName = "Cookiezi", RateTempo = 1.5 },
             };
 
             AddStep("user sets their own speed to 0.5x", () => playback.PlaybackRate.Value = 0.5);
@@ -307,9 +308,32 @@ namespace JukeBox.Game.Tests.Visual
             AddUntilStep("its set is playing", () => playback.Current.Value?.SetId == doubleTimeSet.Id);
 
             AddAssert("the user's slider is untouched", () => playback.PlaybackRate.Value == 0.5);
-            AddAssert("and the replay rate sits alongside it", () => playback.ReplayRate.Value == 1.5);
+            AddAssert("and the replay rate sits alongside it", () => playback.ReplayTempo.Value == 1.5);
 
             AddStep("restore the default speed", () => playback.PlaybackRate.Value = 1);
+        }
+
+        // The bindables are only half the story — what matters is which property of the REAL track
+        // they move. DoubleTime must stretch time without touching pitch; Nightcore must shift
+        // both. Asserted on the live track's aggregates, so a mis-wired AddAdjustment is caught.
+        [TestCase("DT", 1.5, 1.0)]
+        [TestCase("NC", 1.0, 1.5)]
+        [TestCase("HT", 0.75, 1.0)]
+        public void TheReplaysRateLandsOnTheRightTrackProperty(string label, double tempo, double frequency)
+        {
+            var ratedSet = new BeatmapSetInfo
+            {
+                Id = 1,
+                Title = "One",
+                Replay = new ReplayAttachment { PlayerName = "Cookiezi", RateTempo = tempo, RateFrequency = frequency },
+            };
+
+            AddStep($"enqueue a {label} replay's set", () => jukebox.EnqueueAndMaybePlayAsync(ratedSet));
+            AddUntilStep("its set is playing", () => playback.Current.Value?.SetId == ratedSet.Id);
+            AddUntilStep("a track is loaded", () => playback.CurrentTrack != null);
+
+            AddAssert($"{label}: track tempo is {tempo}", () => Precision.AlmostEquals(playback.CurrentTrack!.AggregateTempo.Value, tempo, 0.0001));
+            AddAssert($"{label}: track frequency is {frequency}", () => Precision.AlmostEquals(playback.CurrentTrack!.AggregateFrequency.Value, frequency, 0.0001));
         }
 
         // Builds a fixture .osz whose only difficulty has no AudioFilename key at all, so
