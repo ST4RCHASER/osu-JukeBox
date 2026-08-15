@@ -130,6 +130,10 @@ public partial class MainScreen : Screen
 
     private const float tab_slide_offset = 20;
 
+    /// <summary>See showTabBody: the departing body needs to lose its opacity fast, which is ease-OUT
+    /// rather than <see cref="Theme.EaseExit"/>'s ease-IN.</summary>
+    private const Easing tab_exit_easing = Easing.OutQuint;
+
     private Container visualsHost = null!;
     private Container playerBox = null!;
     private Container sceneContainer = null!;
@@ -723,8 +727,14 @@ public partial class MainScreen : Screen
         }
         else
         {
-            body.FadeOut(outDuration, Theme.EaseExit);
-            body.MoveToX(-tab_slide_offset, outDuration, Theme.EaseExit);
+            // OutQuint, NOT Theme.EaseExit. EaseExit is InQuint, which is right for something that
+            // should linger and then accelerate away (a popover scaling out) and exactly wrong for
+            // the departing half of a crossfade: quintic ease-IN barely moves at the start, so 60ms
+            // into a 150ms fade the outgoing body was still ~99% opaque. Measured in the real window
+            // — that, more than the draw order, is what made the old tab look like it was still
+            // sitting there. Quintic ease-OUT drops it almost immediately and lets it tail off.
+            body.FadeOut(outDuration, tab_exit_easing);
+            body.MoveToX(-tab_slide_offset, outDuration, tab_exit_easing);
         }
     }
 
