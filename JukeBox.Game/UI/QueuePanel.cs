@@ -8,6 +8,7 @@ using JukeBox.Game.Beatmaps;
 using JukeBox.Game.Online;
 using JukeBox.Game.Playback;
 using osu.Framework.Allocation;
+using osu.Framework.Bindables;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Shapes;
@@ -442,9 +443,13 @@ public partial class QueuePanel : CompositeDrawable
         /// <summary>The ▶/✕ column: one button wide, since they stack rather than sit side by side.</summary>
         private const float action_column_width = button_size + 8;
 
-        /// <summary>Width of the hover-revealed drag handle, which OVERLAYS the card's left edge
-        /// rather than reserving a column of its own — see <see cref="dragHandle"/>.</summary>
-        private const float drag_handle_width = 22;
+        /// <summary>
+        /// Width of the hover-revealed drag handle, and so also how far the card insets from the
+        /// left to make room for it — see <see cref="cardInset"/>. Matched to
+        /// <see cref="button_size"/> so the handle is as comfortable a target as the ▶ and ✕ facing
+        /// it across the card.
+        /// </summary>
+        private const float drag_handle_width = 24;
 
         /// <summary>Right inset of the text block with only the ▶ and ✕ to clear.</summary>
         private const float text_inset_idle = action_column_width + 8;
@@ -465,6 +470,15 @@ public partial class QueuePanel : CompositeDrawable
         private IconButton? playNowButton;
         private Container dragHandle = null!;
         private Container card = null!;
+        private Container cardArea = null!;
+
+        /// <summary>
+        /// How far the card is currently inset from the row's left edge. Driven as a bindable rather
+        /// than written straight onto <see cref="cardArea"/>'s padding because osu!framework has no
+        /// transform for <see cref="MarginPadding"/> — animating this float and pushing each value
+        /// into the padding is what gives the inset a real animation instead of a jump.
+        /// </summary>
+        private readonly BindableFloat cardInset = new BindableFloat();
 
         /// <summary>Test hook (JukeBox.Game.Tests has InternalsVisibleTo): the card itself — the
         /// row's content, which is what must span the full width with no handle gutter beside it.</summary>
@@ -505,11 +519,54 @@ public partial class QueuePanel : CompositeDrawable
         /// Update()/Scheduler ticking for a not-IsPresent drawable, which stalls that fade
         /// indefinitely instead of letting it progress every frame.
         /// </summary>
-        protected override Drawable CreateContent() => card = new Container
+        protected override Drawable CreateContent()
         {
-            RelativeSizeAxes = Axes.X,
-            Height = row_height,
-            AlwaysPresent = true,
+            var content = new Container
+            {
+                RelativeSizeAxes = Axes.X,
+                Height = row_height,
+                AlwaysPresent = true,
+                Children = new Drawable[]
+                {
+                    cardArea = new Container
+                    {
+                        RelativeSizeAxes = Axes.Both,
+                        Child = buildCard(),
+                    },
+                    // The handle is a SIBLING of the card, not a child of it. As a child it sat
+                    // inside the card's Masking and was clipped against its left edge — the reported
+                    // bug: only the right part of the glyph drew. Out here nothing can crop it, and
+                    // the space it occupies is real, carved out of the card by cardInset below
+                    // rather than borrowed from on top of it.
+                    dragHandle = new Container
+                    {
+                        Anchor = Anchor.CentreLeft,
+                        Origin = Anchor.CentreLeft,
+                        RelativeSizeAxes = Axes.Y,
+                        Width = drag_handle_width,
+                        Alpha = 0,
+                        Child = new SpriteIcon
+                        {
+                            Anchor = Anchor.Centre,
+                            Origin = Anchor.Centre,
+                            Size = new Vector2(12),
+                            Icon = FontAwesome.Solid.Bars,
+                            Colour = Theme.TextTertiary,
+                        },
+                    },
+                },
+            };
+
+            // `true` so the resting padding is applied before the first frame — a row built while
+            // something is already hovered must not flash at the wrong inset.
+            cardInset.BindValueChanged(e => cardArea.Padding = new MarginPadding { Left = e.NewValue }, true);
+
+            return content;
+        }
+
+        private Drawable buildCard() => card = new Container
+        {
+            RelativeSizeAxes = Axes.Both,
             Masking = true,
             CornerRadius = Theme.CornerRadius,
             Children = new Drawable[]
@@ -648,35 +705,6 @@ public partial class QueuePanel : CompositeDrawable
                         },
                     }.Where(d => d != null).Select(d => d!).ToArray(),
                 },
-                // The drag handle OVERLAYS the card's left edge instead of sitting in a reserved
-                // column beside it, so the card is full width at rest (user request). It carries its
-                // own scrim because it lands on top of the cover thumbnail, and it is what
-                // IsDraggableAt hit-tests — see that override.
-                dragHandle = new Container
-                {
-                    Anchor = Anchor.CentreLeft,
-                    Origin = Anchor.CentreLeft,
-                    RelativeSizeAxes = Axes.Y,
-                    Width = drag_handle_width,
-                    Alpha = 0,
-                    Children = new Drawable[]
-                    {
-                        new Box
-                        {
-                            RelativeSizeAxes = Axes.Both,
-                            Colour = Theme.PanelSurface,
-                            Alpha = 0.85f,
-                        },
-                        new SpriteIcon
-                        {
-                            Anchor = Anchor.Centre,
-                            Origin = Anchor.Centre,
-                            Size = new Vector2(11),
-                            Icon = FontAwesome.Solid.Bars,
-                            Colour = Theme.TextTertiary,
-                        },
-                    },
-                },
             }.Where(d => d != null).Select(d => d!).ToArray(),
         };
 
@@ -707,10 +735,18 @@ public partial class QueuePanel : CompositeDrawable
             this.MoveToX(0, Theme.DurationNormal, Theme.EaseEnter);
         }
 
+        /// <summary>
+        /// Hover is handled on the ROW, whose bounds are the full width and never change — only the
+        /// card inside it moves. That is what keeps the inset from oscillating: if the hovered
+        /// region itself shrank, the pointer sitting near the left edge would fall outside it the
+        /// moment the card pulled away, un-hover, snap back, and re-hover forever. The handle is
+        /// inside the row too, so moving onto it never leaves the hovered area either.
+        /// </summary>
         protected override bool OnHover(HoverEvent e)
         {
             surface.FadeColour(Theme.ElevatedSurface, Theme.HoverFadeDuration);
             fadeButtons(1);
+            this.TransformBindableTo(cardInset, drag_handle_width, Theme.DurationFast, Theme.EaseEnter);
             return base.OnHover(e);
         }
 
@@ -718,6 +754,7 @@ public partial class QueuePanel : CompositeDrawable
         {
             surface.FadeColour(Theme.PanelSurface, Theme.HoverFadeDuration);
             fadeButtons(0);
+            this.TransformBindableTo(cardInset, 0f, Theme.DurationFast, Theme.EaseExit);
             base.OnHoverLost(e);
         }
 

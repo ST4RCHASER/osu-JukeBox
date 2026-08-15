@@ -150,6 +150,121 @@ namespace JukeBox.Game.Tests.Visual
             });
         }
 
+        /// <summary>
+        /// The reported bug, verbatim: "this order icon are got caped". The handle used to be a
+        /// child of the card and so lived inside the card's Masking, which cropped it against the
+        /// card's left edge — only the right part of the glyph drew. The fix makes the card inset on
+        /// hover so the handle occupies real space beside it rather than territory on top of it.
+        ///
+        /// <para>
+        /// Asserted as CONTAINMENT rather than visibility, because a clipped drawable still reports
+        /// a full quad and a non-zero alpha: what proves it is not cropped is that its bounds sit
+        /// entirely within every ancestor that could crop them.
+        /// </para>
+        /// </summary>
+        [Test]
+        public void OnHoverTheCardMakesRoomAndTheHandleIsNotClipped()
+        {
+            QueuePanel.QueueRow row = null!;
+            AddStep("take the first row", () => row = rows()[0]);
+
+            AddStep("hover the first card", () => InputManager.MoveMouseTo(cardOf(row)));
+            AddUntilStep("the row is hovered", () => row.IsHovered);
+            AddUntilStep("the handle faded in", () => handleOf(row).Alpha == 1);
+            AddUntilStep("and the card has finished insetting", () => insetOf(row) >= 23.5f);
+
+            // The card pulled its left edge in; the handle is in the space that freed up. If the
+            // handle still overlapped the card, it would be sitting on top of content again — the
+            // arrangement this change exists to replace.
+            AddAssert("the handle does not overlap the card", () =>
+                handleOf(row).ScreenSpaceDrawQuad.AABBFloat.Right <= cardOf(row).ScreenSpaceDrawQuad.AABBFloat.Left + 0.5f);
+
+            // The clipping assertion proper: nothing that masks can crop the handle's bounds.
+            AddAssert("the handle is wholly inside the row", () => contains(row.ScreenSpaceDrawQuad, handleOf(row).ScreenSpaceDrawQuad));
+            AddAssert("and wholly inside the list that masks it",
+                () => contains(queuePanel.ChildrenOfType<QueuePanel.QueueList>().Single().ScreenSpaceDrawQuad, handleOf(row).ScreenSpaceDrawQuad));
+
+            AddAssert("the handle is a comfortable target", () => handleOf(row).DrawWidth >= 20 && handleOf(row).DrawHeight >= 20);
+
+            parkPointer();
+        }
+
+        /// <summary>Hover-out gives the width back — the full-width rest state was its own request.</summary>
+        [Test]
+        public void HoverOutRestoresTheFullWidthCard()
+        {
+            QueuePanel.QueueRow row = null!;
+            AddStep("take the first row", () => row = rows()[0]);
+
+            AddStep("hover it", () => InputManager.MoveMouseTo(cardOf(row)));
+            AddUntilStep("the card insets", () => insetOf(row) >= 23.5f);
+
+            AddStep("move away", () => InputManager.MoveMouseTo(restingPointerPosition));
+            AddUntilStep("the row is no longer hovered", () => !row.IsHovered);
+            AddUntilStep("the card is back to full width", () => insetOf(row) <= 0.5f);
+
+            AddUntilStep("and starts at the list's own left edge again", () =>
+            {
+                float listLeft = queuePanel.ChildrenOfType<QueuePanel.QueueList>().Single().ScreenSpaceDrawQuad.TopLeft.X;
+
+                return cardOf(row).ScreenSpaceDrawQuad.TopLeft.X <= listLeft + 0.5f;
+            });
+        }
+
+        /// <summary>
+        /// The oscillation this layout could easily have caused: if hover were handled on the CARD,
+        /// insetting it would pull the card out from under a pointer near the left edge, un-hover,
+        /// snap back, re-hover, forever. Hover lives on the row, whose bounds never move — so moving
+        /// onto the handle (which is outside the card) has to keep the row hovered and the inset put.
+        /// </summary>
+        [Test]
+        public void MovingOntoTheHandleDoesNotUnHoverOrOscillate()
+        {
+            QueuePanel.QueueRow row = null!;
+            AddStep("take the first row", () => row = rows()[0]);
+
+            AddStep("hover the card", () => InputManager.MoveMouseTo(cardOf(row)));
+            AddUntilStep("inset settled", () => insetOf(row) >= 23.5f);
+
+            AddStep("move onto the handle itself", () => InputManager.MoveMouseTo(handleOf(row)));
+            AddWaitStep("let any oscillation show itself", 10);
+
+            AddAssert("still hovered", () => row.IsHovered);
+            AddAssert("and the inset never gave way", () => insetOf(row) >= 23.5f);
+
+            // Also pin the left edge of the row itself: if the ROW had been what shrank, the pointer
+            // would be outside it by now.
+            AddAssert("the handle is still under the pointer",
+                () => handleOf(row).ReceivePositionalInputAt(InputManager.CurrentState.Mouse.Position));
+
+            parkPointer();
+        }
+
+        /// <summary>
+        /// Leaves the pointer clear of the list. SetUpSteps parks it too, but in the same step that
+        /// tears the panel down — so a test that ends while a row is still hovered hits exactly the
+        /// hazard documented there (a row animating inside a subtree being disposed), and the next
+        /// fixture's rows then take longer to appear than its wait allows.
+        /// </summary>
+        private void parkPointer()
+        {
+            AddStep("park the pointer clear of the list", () => InputManager.MoveMouseTo(restingPointerPosition));
+            AddUntilStep("nothing is hovered", () => !rows().Any(r => r.IsHovered));
+        }
+
+        /// <summary>How far the card currently sits from the row's left edge.</summary>
+        private static float insetOf(QueuePanel.QueueRow row)
+            => cardOf(row).ScreenSpaceDrawQuad.AABBFloat.Left - row.ScreenSpaceDrawQuad.AABBFloat.Left;
+
+        private static bool contains(osu.Framework.Graphics.Primitives.Quad outer, osu.Framework.Graphics.Primitives.Quad inner)
+        {
+            var o = outer.AABBFloat;
+            var i = inner.AABBFloat;
+
+            return i.Left >= o.Left - 0.5f && i.Right <= o.Right + 0.5f
+                   && i.Top >= o.Top - 0.5f && i.Bottom <= o.Bottom + 0.5f;
+        }
+
         /// <summary>Play above remove, in a column — the destructive one keeps the bottom.</summary>
         [Test]
         public void TheTwoActionsAreStackedVertically()
@@ -175,6 +290,21 @@ namespace JukeBox.Game.Tests.Visual
             });
 
             AddAssert("both stay comfortably clickable", () => buttonsOf(row).All(b => b.DrawWidth >= 20 && b.DrawHeight >= 20));
+
+            // Pinned exactly, not just "comfortable": the 24px sizing was its own request, and a
+            // drift upwards is what made them read as oversized in the reported screenshot.
+            AddAssert("both are exactly 24px", () => buttonsOf(row).All(b => b.DrawWidth == 24 && b.DrawHeight == 24));
+
+            AddAssert("stacked tightly, not spread apart", () =>
+            {
+                var buttons = buttonsOf(row);
+                float gap = buttons[1].ScreenSpaceDrawQuad.AABBFloat.Top - buttons[0].ScreenSpaceDrawQuad.AABBFloat.Bottom;
+
+                // Screen space, so compare against the row's own scale rather than raw pixels.
+                float scale = buttons[0].ScreenSpaceDrawQuad.AABBFloat.Height / 24f;
+
+                return gap <= 4 * scale + 0.5f;
+            });
 
             // Right-aligned, expressed against the card's own width rather than a pixel budget:
             // both buttons live in the last tenth of the card, which is what "in a column at the
