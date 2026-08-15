@@ -126,6 +126,14 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
     private RoundedSliderBar<double> minStarsSlider = null!;
     private RoundedSliderBar<double> maxStarsSlider = null!;
 
+    /// <summary>The caption beside the sort strip naming the active search backend and what it
+    /// costs — see <see cref="updateFilterAvailability"/>.</summary>
+    private SpriteText backendHint = null!;
+
+    /// <summary>The (category, hasQuery) pair the sort strip's item list was last built for — see
+    /// <see cref="updateSortAvailability"/>.</summary>
+    private (SearchCategory category, bool hasQuery)? appliedSortParameters;
+
     private int selectedIndex = -1;
     private int settleFrames;
     private float lastCardWidth;
@@ -357,12 +365,11 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
         engine.HasVideo.BindValueChanged(e => setExtra(SearchExtra.Video, e.NewValue), true);
         engine.HasStoryboard.BindValueChanged(e => setExtra(SearchExtra.Storyboard, e.NewValue), true);
 
-        // Sort control: Reset(Any, false) yields the full non-authenticated criteria set
-        // (Title/Artist/Difficulty/Updated/Ranked/Rating/Plays/Favourites). Relevance and
-        // Nominations never appear — they're lazer couplings to a live query/pending category
-        // this app doesn't replicate. Keys are passed to the mirror as raw lowercase strings
-        // (NeriNyan accepts the osu-web sort set; fallback mirrors ignore sort entirely).
+        // Sort control: the available criteria depend on the backend (see updateSortAvailability).
+        // Seeded here with the mirror's fixed set so the engine's persisted key survives load, then
+        // maintained by updateSortAvailability from the bindings below.
         sortControl.Reset(SearchCategory.Any, false);
+        appliedSortParameters = (SearchCategory.Any, false);
         sortControl.Current.Value = SortFromEngine(engine.SortKey.Value);
         sortControl.Current.BindValueChanged(e => engine.SortKey.Value = e.NewValue.ToString().ToLowerInvariant());
         engine.SortKey.BindValueChanged(e => sortControl.Current.Value = SortFromEngine(e.NewValue));
@@ -370,6 +377,19 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
         sortControl.SortDirection.Value = engine.SortDescending.Value ? SortDirection.Descending : SortDirection.Ascending;
         sortControl.SortDirection.BindValueChanged(e => engine.SortDescending.Value = e.NewValue == SortDirection.Descending);
         engine.SortDescending.BindValueChanged(e => sortControl.SortDirection.Value = e.NewValue ? SortDirection.Descending : SortDirection.Ascending);
+
+        // Which filter rows exist at all is a property of the ACTIVE BACKEND, not of this view —
+        // switching the setting re-renders the block live (and the engine re-runs the search).
+        engine.Api.BindValueChanged(_ =>
+        {
+            updateFilterAvailability();
+            updateSortAvailability();
+        }, true);
+
+        // Relevance only exists with a query, Nominations only under Pending — both are properties
+        // of the current search, so they have to be re-evaluated as it changes.
+        engine.Query.BindValueChanged(_ => updateSortAvailability());
+        engine.Category.BindValueChanged(_ => updateSortAvailability());
 
         // Pushed (rather than each card binding the player's bindable) because cards are
         // rebuilt wholesale on every result change — pushing the current value at rebuild plus
@@ -491,8 +511,8 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
     /// label-left rows with horizontal text tab items — Mode via
     /// <see cref="BeatmapSearchRulesetFilterRow"/> (backed by the cached DI-free
     /// <see cref="AssemblyRulesetStore"/>), Categories (auth-only Favourites/Mine omitted — no
-    /// signed-in account to back them), Genre and Language (client-side over loaded results, see
-    /// the hint by the sort strip), the multi-select Extra row, and lazer's
+    /// signed-in account to back them), Genre and Language (official backend only — see
+    /// <see cref="updateFilterAvailability"/>), the multi-select Extra row, and lazer's
     /// <see cref="BeatmapListingSortTabControl"/> (criteria + direction caret). The one row lazer's
     /// listing doesn't have — the star range — keeps our slider pair, restyled to the same
     /// label-column geometry so every row aligns. Rows osu-web shows but this app can't back with
@@ -524,11 +544,10 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
                         Anchor = Anchor.CentreLeft,
                         Origin = Anchor.CentreLeft,
                     },
-                    new SpriteText
+                    backendHint = new SpriteText
                     {
                         Anchor = Anchor.CentreRight,
                         Origin = Anchor.CentreRight,
-                        Text = "genre & language filter already-loaded results",
                         Font = FontUsage.Default.With(size: Theme.CaptionTextSize),
                         Colour = Theme.TextTertiary,
                     },
@@ -629,6 +648,61 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
         }
     }
 
+    // ---- Per-backend filter availability -----------------------------------------------------
+
+    /// <summary>
+    /// Shows exactly the rows the ACTIVE backend can actually answer — an unsupported filter is
+    /// hidden, never shown dead, which is the same rule that already keeps the auth-only rows
+    /// (Rank Achieved, Played, Favourites, Mine) off this panel entirely: none of them work with an
+    /// app-only token, so neither backend can back them.
+    ///
+    /// <see cref="SearchApi.Official"/> answers everything the panel offers server-side, Genre and
+    /// Language included. The mirrors cannot express those two at all — they used to be applied as
+    /// a client-side sieve over loaded results, which is a filter that quietly means something
+    /// different from what its label says, so on that backend the rows are simply absent.
+    /// </summary>
+    private void updateFilterAvailability()
+    {
+        bool official = engine.Api.Value == SearchApi.Official;
+
+        // Alpha rather than removal: these rows carry two-way bindings to the engine that must
+        // survive a switch, and a zero-Alpha child is not IsPresent, so the filter block's flow
+        // closes over it rather than leaving a gap.
+        genreRow.Alpha = official ? 1 : 0;
+        languageRow.Alpha = official ? 1 : 0;
+
+        backendHint.Text = official
+            ? "official osu! API"
+            : "beatmap mirror search — genre & language unavailable";
+    }
+
+    /// <summary>
+    /// Rebuilds the sort strip's item list when the criteria the backend supports change.
+    /// <see cref="SearchApi.Official"/> gets lazer's own rules verbatim (Relevance with a query,
+    /// Nominations under Pending, Updated/Ranked by category); the mirrors get the fixed
+    /// query-independent set, since neither extra criterion means anything to their search.
+    ///
+    /// Guarded on the parameter pair because <see cref="BeatmapListingSortTabControl.Reset"/> also
+    /// forces its own default criteria and direction — calling it per keystroke would fight the
+    /// user's sort choice rather than just maintaining the list.
+    /// </summary>
+    private void updateSortAvailability()
+    {
+        var parameters = engine.Api.Value == SearchApi.Official
+            ? (category: CategoryFromEngine(engine.Category.Value), hasQuery: engine.Query.Value.Length > 0)
+            : (category: SearchCategory.Any, hasQuery: false);
+
+        if (appliedSortParameters == parameters)
+            return;
+
+        appliedSortParameters = parameters;
+
+        // Reset settles on its own default (Relevance with a query, else Ranked/Updated) and the
+        // two-way binding carries that into the engine — which is exactly osu-web's behaviour when
+        // a query appears or the category changes.
+        sortControl.Reset(parameters.category, parameters.hasQuery);
+    }
+
     // ---- Lazer filter enum <-> engine adapters -----------------------------------------------
 
     private void setExtra(SearchExtra extra, bool present)
@@ -692,6 +766,9 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
         "rating" => SortCriteria.Rating,
         "plays" => SortCriteria.Plays,
         "favourites" => SortCriteria.Favourites,
+        // Official-backend-only criteria (the mirrors' sort strip never offers them).
+        "relevance" => SortCriteria.Relevance,
+        "nominations" => SortCriteria.Nominations,
         _ => SortCriteria.Ranked,
     };
 
