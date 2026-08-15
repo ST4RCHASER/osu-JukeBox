@@ -35,6 +35,16 @@ namespace JukeBox.Game.Tests.Visual
         /// <summary>The real right-column content width (see MainScreen).</summary>
         private const float column_content_width = 340 - 2 * Theme.PanelPadding;
 
+        /// <summary>
+        /// Where the pointer is parked between tests: a definite point INSIDE the window and well
+        /// clear of the queue column, rather than a position off the window's edge. An off-window
+        /// move can be clamped to wherever the cursor already was, and a move that doesn't actually
+        /// move the cursor produces no event — so the next hover never fired and the test sat
+        /// waiting for a fade that was never going to start.
+        /// </summary>
+        private osuTK.Vector2 restingPointerPosition
+            => uiContainer.ToScreenSpace(new osuTK.Vector2(column_content_width + 120, 20));
+
         protected override IReadOnlyDependencyContainer CreateChildDependencies(IReadOnlyDependencyContainer parent)
         {
             tmp = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
@@ -73,7 +83,12 @@ namespace JukeBox.Game.Tests.Visual
             // take a frame longer to appear than the wait below allows.
             AddStep("clear the pointer and the old panel", () =>
             {
-                InputManager.MoveMouseTo(uiContainer.ScreenSpaceDrawQuad.TopRight + new osuTK.Vector2(50, 0));
+                // A previous test may have left a button down (the drag one presses, moves and
+                // releases, and a release that lands mid-rearrangement can leave the input manager
+                // still treating the pointer as dragging — and a dragging pointer delivers no hover
+                // to anything, which is what made the next test sit waiting for one).
+                InputManager.ReleaseButton(MouseButton.Left);
+                InputManager.MoveMouseTo(restingPointerPosition);
                 uiContainer.Clear();
             });
 
@@ -113,14 +128,14 @@ namespace JukeBox.Game.Tests.Visual
         {
             AddAssert("nothing is hovered", () => !rows().Any(r => r.IsHovered));
 
-            AddAssert("each card is as wide as the list", () =>
+            AddUntilStep("each card is as wide as the list", () =>
             {
                 float listWidth = queuePanel.ChildrenOfType<QueuePanel.QueueList>().Single().DrawWidth;
 
                 return rows().All(r => cardOf(r).DrawWidth >= listWidth - 0.5f);
             });
 
-            AddAssert("and starts at the list's own left edge", () =>
+            AddUntilStep("and starts at the list's own left edge", () =>
             {
                 float listLeft = queuePanel.ChildrenOfType<QueuePanel.QueueList>().Single().ScreenSpaceDrawQuad.TopLeft.X;
 
@@ -142,6 +157,9 @@ namespace JukeBox.Game.Tests.Visual
 
             AddStep("hover the first card", () => InputManager.MoveMouseTo(cardOf(row)));
 
+            // The row's own hover state first: if that never arrives the fade never starts, and
+            // waiting on the alpha alone reports the wrong thing when the pointer didn't move.
+            AddUntilStep("the row is hovered", () => row.IsHovered);
             AddUntilStep("the handle faded in", () => handleOf(row).Alpha == 1);
 
             AddAssert("and the list will start a drag from it",
@@ -150,7 +168,7 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("but not from the middle of the card",
                 () => !row.CanBeDraggedAt(cardOf(row).ScreenSpaceDrawQuad.Centre));
 
-            AddStep("stop hovering", () => InputManager.MoveMouseTo(uiContainer.ScreenSpaceDrawQuad.TopRight + new osuTK.Vector2(50, 0)));
+            AddStep("stop hovering", () => InputManager.MoveMouseTo(restingPointerPosition));
         }
 
         /// <summary>Play above remove, in a column — the destructive one keeps the bottom.</summary>
@@ -161,11 +179,12 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("take the first row", () => row = rows()[0]);
 
             AddStep("hover the first card", () => InputManager.MoveMouseTo(cardOf(row)));
+            AddUntilStep("the row is hovered", () => row.IsHovered);
             AddUntilStep("buttons visible", () => buttonsOf(row).All(b => b.Alpha == 1));
 
             AddAssert("there are exactly two", () => buttonsOf(row).Length == 2);
 
-            AddAssert("play sits ABOVE remove, not beside it", () =>
+            AddUntilStep("play sits ABOVE remove, not beside it", () =>
             {
                 var buttons = buttonsOf(row);
                 var play = buttons[0].ScreenSpaceDrawQuad;
@@ -178,12 +197,15 @@ namespace JukeBox.Game.Tests.Visual
 
             AddAssert("both stay comfortably clickable", () => buttonsOf(row).All(b => b.DrawWidth >= 20 && b.DrawHeight >= 20));
 
-            AddAssert("and they sit at the card's right edge", () =>
+            // Right-aligned, expressed against the card's own width rather than a pixel budget:
+            // both buttons live in the last tenth of the card, which is what "in a column at the
+            // right edge" means and does not need the exact inset to be pinned here.
+            AddUntilStep("and they sit at the card's right edge", () =>
             {
-                float cardRight = cardOf(row).ScreenSpaceDrawQuad.TopRight.X;
+                var card = cardOf(row).ScreenSpaceDrawQuad;
 
-                return buttonsOf(row).All(b => b.ScreenSpaceDrawQuad.TopRight.X <= cardRight + 0.5f
-                                                     && b.ScreenSpaceDrawQuad.TopRight.X > cardRight - 40);
+                return buttonsOf(row).All(b => b.ScreenSpaceDrawQuad.TopRight.X <= card.TopRight.X + 0.5f
+                                               && b.ScreenSpaceDrawQuad.TopLeft.X >= card.TopRight.X - card.Width * 0.1f - 40);
             });
         }
 
@@ -195,6 +217,7 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("take the second row", () => second = rows()[1]);
 
             AddStep("hover the second card", () => InputManager.MoveMouseTo(cardOf(second)));
+            AddUntilStep("the row is hovered", () => second.IsHovered);
             AddUntilStep("buttons visible", () => buttonsOf(second).All(b => b.Alpha == 1));
 
             AddStep("click remove", () =>
@@ -210,6 +233,7 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("take what is now the second row", () => nowSecond = rows()[1]);
 
             AddStep("hover what is now the second card", () => InputManager.MoveMouseTo(cardOf(nowSecond)));
+            AddUntilStep("the row is hovered", () => nowSecond.IsHovered);
             AddUntilStep("buttons visible", () => buttonsOf(nowSecond).All(b => b.Alpha == 1));
 
             AddStep("click play", () =>
@@ -234,6 +258,7 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("take the first row", () => first = rows()[0]);
 
             AddStep("hover the first card", () => InputManager.MoveMouseTo(cardOf(first)));
+            AddUntilStep("the row is hovered", () => first.IsHovered);
             AddUntilStep("the handle faded in", () => handleOf(first).Alpha == 1);
 
             AddStep("press on the handle", () =>
