@@ -49,13 +49,14 @@ namespace JukeBox.Game.UI;
 /// Random wherever lazer has them. Locked and greyed while a dropped replay is driving playback,
 /// which shows the replay's own mods instead — the same treatment (and the same underlying "is a
 /// replay playing" test) the difficulty switcher already uses.</item>
-/// <item><b>Playfield elements</b> — one checkbox per <see cref="PlayfieldElement"/>, grouped by
-/// ruleset, with EVERY ruleset's group listed at all times (user request): a stable, complete
-/// inventory of what can be hidden rather than a view of the current song, so the panel never
-/// reshuffles when the track changes. A toggle picked for a ruleset that isn't playing persists and
-/// takes effect when a map of that ruleset does.</item>
-/// <item><b>Rulesets</b> and <b>Analysis (osu!)</b> — the per-ruleset gameplay settings, MOVED here
-/// wholesale from Settings, on their real lazer per-ruleset config bindables.</item>
+/// <item><b>Playfield elements</b> — grouped by ruleset, with EVERY ruleset's group listed at all
+/// times (user request): a stable, complete inventory rather than a view of the current song, so
+/// the panel never reshuffles when the track changes, and a row picked for a ruleset that isn't
+/// playing takes effect when a map of that ruleset does. Each group holds that ruleset's element
+/// toggles (one per <see cref="PlayfieldElement"/>) first and then its own gameplay settings —
+/// snaking, hit animations, mania's scroll speed and direction, osu!'s replay-analysis overlays —
+/// which MOVED here from Settings and keep their real lazer per-ruleset config bindables. Those are
+/// rows of their ruleset's group rather than a category of their own (user request).</item>
 /// </list>
 ///
 /// <para>
@@ -187,6 +188,10 @@ public partial class ChartPanel : CompositeDrawable
     /// <summary>Test-only: whether a ruleset's element group is currently on screen.</summary>
     internal bool ElementGroupVisible(int rulesetId) => elementGroups[rulesetId].Alpha > 0;
 
+    /// <summary>Test-only: a ruleset's element group, so tests can assert what is parented INSIDE
+    /// it rather than merely present somewhere in the tab.</summary>
+    internal Drawable ElementGroup(int rulesetId) => elementGroups[rulesetId];
+
     /// <summary>Test-only: the "mods come from the replay" line, empty when no replay is playing.</summary>
     internal string ReplayModsNote => replayModsNoteText;
 
@@ -247,19 +252,13 @@ public partial class ChartPanel : CompositeDrawable
         };
 
         // Deliberate order, widest scope first: what to draw at all (Chart), then what is being
-        // played (Mods), then which pieces of the playfield show (Playfield elements), then how each
-        // ruleset draws them (Rulesets), and last the osu!-only replay-analysis overlays, which sit
-        // on top of everything else.
+        // played (Mods), then everything about how the playfield itself draws — which pieces show
+        // and how each ruleset renders them, all inside the one Playfield elements section.
         if (chartMods != null)
             sections.Add(createModsSection());
 
         if (elements != null)
             sections.Add(createElementsSection());
-
-        // Per-ruleset settings need the ruleset config cache (realm-backed); a bare test scene
-        // without it gets no dead controls, exactly as when these lived in Settings.
-        if (rulesetConfigs != null)
-            sections.Add(createRulesetsSection());
 
         return new FillFlowContainer
         {
@@ -270,65 +269,6 @@ public partial class ChartPanel : CompositeDrawable
             Children = sections,
         };
     }
-
-    /// <summary>
-    /// The per-ruleset gameplay settings, moved here wholesale from Settings — same rows, same
-    /// lazer controls, same per-ruleset config bindables (see <see cref="bindRulesetConfigs"/>),
-    /// in the same order and grouping they had there. Every ruleset's subsection is always listed,
-    /// whatever is playing, so the panel never reshuffles under the user; a setting picked for a
-    /// ruleset that isn't on screen simply applies when a map of that ruleset does.
-    ///
-    /// <para>
-    /// "Analysis (osu!)" keeps its own heading as the last subsection, where it already was: our
-    /// autoplay chart IS replay-driven, and <c>LazerChartLayer</c> attaches lazer's
-    /// <c>ReplayAnalysisOverlay</c> for osu! charts, bound to these keys.
-    /// </para>
-    /// </summary>
-    private Drawable createRulesetsSection() => new LazerSection("Rulesets", FontAwesome.Solid.Gamepad)
-    {
-        Children = new Drawable[]
-        {
-            new LazerSubsection("osu!")
-            {
-                Children = new Drawable[]
-                {
-                    snakingInCheckbox = new SettingsCheckbox { LabelText = "Snaking in sliders" },
-                    snakingOutCheckbox = new SettingsCheckbox { LabelText = "Snaking out sliders" },
-                    osuHitAnimationsCheckbox = new SettingsCheckbox { LabelText = "Hit animations" },
-                    cursorTrailCheckbox = new SettingsCheckbox { LabelText = "Cursor trail" },
-                    cursorRipplesCheckbox = new SettingsCheckbox { LabelText = "Cursor ripples" },
-                    playfieldBorderDropdown = new SettingsEnumDropdown<PlayfieldBorderStyle> { LabelText = "Playfield border style" },
-                },
-            },
-            new LazerSubsection("osu!taiko")
-            {
-                Children = new Drawable[]
-                {
-                    taikoHitAnimationsCheckbox = new SettingsCheckbox { LabelText = "Hit animations" },
-                },
-            },
-            new LazerSubsection("osu!mania")
-            {
-                Children = new Drawable[]
-                {
-                    maniaDirectionDropdown = new SettingsEnumDropdown<ManiaScrollingDirection> { LabelText = "Scrolling direction" },
-                    maniaScrollSpeedRow = new SettingsSlider<double> { LabelText = "Scroll speed", KeyboardStep = 0.5f },
-                    maniaTimingColourCheckbox = new SettingsCheckbox { LabelText = "Timing-based note colouring" },
-                },
-            },
-            new LazerSubsection("Analysis (osu!)")
-            {
-                Children = new Drawable[]
-                {
-                    clickMarkersCheckbox = new SettingsCheckbox { LabelText = "Show click markers" },
-                    frameMarkersCheckbox = new SettingsCheckbox { LabelText = "Show frame markers" },
-                    cursorPathCheckbox = new SettingsCheckbox { LabelText = "Show cursor path" },
-                    hideCursorCheckbox = new SettingsCheckbox { LabelText = "Hide gameplay cursor" },
-                    analysisLengthRow = new SettingsSlider<int> { LabelText = "Display length", KeyboardStep = 100 },
-                },
-            },
-        },
-    };
 
     /// <summary>
     /// Ruleset config managers are realm-backed and only exist once <c>LazerRulesetConfigCache</c>
@@ -479,6 +419,14 @@ public partial class ChartPanel : CompositeDrawable
                 rows.Add(checkbox);
             }
 
+            // Then how that ruleset draws what's left — the rows that used to be a "Rulesets"
+            // section of their own. Visibility first, behaviour second: "is this drawn at all" is
+            // the coarser question and answering it can make the finer one moot (there is no point
+            // tuning slider snaking with slider bodies hidden), and it keeps the section's original
+            // list unbroken at the top of every group.
+            if (rulesetConfigs != null)
+                rows.AddRange(rulesetBehaviourRows(rulesetId));
+
             var group = new Container
             {
                 RelativeSizeAxes = Axes.X,
@@ -496,6 +444,67 @@ public partial class ChartPanel : CompositeDrawable
         }
 
         return new LazerSection("Playfield elements", FontAwesome.Regular.Eye) { Children = groups };
+    }
+
+    /// <summary>
+    /// The per-ruleset gameplay rows that used to be their own "Rulesets" section, now living in
+    /// the group for the ruleset they belong to (user request: no separate category). Nothing about
+    /// their bindings changed — they are still lazer's own per-ruleset config values, wired in
+    /// <see cref="bindRulesetConfigs"/>, revert arrows and all. This is a re-parent in the UI only.
+    ///
+    /// <para>
+    /// osu!'s replay-analysis overlays keep their own heading as a nested subsection rather than
+    /// being mixed into the list: they draw on top of the playfield rather than being part of it,
+    /// and five more unlabelled rows would have made the longest group unreadable.
+    /// </para>
+    /// </summary>
+    private IEnumerable<Drawable> rulesetBehaviourRows(int rulesetId)
+    {
+        switch (rulesetId)
+        {
+            case 0:
+                return new Drawable[]
+                {
+                    snakingInCheckbox = new SettingsCheckbox { LabelText = "Snaking in sliders" },
+                    snakingOutCheckbox = new SettingsCheckbox { LabelText = "Snaking out sliders" },
+                    osuHitAnimationsCheckbox = new SettingsCheckbox { LabelText = "Hit animations" },
+                    cursorTrailCheckbox = new SettingsCheckbox { LabelText = "Cursor trail" },
+                    cursorRipplesCheckbox = new SettingsCheckbox { LabelText = "Cursor ripples" },
+                    playfieldBorderDropdown = new SettingsEnumDropdown<PlayfieldBorderStyle> { LabelText = "Playfield border style" },
+                    new LazerSubsection("Replay analysis")
+                    {
+                        RelativeSizeAxes = Axes.X,
+                        AutoSizeAxes = Axes.Y,
+                        Children = new Drawable[]
+                        {
+                            clickMarkersCheckbox = new SettingsCheckbox { LabelText = "Show click markers" },
+                            frameMarkersCheckbox = new SettingsCheckbox { LabelText = "Show frame markers" },
+                            cursorPathCheckbox = new SettingsCheckbox { LabelText = "Show cursor path" },
+                            hideCursorCheckbox = new SettingsCheckbox { LabelText = "Hide gameplay cursor" },
+                            analysisLengthRow = new SettingsSlider<int> { LabelText = "Display length", KeyboardStep = 100 },
+                        },
+                    },
+                };
+
+            case 1:
+                return new Drawable[]
+                {
+                    taikoHitAnimationsCheckbox = new SettingsCheckbox { LabelText = "Hit animations" },
+                };
+
+            case 3:
+                return new Drawable[]
+                {
+                    maniaDirectionDropdown = new SettingsEnumDropdown<ManiaScrollingDirection> { LabelText = "Scrolling direction" },
+                    maniaScrollSpeedRow = new SettingsSlider<double> { LabelText = "Scroll speed", KeyboardStep = 0.5f },
+                    maniaTimingColourCheckbox = new SettingsCheckbox { LabelText = "Timing-based note colouring" },
+                };
+
+            // osu!catch has no per-ruleset gameplay settings of its own in lazer, and the shared
+            // group is elements-only.
+            default:
+                return Array.Empty<Drawable>();
+        }
     }
 
     protected override void LoadComplete()

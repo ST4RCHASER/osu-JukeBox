@@ -29,6 +29,13 @@ namespace JukeBox.Game.LazerPlayer;
 /// </para>
 ///
 /// <para>
+/// The cursor TRAIL and RIPPLES are deliberately absent: lazer ships first-class per-ruleset
+/// settings for both (<c>OsuRulesetSetting.ShowCursorTrail</c> / <c>ShowCursorRipples</c>), which
+/// the Chart tab now lists in this very group. A skin-lookup toggle beside them would be a second
+/// control over the same visible thing, differing only in mechanism.
+/// </para>
+///
+/// <para>
 /// Names are persisted verbatim (see <see cref="Configuration.JukeBoxSetting.HiddenPlayfieldElements"/>),
 /// so members may be added or reordered but not renamed without dropping a user's choice.
 /// </para>
@@ -44,12 +51,6 @@ public enum PlayfieldElement
 
     [Description("Cursor")]
     OsuCursor,
-
-    [Description("Cursor trail")]
-    OsuCursorTrail,
-
-    [Description("Cursor ripples")]
-    OsuCursorRipples,
 
     [Description("Cursor particles")]
     OsuCursorParticles,
@@ -281,8 +282,6 @@ public static class PlayfieldElementCatalog
 
         // OsuCursorContainer casts this one (see Entry.CreateHidden).
         with(osu(PlayfieldElement.OsuCursor, OsuSkinComponents.Cursor), () => new HiddenCursor()),
-        osu(PlayfieldElement.OsuCursorTrail, OsuSkinComponents.CursorTrail),
-        osu(PlayfieldElement.OsuCursorRipples, OsuSkinComponents.CursorRipple),
         osu(PlayfieldElement.OsuCursorParticles, OsuSkinComponents.CursorParticles, OsuSkinComponents.CursorSmoke),
         osu(PlayfieldElement.OsuHitCircles, OsuSkinComponents.HitCircle, OsuSkinComponents.SliderHeadHitCircle, OsuSkinComponents.SliderTailHitCircle),
         osu(PlayfieldElement.OsuApproachCircles, OsuSkinComponents.ApproachCircle),
