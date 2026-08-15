@@ -200,8 +200,8 @@ public static class PlayfieldElementCatalog
         /// <summary>Human label for the toggle, from the enum member's <see cref="DescriptionAttribute"/>.</summary>
         public required string Label { get; init; }
 
-        /// <summary>Whether this element owns <paramref name="lookup"/> — i.e. whether suppressing
-        /// the element should make this lookup resolve to nothing.</summary>
+        /// <summary>Whether this element owns the lookup it is given — i.e. whether suppressing the
+        /// element should make that lookup resolve to nothing.</summary>
         public required Func<ISkinComponentLookup, bool> Matches { get; init; }
 
         /// <summary>
@@ -336,32 +336,6 @@ public static class PlayfieldElementCatalog
     /// plus the ruleset-agnostic ones. Listed agnostic-first, matching <see cref="All"/>'s order.
     /// </summary>
     public static IEnumerable<Entry> ForRuleset(int rulesetId) => All.Where(e => e.AppliesTo(rulesetId));
-
-    /// <summary>
-    /// A real <c>PlaySliderBody</c> that simply never draws — what the filter hands back for a
-    /// hidden <see cref="PlayfieldElement.OsuSliderBody"/>, because <c>DrawableSlider</c> casts the
-    /// skin's answer to that type to drive the path's progress and accent colour (see
-    /// <see cref="Entry.CreateHidden"/>). Its own <see cref="Drawable.Alpha"/> is what hides it:
-    /// <c>DrawableSlider</c> fades the <c>SkinnableDrawable</c> WRAPPER in and out over the object's
-    /// lifetime, never this drawable, so the zero here is never written over.
-    /// </summary>
-    private partial class HiddenSliderBody : osu.Game.Rulesets.Osu.Skinning.Default.PlaySliderBody
-    {
-        public HiddenSliderBody()
-        {
-            Alpha = 0;
-        }
-    }
-
-    /// <summary>The same trick for the osu! cursor, whose container casts the skin's answer to
-    /// <c>SkinnableCursor</c> to drive its expand/contract on click.</summary>
-    private partial class HiddenCursor : osu.Game.Rulesets.Osu.UI.Cursor.SkinnableCursor
-    {
-        public HiddenCursor()
-        {
-            Alpha = 0;
-        }
-    }
 
     /// <summary>The display name of a ruleset group header, for the Chart tab's subsections.</summary>
     public static string RulesetName(int rulesetId) => rulesetId switch
