@@ -392,7 +392,14 @@ public partial class BeatmapSearchEngine : Component
             currentPage = page;
             nextCursor = resultCursor;
             loadedFromOfficial = fromOfficial;
-            TotalResults = total;
+
+            // The total describes the SEARCH, not the page, so it is captured once and left alone
+            // while paging: osu!'s endpoint sometimes answers a deeper page with Elasticsearch's
+            // capped estimate (10,000) instead of the real count, and letting that overwrite the
+            // first page's figure made the status line drop from "56,325 results" to "10,000
+            // results" mid-scroll. Observed live against osu.ppy.sh.
+            if (fresh)
+                TotalResults = total;
 
             // Exact on the official path (the cursor IS the "is there more" answer); a guess on the
             // mirror one, where a full page is the only hint that another may exist.
