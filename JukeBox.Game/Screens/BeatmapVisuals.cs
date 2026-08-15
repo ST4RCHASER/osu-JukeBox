@@ -6,6 +6,7 @@ using JukeBox.Game.Beatmaps;
 using JukeBox.Game.Configuration;
 using JukeBox.Game.LazerPlayer;
 using JukeBox.Game.Playback;
+using JukeBox.Game.Replays;
 using osu.Framework.Allocation;
 using osu.Framework.Bindables;
 using osu.Framework.Graphics;
@@ -95,6 +96,10 @@ public partial class BeatmapVisuals : CompositeDrawable
     private readonly BindableDouble playfieldZoom = new(1.0);
     private readonly IBindable<JukeBoxSkin> effectiveSkin = new Bindable<JukeBoxSkin>();
 
+    // Same rebuild trigger as effectiveSkin, for a skin change the enum value can't express: a
+    // freshly-imported .osk replacing the custom skin while Custom is already selected.
+    private readonly IBindable<int> skinRevision = new Bindable<int>();
+
     // Lazer's own background-blur scale: setting 0..1 maps to a gaussian sigma of 0..25.
     private const float max_blur_sigma = 25;
 
@@ -106,6 +111,11 @@ public partial class BeatmapVisuals : CompositeDrawable
 
     [Resolved(canBeNull: true)]
     private BeatmapOffsetStore? offsetStore { get; set; }
+
+    // canBeNull like the rest: a bare test scene has no replay registry, which simply means no
+    // difficulty ever has a replay and the chart is always autoplay-driven.
+    [Resolved(canBeNull: true)]
+    private ReplayStore? replays { get; set; }
 
     // MainScreen's playerBox live pixel size (see its own [Cached] remarks) — resolved as
     // nullable since only MainScreen's real hosting caches it; falls back to this Drawable's
@@ -389,7 +399,10 @@ public partial class BeatmapVisuals : CompositeDrawable
         }
 
         if (skinSelection != null)
+        {
             effectiveSkin.BindTo(skinSelection.Effective);
+            skinRevision.BindTo(skinSelection.Revision);
+        }
 
         if (offsetStore != null)
             beatmapOffset.BindTo(offsetStore.CurrentOffset);
@@ -454,15 +467,18 @@ public partial class BeatmapVisuals : CompositeDrawable
         // A skin choice change (dropdown flip, or Random's per-song re-roll) rebuilds the chart
         // layer — the skin chain is constructed once per LazerChartLayer, so a rebuild is the
         // application mechanism (documented; the ruleset checkboxes by contrast apply live).
-        effectiveSkin.BindValueChanged(_ =>
-        {
-            if (chartLayer == null)
-                return;
+        effectiveSkin.BindValueChanged(_ => rebuildChartLayer());
+        skinRevision.BindValueChanged(_ => rebuildChartLayer());
+    }
 
-            chartContainer.Remove(chartLayer, true);
-            chartLayer = null;
-            updateLazerLayer();
-        });
+    private void rebuildChartLayer()
+    {
+        if (chartLayer == null)
+            return;
+
+        chartContainer.Remove(chartLayer, true);
+        chartLayer = null;
+        updateLazerLayer();
     }
 
     private void updateClockOffset() => offsetClock.Offset = beatmapOffset.Value + globalOffset.Value;
@@ -517,7 +533,17 @@ public partial class BeatmapVisuals : CompositeDrawable
         bool wantLayer = (renderChart.Value || playHitSounds.Value) && chartWorking != null && osuFile != null;
 
         if (wantLayer && chartLayer == null)
-            chartContainer.Add(chartLayer = new LazerChartLayer(chartWorking!, osuFile!));
+        {
+            // Only a replay registered against THIS difficulty applies: a dropped .osr identifies
+            // one exact .osu by checksum, so switching to any other difficulty of the same set
+            // correctly falls back to autoplay (and switching back restores the replay).
+            var replay = replays?.ForOsuFile(osuFile);
+
+            if (replay?.Score != null)
+                Logger.Log($"Playing back {replay.PlayerName}'s replay on '{Path.GetFileName(osuFile)}' instead of autoplay");
+
+            chartContainer.Add(chartLayer = new LazerChartLayer(chartWorking!, osuFile!, replay?.Score));
+        }
         else if (!wantLayer && chartLayer != null)
         {
             chartContainer.Remove(chartLayer, true);

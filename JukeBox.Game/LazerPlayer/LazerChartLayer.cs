@@ -47,11 +47,23 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
 {
     private readonly WorkingBeatmap working;
     private readonly string osuFile;
+    private readonly Score? replayScore;
 
     private DrawableRuleset? drawableRuleset;
-    private Score? autoplayScore;
+
+    /// <summary>
+    /// The score whose replay drives gameplay — a dropped user replay when there is one for this
+    /// difficulty, otherwise the ruleset's own generated autoplay. Either way it reaches
+    /// <see cref="DrawableRuleset.SetReplayScore"/> the same way in <see cref="LoadComplete"/>;
+    /// nothing downstream distinguishes them.
+    /// </summary>
+    private Score? gameplayScore;
+
     private IReadOnlyList<Mod> mods = Array.Empty<Mod>();
     private IBeatmap? playableBeatmap;
+
+    /// <summary>Test hook: whether this layer is driven by a real user replay rather than autoplay.</summary>
+    internal bool UsingUserReplay => replayScore != null && gameplayScore == replayScore;
 
     private readonly List<IDisposable> ownedSkins = new List<IDisposable>();
 
@@ -128,10 +140,14 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
     /// <param name="working">The decoded difficulty to render. Must contain at least one hit object.</param>
     /// <param name="osuFile">Absolute path of the .osu file (locates the beatmap folder for
     /// beatmap-provided skin elements and hitsound samples).</param>
-    public LazerChartLayer(WorkingBeatmap working, string osuFile)
+    /// <param name="replayScore">A decoded user replay to play back instead of autoplay (see
+    /// <see cref="Replays.ReplayStore"/>). Null — the normal case — keeps the autoplay behaviour
+    /// unchanged.</param>
+    public LazerChartLayer(WorkingBeatmap working, string osuFile, Score? replayScore = null)
     {
         this.working = working;
         this.osuFile = osuFile;
+        this.replayScore = replayScore;
 
         RelativeSizeAxes = Axes.Both;
     }
@@ -145,12 +161,19 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
     [BackgroundDependencyLoader]
     private void load(GameHost host, AudioManager audio, IStorageResourceProvider resourceProvider)
     {
-        var ruleset = createRuleset(working.BeatmapInfo.Ruleset.OnlineID);
+        var ruleset = CreateRuleset(working.BeatmapInfo.Ruleset.OnlineID);
         Ruleset = ruleset;
 
-        var autoplay = ruleset.GetAutoplayMod()
+        ModAutoplay? autoplay = null;
+
+        if (replayScore != null)
+            mods = replayMods(ruleset);
+        else
+        {
+            autoplay = ruleset.GetAutoplayMod()
                        ?? throw new InvalidOperationException($"{ruleset.ShortName} provides no autoplay mod");
-        mods = new Mod[] { autoplay };
+            mods = new Mod[] { autoplay };
+        }
 
         playableBeatmap = working.GetPlayableBeatmap(ruleset.RulesetInfo, mods);
 
@@ -162,8 +185,13 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
 
         drawableRuleset = ruleset.CreateDrawableRulesetWith(playableBeatmap, mods);
 
-        var replay = autoplay.CreateReplayData(playableBeatmap, mods);
-        autoplayScore = new Score { Replay = replay.Replay };
+        if (replayScore != null)
+            gameplayScore = replayScore;
+        else
+        {
+            var replay = autoplay!.CreateReplayData(playableBeatmap, mods);
+            gameplayScore = new Score { Replay = replay.Replay };
+        }
 
         // Skin chain in lazer's lookup order: beatmap-folder skin (beatmap-provided elements,
         // combo colours from the .osu [Colours] section and custom hitsound samples, gated live by
@@ -191,7 +219,11 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
         SelectedSkin = selectedChoice;
         osu.Framework.Logging.Logger.Log($"[LazerChartLayer] building {ruleset.ShortName} chart with skin: {selectedChoice}");
 
-        var selected = SkinSelection.CreateSkin(selectedChoice, resourceProvider);
+        // Routed through the service (not the static) so JukeBoxSkin.Custom can resolve the
+        // user-imported .osk folder, which needs storage access this layer has no business doing.
+        // With no service cached (bare test scenes) the choice is always Argon anyway.
+        var selected = skinSelection?.CreateEffectiveSkin(resourceProvider)
+                       ?? SkinSelection.CreateSkin(selectedChoice, resourceProvider);
         var rulesetResources = new ResourceStoreBackedSkin(ruleset.CreateResourceStore(), host, audio);
         ownedSkins.Add(selected);
         ownedSkins.Add(rulesetResources);
@@ -262,6 +294,47 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
         InternalChild = skinProvider;
     }
 
+    /// <summary>
+    /// The replay's own mods, minus the two families this app can't honour:
+    ///
+    /// <list type="bullet">
+    /// <item><b>Rate-changing mods</b> (DT/NC/HT/DC, anything <see cref="IApplicableToRate"/>).
+    /// The music is played by our own <see cref="Playback.PlaybackController"/> at the track's
+    /// natural rate (or whatever the user's speed slider says), and the chart runs off that same
+    /// clock — so applying a rate mod here would speed the CHART up relative to audio that didn't
+    /// change, i.e. desync rather than authenticity. The replay's frames are absolute timestamps
+    /// and land correctly against the unmodified clock.</item>
+    /// <item><b>Autoplay</b>, which would fight the replay for control of the input handler.</item>
+    /// </list>
+    ///
+    /// <para>
+    /// Everything else — the difficulty-affecting mods that actually change what is drawn (HR's
+    /// flipped playfield, EZ/HR's altered approach/size, mania key mods, HD/FL's visuals) — is
+    /// applied, which is what makes the replay's cursor line up with the objects it was aiming at.
+    /// A mod list that fails to materialise (an unrecognised or unconvertible mod) degrades to no
+    /// mods rather than failing the whole chart.
+    /// </para>
+    /// </summary>
+    private IReadOnlyList<Mod> replayMods(Ruleset ruleset)
+    {
+        try
+        {
+            var kept = replayScore!.ScoreInfo.Mods
+                                   .Where(m => m is not ModAutoplay && m is not IApplicableToRate)
+                                   .ToArray();
+
+            if (kept.Length > 0)
+                osu.Framework.Logging.Logger.Log($"[LazerChartLayer] replay mods applied: {string.Join(", ", kept.Select(m => m.Acronym))}");
+
+            return kept;
+        }
+        catch (Exception e)
+        {
+            osu.Framework.Logging.Logger.Error(e, $"Failed to resolve replay mods for '{ruleset.ShortName}' — rendering the replay unmodded");
+            return Array.Empty<Mod>();
+        }
+    }
+
     /// <summary>The concrete bundled skin this layer was built with (test hook).</summary>
     internal JukeBoxSkin SelectedSkin { get; private set; }
 
@@ -271,9 +344,10 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
 
         // Same timing as lazer's ReplayPlayer.PrepareReplay: the ruleset's input manager and
         // frame-stability container exist once loaded, so the replay can be attached now. From
-        // here the autoplay replay drives gameplay entirely off our inherited playback clock.
-        if (autoplayScore != null)
-            drawableRuleset?.SetReplayScore(autoplayScore);
+        // here the replay (the user's, or the generated autoplay one) drives gameplay entirely off
+        // our inherited playback clock.
+        if (gameplayScore != null)
+            drawableRuleset?.SetReplayScore(gameplayScore);
 
         attachOsuReplayAnalysis();
     }
@@ -304,10 +378,10 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
     /// </summary>
     private void attachOsuReplayAnalysis()
     {
-        if (drawableRuleset is not osu.Game.Rulesets.Osu.UI.DrawableOsuRuleset osuRuleset || autoplayScore?.Replay == null)
+        if (drawableRuleset is not osu.Game.Rulesets.Osu.UI.DrawableOsuRuleset osuRuleset || gameplayScore?.Replay == null)
             return;
 
-        var analysisOverlay = new osu.Game.Rulesets.Osu.UI.ReplayAnalysisOverlay(autoplayScore.Replay);
+        var analysisOverlay = new osu.Game.Rulesets.Osu.UI.ReplayAnalysisOverlay(gameplayScore.Replay);
         osuRuleset.PlayfieldAdjustmentContainer.Add(analysisOverlay);
         osuRuleset.Overlays.Add(analysisOverlay.CreateProxy().With(p => p.Depth = float.NegativeInfinity));
 
@@ -409,7 +483,10 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
         ownedSkins.Clear();
     }
 
-    private static Ruleset createRuleset(int onlineId) => onlineId switch
+    /// <summary>The ruleset for an online mode id (0 osu! / 1 taiko / 2 catch / 3 mania), unknown
+    /// ids falling back to osu!. Shared with the replay decoder, which needs the same mapping to
+    /// convert legacy replay frames and mods.</summary>
+    internal static Ruleset CreateRuleset(int onlineId) => onlineId switch
     {
         1 => new TaikoRuleset(),
         2 => new CatchRuleset(),

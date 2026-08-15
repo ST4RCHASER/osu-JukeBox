@@ -1,12 +1,15 @@
 #nullable enable
 
 using System;
+using System.IO;
 using JukeBox.Game.Beatmaps;
 using JukeBox.Game.Configuration;
 using JukeBox.Game.Playback;
 using osu.Framework.Allocation;
 using osu.Framework.Bindables;
 using osu.Framework.Graphics;
+using osu.Framework.Logging;
+using osu.Framework.Platform;
 using osu.Game.IO;
 using osu.Game.Skinning;
 
@@ -26,11 +29,27 @@ public partial class SkinSelection : Component
     private readonly Bindable<JukeBoxSkin> choice = new Bindable<JukeBoxSkin>();
     private readonly Bindable<JukeBoxSkin> effective = new Bindable<JukeBoxSkin>(JukeBoxSkin.Argon);
     private readonly Bindable<CachedBeatmapSet?> currentSong = new Bindable<CachedBeatmapSet?>();
+    private readonly Bindable<string> customSkinName = new Bindable<string>(string.Empty);
 
     private readonly Random random = new Random();
 
     /// <summary>The resolved skin to build — never <see cref="JukeBoxSkin.Random"/>.</summary>
     public IBindable<JukeBoxSkin> Effective => effective;
+
+    /// <summary>
+    /// Bumped whenever the skin to build changes CONTENT without <see cref="Effective"/> itself
+    /// changing — i.e. a freshly-imported .osk replacing the custom skin while
+    /// <see cref="JukeBoxSkin.Custom"/> is already selected. Consumers that rebuild on
+    /// <see cref="Effective"/> (BeatmapVisuals) rebuild on this too, so a dropped skin applies
+    /// immediately instead of waiting for the next song.
+    /// </summary>
+    public IBindable<int> Revision => revision;
+
+    private readonly Bindable<int> revision = new Bindable<int>();
+
+    /// <summary>The imported skin's folder name, or empty when nothing has been imported. Drives
+    /// the settings dropdown's "Custom: &lt;name&gt;" label.</summary>
+    public IBindable<string> CustomSkinName => customSkinName;
 
     [Resolved]
     private JukeBoxConfigManager config { get; set; } = null!;
@@ -38,15 +57,43 @@ public partial class SkinSelection : Component
     [Resolved]
     private PlaybackController playback { get; set; } = null!;
 
+    [Resolved]
+    private GameHost host { get; set; } = null!;
+
     protected override void LoadComplete()
     {
         base.LoadComplete();
 
         config.BindWith(JukeBoxSetting.Skin, choice);
+        config.BindWith(JukeBoxSetting.CustomSkinPath, customSkinName);
         currentSong.BindTo(playback.Current);
 
         choice.BindValueChanged(e => effective.Value = resolve(e.NewValue), true);
         currentSong.BindValueChanged(_ => OnSongChanged());
+
+        // Only meaningful while Custom is what's being built; for any other selection the imported
+        // skin isn't in the chain, so there is nothing to rebuild.
+        customSkinName.BindValueChanged(_ =>
+        {
+            if (effective.Value == JukeBoxSkin.Custom)
+                revision.Value++;
+        });
+    }
+
+    /// <summary>
+    /// Absolute path of the imported skin folder, or null when nothing has been imported or the
+    /// folder has since been deleted from under us (a user tidying up app storage by hand).
+    /// </summary>
+    public string? CustomSkinDirectory
+    {
+        get
+        {
+            if (customSkinName.Value.Length == 0)
+                return null;
+
+            string path = Path.Combine(host.Storage.GetFullPath("skins"), customSkinName.Value);
+            return Directory.Exists(path) ? path : null;
+        }
     }
 
     /// <summary>
@@ -77,9 +124,48 @@ public partial class SkinSelection : Component
     }
 
     /// <summary>
-    /// Builds the concrete skin instance for a resolved choice. The caller owns (and must
-    /// dispose) the returned skin. <paramref name="skin"/> must not be
-    /// <see cref="JukeBoxSkin.Random"/> — resolve through <see cref="Effective"/> first.
+    /// Builds the skin instance for the current <see cref="Effective"/> value, including the
+    /// user-imported <see cref="JukeBoxSkin.Custom"/> one — which <see cref="CreateSkin"/> can't
+    /// build, since it needs this instance's storage-resolved folder. The caller owns (and must
+    /// dispose) the returned skin.
+    ///
+    /// <para>
+    /// Custom with nothing imported (or an imported folder that has since disappeared, or one that
+    /// fails to load) degrades to <see cref="JukeBoxSkin.Argon"/> rather than rendering an empty
+    /// chart — the selection is reachable from the dropdown regardless of whether an import ever
+    /// happened, so this is a normal state, not an error.
+    /// </para>
+    /// </summary>
+    public Skin CreateEffectiveSkin(IStorageResourceProvider resources)
+    {
+        if (effective.Value != JukeBoxSkin.Custom)
+            return CreateSkin(effective.Value, resources);
+
+        string? directory = CustomSkinDirectory;
+
+        if (directory != null)
+        {
+            try
+            {
+                return new ImportedLegacySkin(directory, resources, host);
+            }
+            catch (Exception e)
+            {
+                Logger.Error(e, $"Failed to load imported skin '{directory}' — falling back to Argon");
+            }
+        }
+        else
+            Logger.Log("Custom skin selected but none is imported — falling back to Argon");
+
+        return CreateSkin(JukeBoxSkin.Argon, resources);
+    }
+
+    /// <summary>
+    /// Builds the concrete BUNDLED skin instance for a resolved choice. The caller owns (and must
+    /// dispose) the returned skin. <paramref name="skin"/> must be neither
+    /// <see cref="JukeBoxSkin.Random"/> (resolve through <see cref="Effective"/> first) nor
+    /// <see cref="JukeBoxSkin.Custom"/> (build it through <see cref="CreateEffectiveSkin"/>, which
+    /// has the storage access this static doesn't).
     /// </summary>
     public static Skin CreateSkin(JukeBoxSkin skin, IStorageResourceProvider resources) => skin switch
     {
@@ -87,6 +173,6 @@ public partial class SkinSelection : Component
         JukeBoxSkin.ArgonPro => new ArgonProSkin(resources),
         JukeBoxSkin.Triangles => new TrianglesSkin(resources),
         JukeBoxSkin.Classic => new DefaultLegacySkin(resources),
-        _ => throw new ArgumentOutOfRangeException(nameof(skin), skin, "resolve Random via SkinSelection.Effective before constructing"),
+        _ => throw new ArgumentOutOfRangeException(nameof(skin), skin, "resolve Random via SkinSelection.Effective, and Custom via CreateEffectiveSkin, before constructing"),
     };
 }

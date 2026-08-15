@@ -373,13 +373,20 @@ public partial class QueuePanel : CompositeDrawable
                                 Colour = Theme.TextSecondary,
                                 Text = set.DisplayArtist,
                             },
+                            // A dropped replay REPLACES the mapper credit on this line rather
+                            // than adding a fourth: the row is a fixed 56px holding three tight
+                            // lines already, and for a set you queued by dropping someone's
+                            // replay, who played it is the more useful of the two.
+                            // NowPlayingPanel, which has the room, shows both.
                             new SpriteText
                             {
                                 RelativeSizeAxes = Axes.X,
                                 Truncate = true,
                                 Font = FontUsage.Default.With(size: Theme.CaptionTextSize - 1),
-                                Colour = Theme.TextTertiary,
-                                Text = $"mapped by {set.Creator}",
+                                Colour = set.Replay != null ? Theme.Accent : Theme.TextTertiary,
+                                Text = set.Replay != null
+                                    ? $"Played by {set.Replay.PlayerName}"
+                                    : $"mapped by {set.Creator}",
                             },
                         },
                     },

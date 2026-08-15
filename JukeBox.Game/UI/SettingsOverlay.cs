@@ -110,7 +110,7 @@ public partial class SettingsOverlay : FocusedOverlayContainer
     private OsuScrollContainer scroll = null!;
 
     // ---- our settings ----
-    private SettingsEnumDropdown<JukeBoxSkin> skinDropdown = null!;
+    private SkinSettingsDropdown skinDropdown = null!;
     private SettingsCheckbox renderChartCheckbox = null!;
     private SettingsCheckbox playHitSoundsCheckbox = null!;
     private SettingsCheckbox showStoryboardVideoCheckbox = null!;
@@ -308,7 +308,7 @@ public partial class SettingsOverlay : FocusedOverlayContainer
             {
                 Children = new Drawable[]
                 {
-                    skinDropdown = new SettingsEnumDropdown<JukeBoxSkin> { LabelText = "Gameplay skin" },
+                    skinDropdown = new SkinSettingsDropdown { LabelText = "Gameplay skin" },
                 },
             },
         };
@@ -484,6 +484,11 @@ public partial class SettingsOverlay : FocusedOverlayContainer
 
         // ---- ours ----
         skinDropdown.Current = config.GetBindable<JukeBoxSkin>(JukeBoxSetting.Skin);
+
+        // Names the imported .osk in the Custom entry ("Custom: Aristia" rather than a bare
+        // "Custom (imported)"). Bound to the config value rather than SkinSelection so this works
+        // in test scenes that cache a config manager but no skin service.
+        skinDropdown.CustomSkinName.BindTo(config.GetBindable<string>(JukeBoxSetting.CustomSkinPath));
         fpsDisplayDropdown.Current = config.GetBindable<FpsDisplayMode>(JukeBoxSetting.FpsDisplayMode);
         renderChartCheckbox.Current = config.GetBindable<bool>(JukeBoxSetting.RenderChart);
         playHitSoundsCheckbox.Current = config.GetBindable<bool>(JukeBoxSetting.PlayHitSounds);
@@ -739,6 +744,44 @@ public partial class SettingsOverlay : FocusedOverlayContainer
         }
 
         protected override LocalisableString Header => header;
+    }
+
+    /// <summary>
+    /// The gameplay-skin dropdown, identical to a plain <see cref="SettingsEnumDropdown{T}"/>
+    /// except that <see cref="JukeBoxSkin.Custom"/> is labelled with the imported skin's own name
+    /// ("Custom: Aristia") once there is one — the enum's <c>[Description]</c> alone can only say
+    /// something generic, and a user with a skin imported wants to see WHICH one this entry means.
+    /// </summary>
+    internal partial class SkinSettingsDropdown : SettingsEnumDropdown<JukeBoxSkin>
+    {
+        public readonly Bindable<string> CustomSkinName = new Bindable<string>(string.Empty);
+
+        protected override OsuDropdown<JukeBoxSkin> CreateDropdown() => new SkinDropdownControl(CustomSkinName);
+
+        protected override void LoadComplete()
+        {
+            base.LoadComplete();
+
+            // Item text is generated when the item list is assigned, so a name arriving later
+            // (a .osk dropped mid-session) needs the list re-assigned to take effect. Dropdown
+            // keeps its Current across the reassignment, since the same values are still present.
+            CustomSkinName.BindValueChanged(_ => Items = Items.ToArray());
+        }
+
+        private partial class SkinDropdownControl : DropdownControl
+        {
+            private readonly IBindable<string> customSkinName;
+
+            public SkinDropdownControl(IBindable<string> customSkinName)
+            {
+                this.customSkinName = customSkinName;
+            }
+
+            protected override LocalisableString GenerateItemText(JukeBoxSkin item)
+                => item == JukeBoxSkin.Custom && customSkinName.Value.Length > 0
+                    ? $"Custom: {customSkinName.Value}"
+                    : base.GenerateItemText(item);
+        }
     }
 
     /// <summary>

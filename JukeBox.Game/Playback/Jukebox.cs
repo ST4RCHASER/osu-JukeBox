@@ -155,9 +155,14 @@ public partial class Jukebox : Component
     /// <see cref="SkipCurrent"/>. Every current caller (UI event handlers such as
     /// MapIdOverlay/BeatmapListingOverlay's submit actions) already runs there.
     /// </remarks>
-    public async Task EnqueueAndMaybePlayAsync(BeatmapSetInfo set)
+    /// <param name="set">The set to queue.</param>
+    /// <param name="announce">Whether a successful enqueue raises <see cref="Enqueued"/>. Drag-and-drop
+    /// imports pass false and report the outcome themselves (see <see cref="Import.DroppedFileImporter"/>):
+    /// their message carries information the generic notification can't — the replay's player for a
+    /// dropped .osr — and the two toasts would otherwise be drawn on top of each other.</param>
+    public async Task EnqueueAndMaybePlayAsync(BeatmapSetInfo set, bool announce = true)
     {
-        if (queue.Enqueue(set))
+        if (queue.Enqueue(set) && announce)
             Enqueued?.Invoke(set);
 
         // Fire-and-forget: start caching this set immediately rather than waiting for its turn
@@ -349,6 +354,16 @@ public partial class Jukebox : Component
                 Schedule(clearStatus);
                 continue;
             }
+
+            // A set carrying a dropped replay must play the EXACT difficulty that replay was
+            // recorded on — identified by checksum at import time — not the set's default one,
+            // which is generally a different diff entirely. Done after PlayAsync rather than
+            // instead of it so the normal path stays untouched; SwitchDifficultyAsync keeps the
+            // clock running and reloads the track only if that difficulty uses different audio.
+            string? replayDiff = next.Replay?.OsuFile;
+
+            if (replayDiff != null && replayDiff != cached.PreferredOsuFile && cached.OsuFiles.Contains(replayDiff))
+                await playback.SwitchDifficultyAsync(replayDiff).ConfigureAwait(false);
 
             Schedule(() =>
             {
