@@ -363,23 +363,64 @@ namespace JukeBox.Game.Tests.Visual
 
         // ---- osu!mania ----
 
-        /// <summary>Only one key count can be in force at a time, which is lazer's own rule (every
-        /// ManiaModKeyN lists all the others among its exclusions) rather than one asserted here.</summary>
+        /// <summary>
+        /// The nine key-count mods are driven by one checkbox plus a 1-9 value now, but the thing
+        /// they drive is unchanged: exactly one <c>ManiaModKeyN</c>, resolved by acronym. Exclusivity
+        /// is inherent to a single value — this is the proof that the collapse preserved it rather
+        /// than the proof that lazer enforces it.
+        /// </summary>
         [Test]
-        public void KeyModsAreMutuallyExclusive()
+        public void OneKeyCountAtATimeAndNoneWhenUnticked()
         {
             AddStep("play a mania difficulty", () => playingMania());
 
-            AddStep("select 4K", () => selection.Enabled(ChartMod.Key4).Value = true);
-            AddAssert("4K on", () => selection.Enabled(ChartMod.Key4).Value);
+            AddStep("select 4 keys", () => selection.Enabled(ChartMod.Key4).Value = true);
+            AddAssert("only 4K is on", () => keyModsOn().SequenceEqual(new[] { ChartMod.Key4 }));
 
-            AddStep("select 7K", () => selection.Enabled(ChartMod.Key7).Value = true);
+            AddStep("select 7 keys instead", () =>
+            {
+                selection.Enabled(ChartMod.Key4).Value = false;
+                selection.Enabled(ChartMod.Key7).Value = true;
+            });
 
-            AddAssert("7K on", () => selection.Enabled(ChartMod.Key7).Value);
-            AddAssert("4K switched itself off", () => !selection.Enabled(ChartMod.Key4).Value);
-            AddAssert("exactly one key mod is on",
-                () => selection.Selected.Count(m => m.Acronym().EndsWith("K", StringComparison.Ordinal)) == 1);
+            AddAssert("only 7K is on", () => keyModsOn().SequenceEqual(new[] { ChartMod.Key7 }));
+            AddAssert("and it builds as 7K for mania",
+                () => selection.CreateFor(new ManiaRuleset()).Single().Acronym == "7K");
+
+            AddStep("turn the override off", () => selection.Enabled(ChartMod.Key7).Value = false);
+            AddAssert("no key mod is on", () => keyModsOn().Count == 0);
+            AddAssert("and mania builds none", () => selection.CreateFor(new ManiaRuleset()).Count == 0);
         }
+
+        /// <summary>Every count osu!mania offers resolves to its own real mod — the catalogue's
+        /// acronym mapping is what the collapsed control indexes into.</summary>
+        [Test]
+        public void EveryKeyCountFromOneToNineResolvesToItsOwnMod()
+        {
+            AddStep("play a mania difficulty", () => playingMania());
+
+            for (int keys = ChartModCatalog.min_key_count; keys <= ChartModCatalog.max_key_count; keys++)
+            {
+                int captured = keys;
+
+                AddStep($"select {captured} keys", () =>
+                {
+                    foreach (var m in ChartModCatalog.KeyCountMods)
+                        selection.Enabled(m).Value = false;
+
+                    selection.Enabled(ChartModCatalog.KeyCountMod(captured)!.Value).Value = true;
+                });
+
+                AddAssert($"mania builds {captured}K",
+                    () => selection.CreateFor(new ManiaRuleset()).Single().Acronym == $"{captured}K");
+            }
+
+            AddAssert("and nothing outside 1-9 is offered at all",
+                () => ChartModCatalog.KeyCountMod(0) == null && ChartModCatalog.KeyCountMod(10) == null);
+        }
+
+        private IReadOnlyList<ChartMod> keyModsOn()
+            => ChartModCatalog.KeyCountMods.Where(m => selection.Enabled(m).Value).ToArray();
 
         /// <summary>
         /// Fade In makes the notes appear late where Hidden makes them vanish early, so osu!mania
@@ -514,7 +555,7 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("the map is 4 columns in one stage",
                 () => maniaBeatmap().TotalColumns == 4 && maniaBeatmap().Stages.Count == 1);
 
-            AddStep("select 7K + Co-op", () =>
+            AddStep("select 7 keys + Co-op", () =>
             {
                 selection.Enabled(ChartMod.Key7).Value = true;
                 selection.Enabled(ChartMod.DualStages).Value = true;

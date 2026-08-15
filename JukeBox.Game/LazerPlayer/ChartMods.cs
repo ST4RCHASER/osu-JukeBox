@@ -134,6 +134,33 @@ public static class ChartModCatalog
 
     public static bool OfferedBy(ChartMod mod, int rulesetId) => rulesets_offering[mod].Contains(rulesetId);
 
+    /// <summary>The lowest and highest key count osu!mania offers a mod for.</summary>
+    public const int min_key_count = 1;
+
+    public const int max_key_count = 9;
+
+    /// <summary>
+    /// The column count this mod forces, or null for anything that isn't a key-count mod. Read off
+    /// the acronym — osu! names them "1K" through "9K" — so the pair below can't drift apart.
+    /// </summary>
+    public static int? KeyCountOf(ChartMod mod)
+    {
+        string acronym = mod.Acronym();
+
+        return acronym.Length == 2 && acronym[1] == 'K' && char.IsDigit(acronym[0])
+            ? acronym[0] - '0'
+            : null;
+    }
+
+    /// <summary>The key-count mod for a column count, or null when osu!mania has none (only
+    /// <see cref="min_key_count"/>..<see cref="max_key_count"/> exist as Chart tab entries).</summary>
+    public static ChartMod? KeyCountMod(int keys)
+        => all_mods.Where(m => KeyCountOf(m) == keys).Select(m => (ChartMod?)m).FirstOrDefault();
+
+    /// <summary>Every key-count mod, ascending — the nine the Chart tab collapses into one
+    /// checkbox-plus-value control.</summary>
+    public static IEnumerable<ChartMod> KeyCountMods => all_mods.Where(m => KeyCountOf(m) != null).OrderBy(KeyCountOf);
+
     /// <summary>
     /// Whether this mod can only change a beatmap that is being CONVERTED into its ruleset, and so
     /// does nothing to a beatmap already native to it. True for osu!mania's key counts and Co-op:

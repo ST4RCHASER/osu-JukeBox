@@ -133,6 +133,26 @@ public partial class ChartPanel : CompositeDrawable
     /// </summary>
     private readonly Dictionary<ChartMod, Container> modRowHosts = new Dictionary<ChartMod, Container>();
 
+    /// <summary>The collapsed key-count control (checkbox + 1-9 value) and its own availability
+    /// wrapper, standing in for the nine <c>ManiaModKeyN</c> rows.</summary>
+    private SettingsCheckbox keyOverrideCheckbox = null!;
+
+    private SettingsSlider<int> keyCountRow = null!;
+
+    private Container keyOverrideHost = null!;
+
+    private readonly BindableBool keyOverrideUi = new BindableBool();
+
+    private readonly BindableInt keyCountUi = new BindableInt(4)
+    {
+        MinValue = ChartModCatalog.min_key_count,
+        MaxValue = ChartModCatalog.max_key_count,
+        Precision = 1,
+    };
+
+    /// <summary>Guards the selection→controls direction from being echoed straight back.</summary>
+    private bool applyingKeySelection;
+
     /// <summary>One per <see cref="ModType"/> category actually built, hidden entirely when the
     /// playing ruleset offers none of its mods.</summary>
     private readonly Dictionary<ModType, Drawable> modCategories = new Dictionary<ModType, Drawable>();
@@ -174,8 +194,39 @@ public partial class ChartPanel : CompositeDrawable
 
     internal SettingsCheckbox ModCheckbox(ChartMod mod) => modCheckboxes[mod];
 
-    /// <summary>Test-only: whether a mod's row is offered for what is currently playing.</summary>
+    /// <summary>Test-only: whether a mod's row is offered for what is currently playing. Key counts
+    /// have no row of their own any more — see <see cref="KeyOverrideOffered"/>.</summary>
     internal bool ModOffered(ChartMod mod) => modRowHosts[mod].Alpha > 0;
+
+    /// <summary>Test-only access to the collapsed key-count control.</summary>
+    internal SettingsCheckbox KeyOverrideCheckbox => keyOverrideCheckbox;
+
+    internal SettingsSlider<int> KeyCountSlider => keyCountRow;
+
+    internal bool KeyOverrideOffered => keyOverrideHost.Alpha > 0;
+
+    /// <summary>Test-only: whether the key-count control refuses input because it can only act on a
+    /// converted beatmap.</summary>
+    internal bool KeyOverrideInert => keyOverrideUi.Disabled && keyCountUi.Disabled;
+
+    /// <summary>
+    /// Test seam (JukeBox.Game.Tests has InternalsVisibleTo): pretend the chart is a beatmap
+    /// converted from another mode, which is the one state in which the key-count control is live.
+    /// It has no such state in the app today — every chart is native to its own ruleset, so the
+    /// control is always greyed — and without this the whole control-to-selection direction would
+    /// ship unexercised. Mirrors LazerChartLayer.SnapOnBigSeeks in shape and purpose.
+    /// </summary>
+    internal bool AssumeConvertedBeatmap
+    {
+        get => assumeConvertedBeatmap;
+        set
+        {
+            assumeConvertedBeatmap = value;
+            updateModRowStates();
+        }
+    }
+
+    private bool assumeConvertedBeatmap;
 
     /// <summary>Test-only: whether a mod category's block is on screen at all.</summary>
     internal bool ModCategoryVisible(ModType type) => modCategories[type].Alpha > 0;
@@ -360,11 +411,21 @@ public partial class ChartPanel : CompositeDrawable
             // above them — see ChartModCatalog.AppliesOnlyToConverts.
             if (mods.Any(ChartModCatalog.AppliesOnlyToConverts))
             {
-                rows.Add(convertsOnlyNote = note("Key counts and Co-op only apply to beatmaps converted from another mode — this map is already in its own."));
+                rows.Add(convertsOnlyNote = note("The key count and Co-op only apply to beatmaps converted from another mode — this map is already in its own."));
             }
+
+            // The nine key-count mods collapse into one checkbox plus a 1-9 value (user request):
+            // they are mutually exclusive by nature, so nine rows were nine ways of saying one
+            // number. Built where the first of them would have appeared, so the category's order is
+            // otherwise unchanged.
+            if (mods.Any(m => ChartModCatalog.KeyCountOf(m) != null))
+                rows.Add(keyOverrideHost = createKeyCountControl());
 
             foreach (var mod in mods)
             {
+                if (ChartModCatalog.KeyCountOf(mod) != null)
+                    continue;
+
                 modUi[mod] = new BindableBool();
                 modCheckboxes[mod] = new SettingsCheckbox { LabelText = mod.Label() };
 
@@ -396,6 +457,60 @@ public partial class ChartPanel : CompositeDrawable
 
         return new LazerSection("Mods", FontAwesome.Solid.SlidersH) { Children = blocks };
     }
+
+    /// <summary>
+    /// The nine <c>ManiaModKeyN</c> rows as one control: a checkbox that says whether the key count
+    /// is being overridden at all, and a bounded 1-9 value that says to what. Ticked plus N selects
+    /// <c>ManiaModKeyN</c> and nothing else; unticked selects none. Nothing about how the mod is
+    /// resolved changed — <see cref="ChartModSelection"/> still holds one <see cref="ChartMod"/> per
+    /// key count and still materialises it by acronym from the ruleset's own mods.
+    ///
+    /// <para>
+    /// The value is a lazer <see cref="SettingsSlider{T}"/> over a bounded
+    /// <see cref="BindableInt"/>, which is what lazer itself uses for a bounded integer setting —
+    /// out-of-range is unreachable by construction rather than clamped after the fact, so there is
+    /// no typed value to silently lose. The count is mirrored into the row's own label because a
+    /// slider otherwise only shows its value in a hover tooltip, and a key count you have to hover
+    /// to read is not much of an answer to "which one is selected".
+    /// </para>
+    /// </summary>
+    private Container createKeyCountControl()
+    {
+        keyOverrideCheckbox = new SettingsCheckbox { LabelText = "Override key count" };
+
+        keyCountRow = new SettingsSlider<int>
+        {
+            LabelText = keyCountLabel(keyCountUi.Value),
+            KeyboardStep = 1,
+        };
+
+        return new Container
+        {
+            RelativeSizeAxes = Axes.X,
+            AutoSizeAxes = Axes.Y,
+            Child = new FillFlowContainer
+            {
+                RelativeSizeAxes = Axes.X,
+                AutoSizeAxes = Axes.Y,
+                Direction = FillDirection.Vertical,
+                Children = new Drawable[]
+                {
+                    keyOverrideCheckbox,
+                    // Indented under its checkbox, the same dependent-row shape SettingsOverlay
+                    // uses for "Play on main window too".
+                    new Container
+                    {
+                        RelativeSizeAxes = Axes.X,
+                        AutoSizeAxes = Axes.Y,
+                        Padding = new MarginPadding { Left = 24 },
+                        Child = keyCountRow,
+                    },
+                },
+            },
+        };
+    }
+
+    private static string keyCountLabel(int keys) => $"Keys: {keys}";
 
     private Drawable createElementsSection()
     {
@@ -572,6 +687,10 @@ public partial class ChartPanel : CompositeDrawable
         foreach (var (mod, host) in modRowHosts)
             host.Alpha = ChartModCatalog.OfferedBy(mod, mode) ? 1 : 0;
 
+        // The collapsed control stands in for the nine key-count mods, so it is offered exactly
+        // where they are.
+        keyOverrideHost.Alpha = ChartModCatalog.KeyCountMods.Any(m => ChartModCatalog.OfferedBy(m, mode)) ? 1 : 0;
+
         foreach (var (type, block) in modCategories)
             block.Alpha = ChartModCatalog.Categories.First(c => c.Type == type).Mods.Any(m => ChartModCatalog.OfferedBy(m, mode)) ? 1 : 0;
 
@@ -605,12 +724,27 @@ public partial class ChartPanel : CompositeDrawable
             ui.Disabled = replayLocked || inert;
             modCheckboxes[mod].FadeTo(replayLocked || inert ? locked_alpha : 1, Theme.HoverFadeDuration, Easing.OutQuint);
         }
+
+        // Same two reasons for the collapsed key-count control, and the value follows its checkbox:
+        // there is nothing to pick a count FOR while the override is off.
+        bool keysInert = !assumeConvertedBeatmap && ChartModCatalog.KeyCountMods.All(ChartModCatalog.AppliesOnlyToConverts);
+
+        keyOverrideUi.Disabled = replayLocked || keysInert;
+        keyCountUi.Disabled = replayLocked || keysInert || !keyOverrideUi.Value;
+
+        keyOverrideCheckbox.FadeTo(replayLocked || keysInert ? locked_alpha : 1, Theme.HoverFadeDuration, Easing.OutQuint);
+        keyCountRow.FadeTo(keyCountUi.Disabled ? locked_alpha : 1, Theme.HoverFadeDuration, Easing.OutQuint);
     }
 
     private void bindMods(ChartModSelection selection)
     {
         foreach (var mod in Enum.GetValues<ChartMod>())
         {
+            // The key counts have no row of their own — they are driven by the collapsed control
+            // bound below.
+            if (ChartModCatalog.KeyCountOf(mod) != null)
+                continue;
+
             var captured = mod;
             var ui = modUi[mod];
             var source = selection.Enabled(mod);
@@ -630,11 +764,104 @@ public partial class ChartPanel : CompositeDrawable
             ui.BindValueChanged(e => selection.Enabled(captured).Value = e.NewValue);
         }
 
+        bindKeyCountControl(selection);
+
         replayActive.BindTo(selection.ReplayActive);
         replayModAcronyms.BindTo(selection.ReplayModAcronyms);
 
         replayActive.BindValueChanged(_ => updateReplayLock(), true);
         replayModAcronyms.BindValueChanged(_ => updateReplayLock(), true);
+    }
+
+    /// <summary>
+    /// Two-way sync between the collapsed control and the nine key-count mods the selection
+    /// actually holds. Both directions lift the disable before writing, for the same reason every
+    /// other adapter here does: the lock exists to stop USER edits, and a disabled bindable throws
+    /// on any write at all.
+    /// </summary>
+    private void bindKeyCountControl(ChartModSelection selection)
+    {
+        keyOverrideCheckbox.Current = keyOverrideUi;
+        keyCountRow.Current = keyCountUi;
+
+        foreach (var mod in ChartModCatalog.KeyCountMods)
+            selection.Enabled(mod).BindValueChanged(_ => syncKeyControlsFrom(selection));
+
+        syncKeyControlsFrom(selection);
+
+        keyOverrideUi.BindValueChanged(_ =>
+        {
+            applyKeySelection(selection);
+
+            // The value is a dependent row: it enables and disables with its checkbox, so the
+            // shared state pass has to run again right here rather than waiting for the next
+            // ruleset or replay change.
+            updateModRowStates();
+        });
+
+        keyCountUi.BindValueChanged(e =>
+        {
+            keyCountRow.LabelText = keyCountLabel(e.NewValue);
+            applyKeySelection(selection);
+        });
+    }
+
+    /// <summary>Selection → control: which key count is on, if any.</summary>
+    private void syncKeyControlsFrom(ChartModSelection selection)
+    {
+        if (applyingKeySelection)
+            return;
+
+        var selected = ChartModCatalog.KeyCountMods
+                                      .Where(m => selection.Enabled(m).Value)
+                                      .Select(m => (ChartMod?)m)
+                                      .FirstOrDefault();
+
+        applyingKeySelection = true;
+
+        try
+        {
+            write(keyOverrideUi, selected != null);
+
+            // An unticked control keeps the last count it showed rather than snapping back to a
+            // default, so unticking and re-ticking returns what the user had.
+            if (selected != null && ChartModCatalog.KeyCountOf(selected.Value) is int keys)
+                write(keyCountUi, keys);
+        }
+        finally
+        {
+            applyingKeySelection = false;
+        }
+    }
+
+    /// <summary>Control → selection: exactly one key-count mod on, or none.</summary>
+    private void applyKeySelection(ChartModSelection selection)
+    {
+        if (applyingKeySelection)
+            return;
+
+        applyingKeySelection = true;
+
+        try
+        {
+            var wanted = keyOverrideUi.Value ? ChartModCatalog.KeyCountMod(keyCountUi.Value) : null;
+
+            foreach (var mod in ChartModCatalog.KeyCountMods)
+                selection.Enabled(mod).Value = wanted == mod;
+        }
+        finally
+        {
+            applyingKeySelection = false;
+        }
+    }
+
+    private static void write<T>(Bindable<T> bindable, T value)
+    {
+        bool wasDisabled = bindable.Disabled;
+
+        bindable.Disabled = false;
+        bindable.Value = value;
+        bindable.Disabled = wasDisabled;
     }
 
     /// <summary>
