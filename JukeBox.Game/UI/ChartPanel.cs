@@ -108,11 +108,15 @@ public partial class ChartPanel : CompositeDrawable
     /// <see cref="updateVisibleElementGroups"/>.</summary>
     private readonly Dictionary<int, Drawable> elementGroups = new Dictionary<int, Drawable>();
 
-    private OsuSpriteText replayModsNote = null!;
+    private OsuTextFlowContainer replayModsNote = null!;
+
+    /// <summary>What <see cref="replayModsNote"/> currently says. Kept alongside it because
+    /// <see cref="TextFlowContainer.Text"/> is write-only.</summary>
+    private string replayModsNoteText = string.Empty;
 
     /// <summary>Explains the permanently-inapplicable conversion mods; shown whenever any of those
     /// rows is on screen. Null when no such category was built.</summary>
-    private OsuSpriteText? convertsOnlyNote;
+    private OsuTextFlowContainer? convertsOnlyNote;
 
     private readonly Bindable<CachedBeatmapSet?> currentSet = new Bindable<CachedBeatmapSet?>();
     private readonly Bindable<string?> selectedOsuFile = new Bindable<string?>();
@@ -139,7 +143,7 @@ public partial class ChartPanel : CompositeDrawable
     internal bool ElementGroupVisible(int rulesetId) => elementGroups[rulesetId].Alpha > 0;
 
     /// <summary>Test-only: the "mods come from the replay" line, empty when no replay is playing.</summary>
-    internal string ReplayModsNote => replayModsNote.Text.ToString();
+    internal string ReplayModsNote => replayModsNoteText;
 
     /// <summary>
     /// Test-only: whether the mod rows are in their locked (replay) presentation — EVERY mod's
@@ -213,22 +217,32 @@ public partial class ChartPanel : CompositeDrawable
         };
     }
 
+    /// <summary>
+    /// An explanatory line under a section header, in the same shape (and with the same content
+    /// padding) as the one SettingsOverlay puts under its OAuth rows. A flow container rather than
+    /// a plain sprite because these sentences are longer than the 340px column: a single-line
+    /// <see cref="OsuSpriteText"/> simply ran off the panel's right edge.
+    /// </summary>
+    private static OsuTextFlowContainer note(string text) => new OsuTextFlowContainer(t => t.Font = OsuFont.GetFont(size: 12))
+    {
+        Alpha = 0,
+        RelativeSizeAxes = Axes.X,
+        AutoSizeAxes = Axes.Y,
+        Colour = Theme.TextTertiary,
+        Text = text,
+        Padding = new MarginPadding
+        {
+            Left = SettingsPanel.CONTENT_PADDING.Left,
+            Right = SettingsPanel.CONTENT_PADDING.Right,
+            Bottom = 6,
+        },
+    };
+
     private Drawable createModsSection()
     {
-        replayModsNote = new OsuSpriteText
-        {
-            // Alpha 0 (not removed) keeps it out of the flow entirely while no replay plays — a
-            // zero-alpha child isn't IsPresent, so the surrounding flow leaves no gap.
-            Alpha = 0,
-            Colour = Theme.TextTertiary,
-            Font = OsuFont.GetFont(size: 12),
-            Margin = new MarginPadding
-            {
-                Left = SettingsPanel.CONTENT_PADDING.Left,
-                Right = SettingsPanel.CONTENT_PADDING.Right,
-                Bottom = 6,
-            },
-        };
+        // Alpha 0 (not removed) keeps a note out of the flow entirely while it has nothing to say —
+        // a zero-alpha child isn't IsPresent, so the surrounding flow leaves no gap.
+        replayModsNote = note(string.Empty);
 
         var blocks = new List<Drawable> { replayModsNote };
 
@@ -244,19 +258,7 @@ public partial class ChartPanel : CompositeDrawable
             // above them — see ChartModCatalog.AppliesOnlyToConverts.
             if (mods.Any(ChartModCatalog.AppliesOnlyToConverts))
             {
-                rows.Add(convertsOnlyNote = new OsuSpriteText
-                {
-                    Alpha = 0,
-                    Colour = Theme.TextTertiary,
-                    Font = OsuFont.GetFont(size: 12),
-                    Text = "Key counts and Co-op only apply to converted beatmaps — this map is already in its own mode.",
-                    Margin = new MarginPadding
-                    {
-                        Left = SettingsPanel.CONTENT_PADDING.Left,
-                        Right = SettingsPanel.CONTENT_PADDING.Right,
-                        Bottom = 6,
-                    },
-                });
+                rows.Add(convertsOnlyNote = note("Key counts and Co-op only apply to beatmaps converted from another mode — this map is already in its own."));
             }
 
             foreach (var mod in mods)
@@ -470,12 +472,13 @@ public partial class ChartPanel : CompositeDrawable
 
         var acronyms = replayModAcronyms.Value;
 
-        replayModsNote.Text = !locked
+        replayModsNoteText = !locked
             ? string.Empty
             : acronyms.Count > 0
                 ? $"Replay is playing — its mods are in force: {string.Join(" ", acronyms)}"
                 : "Replay is playing — it was a no-mod play";
 
+        replayModsNote.Text = replayModsNoteText;
         replayModsNote.Alpha = locked ? 1 : 0;
     }
 
