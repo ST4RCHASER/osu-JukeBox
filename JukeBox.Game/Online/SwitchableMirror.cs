@@ -33,6 +33,12 @@ namespace JukeBox.Game.Online
 
         public string Name => "switchable";
 
+        /// <summary>What the mirrors can currently offer between them — see
+        /// <see cref="MirrorChain.SupportedFilters"/>. Recomputed per read rather than cached: it
+        /// changes whenever a mirror fails or recovers, which is exactly when the listing needs to
+        /// add or drop rows.</summary>
+        public SearchFilters SupportedFilters => buildChain().SupportedFilters;
+
         public SwitchableMirror(IBeatmapMirror nerinyan, IBeatmapMirror catboy, IBeatmapMirror osuDirect, Bindable<MirrorSource> preferredMirror,
                                 MirrorHealth? health = null)
         {

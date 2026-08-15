@@ -22,19 +22,11 @@ namespace JukeBox.Game.Online
             => $"{API_BASE}/search?query={Uri.EscapeDataString(r.Query)}&limit={r.PageSize}";
 
         /// <summary>
-        /// This API takes a keyword and a limit and nothing else — probing it live with mode,
-        /// status, sort and paging parameters returns the byte-identical first page every time. So
-        /// it can only honestly answer a bare keyword search on the first page; anything carrying a
-        /// filter is left to a mirror that can express it (see
-        /// <see cref="IBeatmapMirror.CanApplyFilters"/>).
+        /// A keyword and a limit, and nothing else — probing this API live with mode, status, sort
+        /// and paging parameters returns the byte-identical first page every time. It cannot even
+        /// page, so it only ever serves the first one.
         /// </summary>
-        public bool CanApplyFilters(SearchRequest r)
-            => r.Mode == null
-               && r.Extra == SearchExtra.None
-               && !r.HasStarRange
-               && r.Sort == SearchRequest.DEFAULT_SORT
-               && r.Status == SearchRequest.ANY_STATUS
-               && r.Page == 0;
+        public SearchFilters SupportedFilters => SearchFilters.Keyword;
 
         public async Task<List<BeatmapSetInfo>> SearchAsync(SearchRequest request, CancellationToken ct = default)
         {

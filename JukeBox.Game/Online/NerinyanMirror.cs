@@ -19,6 +19,13 @@ namespace JukeBox.Game.Online
         public string Name => "NeriNyan";
         public NerinyanMirror(HttpClient http) => this.http = http;
 
+        /// <summary>
+        /// The full mirror vocabulary: this is the only mirror whose search takes the osu-web
+        /// filter set, star ranges included (through its b64 transport — see
+        /// <see cref="BuildSearchUrl"/>). Genre and language are osu-web concepts no mirror exposes.
+        /// </summary>
+        public SearchFilters SupportedFilters => SearchFilters.AllMirror;
+
         internal static string BuildSearchUrl(SearchRequest r)
         {
             int maxPage = Math.Max(0, 10000 / Math.Max(1, r.PageSize) - 1);

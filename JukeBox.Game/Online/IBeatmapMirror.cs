@@ -31,10 +31,20 @@ public interface IBeatmapMirror
     /// mirror that would drop filters once no capable one could answer (reporting it through
     /// <see cref="SearchRequest.OnFiltersDropped"/>), so the filter rows can never quietly lie.
     ///
-    /// Defaulted to true: a mirror that accepts everything — and any test stub, which is asked
-    /// nothing more than the query — needs no opinion here.
+    /// Derived from <see cref="SupportedFilters"/>: a request is servable when everything it
+    /// actually exercises is something this mirror can express.
     /// </summary>
-    bool CanApplyFilters(SearchRequest request) => true;
+    bool CanApplyFilters(SearchRequest request) => (request.RequiredFilters & ~SupportedFilters) == SearchFilters.None;
+
+    /// <summary>
+    /// Which filters this mirror's search can express, as individual flags — the listing shows
+    /// exactly the rows the backend about to serve it can honour, rather than offering controls
+    /// that are silently ignored.
+    ///
+    /// Defaulted to <see cref="SearchFilters.All"/> so a test stub (asked nothing beyond a query)
+    /// needs no opinion; every real mirror states its own.
+    /// </summary>
+    SearchFilters SupportedFilters => SearchFilters.All;
 
     /// <summary>
     /// Streams set <paramref name="setId"/>'s .osz into <paramref name="destination"/>, optionally
