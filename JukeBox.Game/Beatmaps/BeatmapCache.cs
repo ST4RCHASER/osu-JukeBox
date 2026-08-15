@@ -306,6 +306,10 @@ public class BeatmapCache
                 set.AudioFile = File.Exists(audioPath) ? audioPath : null;
             }
 
+            // Checked only once no real file resolved, so a set that actually ships a file called
+            // "virtual.mp3" plays that file instead of a silent track.
+            set.HasVirtualAudio = set.AudioFile == null && OsuFileScanner.IsVirtualAudioFilename(preferredInfo.AudioFilename);
+
             if (preferredInfo.BackgroundFilename != null)
             {
                 string bgPath = Path.Combine(baseDir, preferredInfo.BackgroundFilename);

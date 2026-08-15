@@ -530,7 +530,12 @@ public partial class BeatmapVisuals : CompositeDrawable
     /// </summary>
     private void updateLazerLayer()
     {
-        bool wantLayer = (renderChart.Value || playHitSounds.Value) && chartWorking != null && osuFile != null;
+        // A keysound-only set IS its hitsounds — the silent track carries no music, so leaving
+        // them off the user's setting would play the map in total silence. Forced on for these
+        // sets only; the setting is untouched and governs everything else as before.
+        bool hitSounds = playHitSounds.Value || set.HasVirtualAudio;
+
+        bool wantLayer = (renderChart.Value || hitSounds) && chartWorking != null && osuFile != null;
 
         if (wantLayer && chartLayer == null)
         {
@@ -553,7 +558,7 @@ public partial class BeatmapVisuals : CompositeDrawable
         if (chartLayer != null)
         {
             chartLayer.Alpha = renderChart.Value ? 1 : 0;
-            chartLayer.HitSoundsEnabled.Value = playHitSounds.Value;
+            chartLayer.HitSoundsEnabled.Value = hitSounds;
         }
     }
 
