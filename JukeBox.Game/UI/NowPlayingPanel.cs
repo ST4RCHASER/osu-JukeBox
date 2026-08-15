@@ -126,6 +126,7 @@ public partial class NowPlayingPanel : CompositeDrawable
     private SpriteText artistText = null!;
     private SpriteText mapperText = null!;
     private SpriteText replayText = null!;
+    private SpriteText replayModsText = null!;
 
     // Last text actually written to elapsedText/totalText, as whole seconds — SpriteText.Text
     // re-lays-out glyphs on every write, so Update() (which runs every frame) only touches these
@@ -180,6 +181,9 @@ public partial class NowPlayingPanel : CompositeDrawable
 
     /// <summary>Test-only: the "Played by X" credit shown for a set queued from a dropped replay.</summary>
     internal SpriteText ReplayText => replayText;
+
+    /// <summary>Test-only: the replay's mod acronyms ("HD HR DT"), blank for a no-mod play.</summary>
+    internal SpriteText ReplayModsText => replayModsText;
 
     /// <summary>Test-only: the song block's own drawables, so a test can assert what the block is
     /// made of (no accent rule, three text lines) without reaching into its layout.</summary>
@@ -285,6 +289,20 @@ public partial class NowPlayingPanel : CompositeDrawable
                                         Truncate = true,
                                         Font = FontUsage.Default.With(size: Theme.CaptionTextSize),
                                         Colour = Theme.Accent,
+                                    },
+                                    // The play's mods, as plain acronyms on their own line under
+                                    // the player credit. Text rather than lazer's ModIcon
+                                    // drawables: each icon is a ~60px composite, and five of them
+                                    // would dominate a 340px column whose every other line is
+                                    // caption-sized text — this reads as part of the metadata
+                                    // block, truncates like its neighbours, and costs one
+                                    // SpriteText.
+                                    replayModsText = new SpriteText
+                                    {
+                                        RelativeSizeAxes = Axes.X,
+                                        Truncate = true,
+                                        Font = FontUsage.Default.With(family: "Roboto", weight: "Bold", size: Theme.CaptionTextSize - 1),
+                                        Colour = Theme.TextSecondary,
                                     },
                                 },
                             },
@@ -552,12 +570,14 @@ public partial class NowPlayingPanel : CompositeDrawable
         string artist = change.NewValue?.DisplayArtist ?? string.Empty;
         string creator = change.NewValue?.Creator ?? string.Empty;
         string player = change.NewValue?.Replay?.PlayerName ?? string.Empty;
+        var replayMods = change.NewValue?.Replay?.ModAcronyms;
 
         songInfo.FadeOut(Theme.DurationFast, Theme.EaseExit).OnComplete(_ =>
         {
             titleText.Text = title;
             artistText.Text = artist;
             replayText.Text = player.Length > 0 ? $"Played by {player}" : string.Empty;
+            replayModsText.Text = replayMods is { Count: > 0 } ? string.Join(" ", replayMods) : string.Empty;
             // Sets served without a creator (and the nothing-playing state) leave this blank rather
             // than printing a credit to nobody; SpriteText collapses to zero height, so the flow
             // above simply closes up.

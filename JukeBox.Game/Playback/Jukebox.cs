@@ -340,6 +340,12 @@ public partial class Jukebox : Component
                 continue;
             }
 
+            // Set BEFORE the track starts, and set on every round (not just replay rounds), so the
+            // rate a previous replay forced can never leak into the next song — this one write is
+            // the single point of control for it.
+            double replayRate = next.Replay?.Rate ?? 1;
+            Schedule(() => playback.ReplayRate.Value = replayRate);
+
             bool played = await playback.PlayAsync(cached).ConfigureAwait(false);
 
             if (!played)

@@ -715,10 +715,19 @@ namespace JukeBox.Game.Tests.Visual
                 Title = "Blue Zenith",
                 Artist = "xi",
                 Creator = "Asphyxia",
-                Replay = new JukeBox.Game.Replays.ReplayAttachment { PlayerName = "Cookiezi" },
+                Replay = new JukeBox.Game.Replays.ReplayAttachment
+                {
+                    PlayerName = "Cookiezi",
+                    ModAcronyms = new[] { "HD", "HR", "DT" },
+                    Rate = 1.5,
+                },
             });
 
             AddUntilStep("player credited", () => nowPlaying.ReplayText.Text.ToString() == "Played by Cookiezi");
+            AddAssert("mods listed under the player", () => nowPlaying.ReplayModsText.Text.ToString() == "HD HR DT");
+            AddAssert("mods read below the player",
+                () => nowPlaying.ReplayModsText.ScreenSpaceDrawQuad.TopLeft.Y
+                      >= nowPlaying.ReplayText.ScreenSpaceDrawQuad.TopLeft.Y);
             AddAssert("mapper credit kept", () => nowPlaying.MapperText.Text.ToString() == "mapped by Asphyxia");
             AddAssert("player reads below the mapper",
                 () => nowPlaying.ReplayText.ScreenSpaceDrawQuad.TopLeft.Y
@@ -732,6 +741,23 @@ namespace JukeBox.Game.Tests.Visual
             });
 
             AddUntilStep("credit clears", () => nowPlaying.ReplayText.Text.ToString().Length == 0);
+            AddAssert("and so does the mods row", () => nowPlaying.ReplayModsText.Text.ToString().Length == 0);
+        }
+
+        // A no-mod play must not leave an empty row sitting under the credit.
+        [Test]
+        public void ANoModReplayShowsTheCreditWithNoModsRow()
+        {
+            AddStep("set NowPlaying with a no-mod replay", () => jukebox.NowPlaying.Value = new BeatmapSetInfo
+            {
+                Id = 10,
+                Title = "Nomod",
+                Creator = "Someone",
+                Replay = new JukeBox.Game.Replays.ReplayAttachment { PlayerName = "Vaxei" },
+            });
+
+            AddUntilStep("player credited", () => nowPlaying.ReplayText.Text.ToString() == "Played by Vaxei");
+            AddAssert("no mods row", () => nowPlaying.ReplayModsText.Text.ToString().Length == 0);
         }
 
         // The queue row is a fixed-height three-line card, so the replay credit takes the mapper
@@ -745,14 +771,29 @@ namespace JukeBox.Game.Tests.Visual
                 Title = "Replayed Row",
                 Artist = "Row Artist",
                 Creator = "Row Mapper",
-                Replay = new JukeBox.Game.Replays.ReplayAttachment { PlayerName = "Rafis" },
+                Replay = new JukeBox.Game.Replays.ReplayAttachment { PlayerName = "Rafis", ModAcronyms = new[] { "HD", "DT" } },
             }));
 
             AddUntilStep("row is laid out", () => queuePanel.RowCount == 1);
 
-            AddAssert("player credited", () => rowTexts().Contains("Played by Rafis"));
+            AddAssert("player and mods share the line", () => rowTexts().Contains("Played by Rafis · HD DT"));
             AddAssert("mapper line given over to it", () => !rowTexts().Contains("mapped by Row Mapper"));
             AddAssert("title still shown", () => rowTexts().Contains("Replayed Row"));
+        }
+
+        [Test]
+        public void QueueRowOmitsTheModSeparatorForANoModReplay()
+        {
+            AddStep("enqueue a set with a no-mod replay", () => queue.Enqueue(new BeatmapSetInfo
+            {
+                Id = 999,
+                Title = "Nomod Row",
+                Creator = "Row Mapper",
+                Replay = new JukeBox.Game.Replays.ReplayAttachment { PlayerName = "WhiteCat" },
+            }));
+
+            AddUntilStep("row is laid out", () => queuePanel.RowCount == 1);
+            AddAssert("credit carries no trailing separator", () => rowTexts().Contains("Played by WhiteCat"));
         }
 
         private List<string> rowTexts() => queuePanel.ChildrenOfType<SpriteText>().Select(t => t.Text.ToString()).ToList();

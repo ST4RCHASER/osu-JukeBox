@@ -10,6 +10,9 @@ using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Timing;
 using osu.Game.Beatmaps;
+using osu.Game.Beatmaps.Legacy;
+using osu.Game.Replays;
+using osu.Game.Rulesets.Osu.Replays;
 using osu.Game.Rulesets.Catch;
 using osu.Game.Rulesets.Mania;
 using osu.Game.Rulesets.Mods;
@@ -184,6 +187,79 @@ namespace JukeBox.Game.Tests.Visual
 
             AddStep("remove layer", () => Remove(host, true));
         }
+
+        // A replay's mods have to reach the ruleset, or the cursor is replaying a play that
+        // happened on a different-looking beatmap than the one being drawn. HR is the clearest
+        // proof: it mirrors the playfield vertically, so its effect is visible in the converted
+        // beatmap's own coordinates rather than only in a mods list.
+        [Test]
+        public void AReplaysModsReachTheRulesetAndTheConvertedBeatmap()
+        {
+            float unmoddedFirstY = 0;
+
+            AddStep("build an unmodded layer to measure against", () =>
+            {
+                manual.CurrentTime = 0;
+                string osu = Path.Combine(dir, "plain [0].osu");
+                File.WriteAllText(osu, beatmapForMode(0));
+
+                Add(host = new Container
+                {
+                    RelativeSizeAxes = Axes.Both,
+                    Clock = new FramedClock(manual),
+                    Child = layer = new LazerChartLayer(new FlatWorkingBeatmap(osu), osu),
+                });
+            });
+
+            AddUntilStep("unmodded layer loaded", () => layer.IsLoaded && layer.PlayableBeatmap != null);
+            AddStep("record the first object's position", () => unmoddedFirstY = firstObjectY());
+            AddStep("remove layer", () => Remove(host, true));
+
+            AddStep("build a layer from an HD/HR/DT replay", () =>
+            {
+                manual.CurrentTime = 0;
+                string osu = Path.Combine(dir, "modded [0].osu");
+                File.WriteAllText(osu, beatmapForMode(0));
+
+                var ruleset = LazerChartLayer.CreateRuleset(0);
+
+                // 8 | 16 | 64 = HD | HR | DT, the mod bitfield of the real replay this was verified
+                // against (Cookiezi, masterpiece [Insane], 2013-11-10).
+                var score = new Score
+                {
+                    Replay = new Replay { Frames = { new OsuReplayFrame(0, new osuTK.Vector2(64, 96)) } },
+                    ScoreInfo = new ScoreInfo
+                    {
+                        Ruleset = ruleset.RulesetInfo,
+                        Mods = ruleset.ConvertFromLegacyMods((LegacyMods)(8 | 16 | 64)).ToArray(),
+                    },
+                };
+
+                Add(host = new Container
+                {
+                    RelativeSizeAxes = Axes.Both,
+                    Clock = new FramedClock(manual),
+                    Child = layer = new LazerChartLayer(new FlatWorkingBeatmap(osu), osu, score),
+                });
+            });
+
+            AddUntilStep("modded layer loaded", () => layer.IsLoaded && layer.DrawableRuleset != null);
+
+            AddAssert("every replay mod reached the ruleset",
+                () => layer.DrawableRuleset!.Mods.Select(m => m.Acronym).ToHashSet().IsSupersetOf(new[] { "HD", "HR", "DT" }));
+
+            AddAssert("HR actually converted the beatmap (playfield mirrored)",
+                () => Math.Abs(firstObjectY() - (384 - unmoddedFirstY)) < 1);
+
+            AddAssert("the rate mod is carried but changes no gameplay time here",
+                () => ReplayMods.RateFor(layer.DrawableRuleset!.Mods) == 1.5
+                      && layer.PlayableBeatmap!.HitObjects[0].StartTime == 1000);
+
+            AddStep("remove layer", () => Remove(host, true));
+        }
+
+        private float firstObjectY()
+            => ((osu.Game.Rulesets.Osu.Objects.OsuHitObject)layer.PlayableBeatmap!.HitObjects[0]).Position.Y;
 
         // The fallback has to stay exactly as it was: no replay means the generated autoplay mod
         // drives gameplay, same as before drag-and-drop existed.
