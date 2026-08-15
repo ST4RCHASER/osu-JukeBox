@@ -168,6 +168,9 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
     [Resolved(canBeNull: true)]
     private PlayfieldElementVisibility? elementVisibility { get; set; }
 
+    [Resolved(canBeNull: true)]
+    private ChartConversion? conversion { get; set; }
+
     /// <summary>The playfield-element filter wrapping the ruleset, when one is in the chain (test
     /// hook; null in bare test scenes with no visibility service cached).</summary>
     internal PlayfieldElementFilter? ElementFilter { get; private set; }
@@ -175,8 +178,16 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
     [BackgroundDependencyLoader]
     private void load(GameHost host, AudioManager audio, IStorageResourceProvider resourceProvider)
     {
-        var ruleset = CreateRuleset(working.BeatmapInfo.Ruleset.OnlineID);
+        // The ruleset the chart is BUILT with, which is the beatmap's own unless the user has asked
+        // for a conversion and the target ruleset accepts this beatmap (see ChartConversion). A
+        // replay is never converted: its frames belong to the ruleset it was played on.
+        var ruleset = conversion?.EffectiveRulesetFor(working, allowConversion: replayScore == null)
+                      ?? CreateRuleset(working.BeatmapInfo.Ruleset.OnlineID);
+
         Ruleset = ruleset;
+
+        if (ruleset.RulesetInfo.OnlineID != working.BeatmapInfo.Ruleset.OnlineID)
+            osu.Framework.Logging.Logger.Log($"[LazerChartLayer] converting this beatmap to {ruleset.ShortName}");
 
         ModAutoplay? autoplay = null;
 
@@ -383,6 +394,11 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
         // frame-stability container exist once loaded, so the replay can be attached now. From
         // here the replay (the user's, or the generated autoplay one) drives gameplay entirely off
         // our inherited playback clock.
+        // What was ACTUALLY built is the last word on which ruleset is on screen — BeatmapVisuals
+        // publishes the same answer for a difficulty with no chart layer at all (hitsounds only, or
+        // rendering switched off), but when there is one, this is the thing that decided.
+        conversion?.Publish(working, allowConversion: replayScore == null);
+
         if (gameplayScore != null)
             drawableRuleset?.SetReplayScore(gameplayScore);
 

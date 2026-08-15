@@ -331,6 +331,9 @@ public partial class ChartModSelection : osu.Framework.Graphics.Component
     [Resolved(canBeNull: true)]
     private Jukebox? jukebox { get; set; }
 
+    [Resolved(canBeNull: true)]
+    private ChartConversion? conversion { get; set; }
+
     public BindableBool Enabled(ChartMod mod) => enabled[mod];
 
     /// <summary>The selected mods, in <see cref="ChartMod"/> order.</summary>
@@ -430,6 +433,10 @@ public partial class ChartModSelection : osu.Framework.Graphics.Component
     {
         get
         {
+            // A conversion decides what is on screen, so it decides which ruleset's rules apply.
+            if (conversion?.IsConverting.Value == true)
+                return conversion.EffectiveRulesetId.Value;
+
             var set = playback?.Current.Value;
 
             if (set == null || set.Difficulties.Count == 0)

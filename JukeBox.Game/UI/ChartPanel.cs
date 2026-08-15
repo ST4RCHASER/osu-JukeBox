@@ -94,6 +94,9 @@ public partial class ChartPanel : CompositeDrawable
     [Resolved(canBeNull: true)]
     private IRulesetConfigCache? rulesetConfigs { get; set; }
 
+    [Resolved(canBeNull: true)]
+    private ChartConversion? conversion { get; set; }
+
     // ---- per-ruleset settings, moved here from Settings; only built with the ruleset config cache ----
     private SettingsCheckbox snakingInCheckbox = null!;
     private SettingsCheckbox snakingOutCheckbox = null!;
@@ -121,6 +124,25 @@ public partial class ChartPanel : CompositeDrawable
 
     private SettingsCheckbox renderChartCheckbox = null!;
     private SettingsCheckbox playHitSoundsCheckbox = null!;
+
+    /// <summary>"Convert to", and the line explaining why it is greyed when the map on screen has
+    /// no conversion available.</summary>
+    private SettingsEnumDropdown<ChartConversionTarget>? convertDropdown;
+
+    private OsuTextFlowContainer? convertNote;
+
+    /// <summary>
+    /// Dropdown-facing adapter for the conversion target. The "nothing to convert" grey-out lives on
+    /// THIS bindable's Disabled, never on the service's own — that one is the config bindable, and a
+    /// disabled config bindable makes every programmatic SetValue throw. Same shape as the mod rows.
+    /// </summary>
+    private readonly Bindable<ChartConversionTarget> convertUi = new Bindable<ChartConversionTarget>();
+
+    private readonly IBindable<bool> sourceConvertible = new BindableBool();
+
+    private readonly IBindable<bool> isConverting = new BindableBool();
+
+    private readonly IBindable<int> effectiveRulesetId = new Bindable<int>();
     private SettingsCheckbox? hitLightingCheckbox;
 
     private readonly Dictionary<ChartMod, SettingsCheckbox> modCheckboxes = new Dictionary<ChartMod, SettingsCheckbox>();
@@ -198,6 +220,13 @@ public partial class ChartPanel : CompositeDrawable
     /// have no row of their own any more — see <see cref="KeyOverrideOffered"/>.</summary>
     internal bool ModOffered(ChartMod mod) => modRowHosts[mod].Alpha > 0;
 
+    /// <summary>Test-only access to the "Convert to" control and its explanation.</summary>
+    internal SettingsDropdown<ChartConversionTarget> ConvertDropdown => convertDropdown!;
+
+    internal bool ConvertNoteVisible => convertNote?.Alpha > 0;
+
+    internal bool ConvertInert => convertUi.Disabled;
+
     /// <summary>Test-only access to the collapsed key-count control.</summary>
     internal SettingsCheckbox KeyOverrideCheckbox => keyOverrideCheckbox;
 
@@ -208,25 +237,6 @@ public partial class ChartPanel : CompositeDrawable
     /// <summary>Test-only: whether the key-count control refuses input because it can only act on a
     /// converted beatmap.</summary>
     internal bool KeyOverrideInert => keyOverrideUi.Disabled && keyCountUi.Disabled;
-
-    /// <summary>
-    /// Test seam (JukeBox.Game.Tests has InternalsVisibleTo): pretend the chart is a beatmap
-    /// converted from another mode, which is the one state in which the key-count control is live.
-    /// It has no such state in the app today — every chart is native to its own ruleset, so the
-    /// control is always greyed — and without this the whole control-to-selection direction would
-    /// ship unexercised. Mirrors LazerChartLayer.SnapOnBigSeeks in shape and purpose.
-    /// </summary>
-    internal bool AssumeConvertedBeatmap
-    {
-        get => assumeConvertedBeatmap;
-        set
-        {
-            assumeConvertedBeatmap = value;
-            updateModRowStates();
-        }
-    }
-
-    private bool assumeConvertedBeatmap;
 
     /// <summary>Test-only: whether a mod category's block is on screen at all.</summary>
     internal bool ModCategoryVisible(ModType type) => modCategories[type].Alpha > 0;
@@ -301,6 +311,14 @@ public partial class ChartPanel : CompositeDrawable
                 },
             },
         };
+
+        if (conversion != null)
+        {
+            // Playing a map as another mode is a property of the chart itself rather than of any
+            // one ruleset, so it belongs with "render it at all" at the top.
+            ((LazerSection)sections[^1]).Add(convertDropdown = new SettingsEnumDropdown<ChartConversionTarget> { LabelText = "Convert to" });
+            ((LazerSection)sections[^1]).Add(convertNote = note("Only osu! maps can be played as another mode — this one is already in a mode of its own."));
+        }
 
         // Deliberate order, widest scope first: what to draw at all (Chart), then what is being
         // played (Mods), then everything about how the playfield itself draws — which pieces show
@@ -649,11 +667,54 @@ public partial class ChartPanel : CompositeDrawable
                 elementCheckboxes[entry.Element].Current = elements.Shown(entry.Element);
         }
 
+        if (conversion != null && convertDropdown != null)
+        {
+            convertDropdown.Current = convertUi;
+
+            // Two-way sync: service → UI lifts the disable for the mirroring write, since the
+            // disable exists to stop USER edits rather than programmatic ones.
+            conversion.Target.BindValueChanged(e =>
+            {
+                bool wasDisabled = convertUi.Disabled;
+
+                convertUi.Disabled = false;
+                convertUi.Value = e.NewValue;
+                convertUi.Disabled = wasDisabled;
+            }, true);
+
+            convertUi.BindValueChanged(e => conversion.Target.Value = e.NewValue);
+
+            sourceConvertible.BindTo(conversion.SourceConvertible);
+            isConverting.BindTo(conversion.IsConverting);
+            effectiveRulesetId.BindTo(conversion.EffectiveRulesetId);
+
+            sourceConvertible.BindValueChanged(_ => updateConversionState(), true);
+            isConverting.BindValueChanged(_ => updateForCurrentRuleset(), true);
+            effectiveRulesetId.BindValueChanged(_ => updateForCurrentRuleset());
+        }
+
         currentSet.BindTo(playback.Current);
         selectedOsuFile.BindTo(playback.SelectedOsuFile);
         currentSet.BindValueChanged(_ => updateForCurrentRuleset());
         selectedOsuFile.BindValueChanged(_ => updateForCurrentRuleset());
         updateForCurrentRuleset();
+    }
+
+    /// <summary>
+    /// A map with nothing to convert to gets a greyed control and a line saying why, the same
+    /// treatment the converts-only mod rows get. Convertibility is lazer's answer about the actual
+    /// decoded beatmap (see ChartConversion), published by whoever built the visuals.
+    /// </summary>
+    private void updateConversionState()
+    {
+        if (convertDropdown == null || convertNote == null)
+            return;
+
+        bool live = sourceConvertible.Value;
+
+        convertUi.Disabled = !live;
+        convertDropdown.FadeTo(live ? 1 : locked_alpha, Theme.HoverFadeDuration, Easing.OutQuint);
+        convertNote.Alpha = live ? 0 : 1;
     }
 
     /// <summary>Both halves of the tab narrow to what the chart on screen can actually use.</summary>
@@ -704,6 +765,7 @@ public partial class ChartPanel : CompositeDrawable
         }
 
         updateModRowStates();
+        updateConversionState();
     }
 
     /// <summary>
@@ -719,7 +781,7 @@ public partial class ChartPanel : CompositeDrawable
 
         foreach (var (mod, ui) in modUi)
         {
-            bool inert = ChartModCatalog.AppliesOnlyToConverts(mod);
+            bool inert = !isConverting.Value && ChartModCatalog.AppliesOnlyToConverts(mod);
 
             ui.Disabled = replayLocked || inert;
             modCheckboxes[mod].FadeTo(replayLocked || inert ? locked_alpha : 1, Theme.HoverFadeDuration, Easing.OutQuint);
@@ -727,7 +789,10 @@ public partial class ChartPanel : CompositeDrawable
 
         // Same two reasons for the collapsed key-count control, and the value follows its checkbox:
         // there is nothing to pick a count FOR while the override is off.
-        bool keysInert = !assumeConvertedBeatmap && ChartModCatalog.KeyCountMods.All(ChartModCatalog.AppliesOnlyToConverts);
+        // The key counts and Co-op reach the beatmap only through the CONVERTER, so they bite
+        // exactly when a conversion is in force — which is now a real, user-reachable state rather
+        // than something that could never happen.
+        bool keysInert = !isConverting.Value && ChartModCatalog.KeyCountMods.All(ChartModCatalog.AppliesOnlyToConverts);
 
         keyOverrideUi.Disabled = replayLocked || keysInert;
         keyCountUi.Disabled = replayLocked || keysInert || !keyOverrideUi.Value;
@@ -919,6 +984,11 @@ public partial class ChartPanel : CompositeDrawable
 
     private int currentMode()
     {
+        // While a conversion is in force the chart on screen IS the target ruleset, so that is what
+        // the mod rows and element groups are for.
+        if (isConverting.Value)
+            return effectiveRulesetId.Value;
+
         var set = currentSet.Value;
 
         if (set == null || set.Difficulties.Count == 0)

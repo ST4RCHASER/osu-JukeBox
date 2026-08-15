@@ -149,6 +149,7 @@ namespace JukeBox.Game
         private SkinSelection skinSelection = null!;
         private ChartModSelection chartMods = null!;
         private PlayfieldElementVisibility playfieldElements = null!;
+        private ChartConversion chartConversion = null!;
         private osu.Game.Skinning.SkinManager skinManager = null!;
         private DroppedFileImporter fileImporter = null!;
 
@@ -346,6 +347,9 @@ namespace JukeBox.Game
 
             Add(playfieldElements = new PlayfieldElementVisibility());
             dependencies.Cache(playfieldElements);
+
+            Add(chartConversion = new ChartConversion());
+            dependencies.Cache(chartConversion);
 
             // Drag-and-drop importer. Wired here (rather than in JukeBoxGame) so the test browser
             // and visual test scenes get it too — it resolves host.Window itself and simply has no

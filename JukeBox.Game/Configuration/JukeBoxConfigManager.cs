@@ -145,6 +145,17 @@ public enum JukeBoxSetting
     /// on load. Empty (the default) is "everything visible".
     /// </summary>
     HiddenPlayfieldElements,
+
+    /// <summary>
+    /// Which ruleset the chart is RENDERED as regardless of the mode its .osu declares — osu!'s own
+    /// "play a standard map as another mode" conversion. See
+    /// <see cref="LazerPlayer.ChartConversionTarget"/>; <c>Off</c> (the default) plays every map in
+    /// its own mode.
+    ///
+    /// Global rather than per-beatmap on purpose: it describes how the user wants to listen, not a
+    /// property of any one map (see <see cref="LazerPlayer.ChartConversion"/>).
+    /// </summary>
+    ConvertToRuleset,
 }
 
 /// <summary>
@@ -278,5 +289,6 @@ public class JukeBoxConfigManager : IniConfigManager<JukeBoxSetting>
 
         SetDefault(JukeBoxSetting.ChartMods, string.Empty);
         SetDefault(JukeBoxSetting.HiddenPlayfieldElements, string.Empty);
+        SetDefault(JukeBoxSetting.ConvertToRuleset, LazerPlayer.ChartConversionTarget.Off);
     }
 }
