@@ -23,14 +23,24 @@ namespace JukeBox.Game.Online
         private readonly IBeatmapMirror osuDirect;
         private readonly Bindable<MirrorSource> preferredMirror;
 
+        /// <summary>
+        /// Lives HERE rather than on the per-call <see cref="MirrorChain"/>: the chains are rebuilt
+        /// on every request (see <see cref="buildChain"/>), so anything remembered on one would be
+        /// thrown away immediately. This object is constructed once for the app's lifetime, which is
+        /// the only scope at which "that mirror just failed" means anything.
+        /// </summary>
+        private readonly MirrorHealth health;
+
         public string Name => "switchable";
 
-        public SwitchableMirror(IBeatmapMirror nerinyan, IBeatmapMirror catboy, IBeatmapMirror osuDirect, Bindable<MirrorSource> preferredMirror)
+        public SwitchableMirror(IBeatmapMirror nerinyan, IBeatmapMirror catboy, IBeatmapMirror osuDirect, Bindable<MirrorSource> preferredMirror,
+                                MirrorHealth? health = null)
         {
             this.nerinyan = nerinyan;
             this.catboy = catboy;
             this.osuDirect = osuDirect;
             this.preferredMirror = preferredMirror;
+            this.health = health ?? new MirrorHealth();
         }
 
         public Task<List<BeatmapSetInfo>> SearchAsync(SearchRequest request, CancellationToken ct = default)
@@ -57,7 +67,7 @@ namespace JukeBox.Game.Online
                 ordered.Insert(0, preferred);
             }
 
-            return new MirrorChain(ordered.ToArray());
+            return new MirrorChain(health, ordered.ToArray());
         }
     }
 }
