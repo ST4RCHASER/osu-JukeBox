@@ -34,13 +34,37 @@ public partial class Jukebox : Component
     public readonly Bindable<BeatmapSetInfo?> NowPlaying = new();
 
     /// <summary>
-    /// Human-readable progress feedback for whatever the current advance round is doing that
-    /// isn't instant — currently just "Downloading {title}…" while a cache-miss download is in
-    /// flight. Null the rest of the time (including while the round is otherwise busy but nothing
-    /// needs to download). UI (e.g. <see cref="UI.NowPlayingPanel"/>) shows this so a first-run
-    /// download doesn't look like the app hung with no feedback at all.
+    /// Human-readable progress feedback for whatever the current advance round is doing that isn't
+    /// instant, in the order a round reaches them: "Looking for a song…" while the radio searches a
+    /// mirror, "Downloading {title}…" while a cache-miss download runs, "Preparing {title}…" while
+    /// that download is extracted and its audio loaded. Null the rest of the time. UI (e.g.
+    /// <see cref="UI.NowPlayingPanel"/>) shows this so a slow round doesn't look like the app hung.
+    ///
+    /// <para>
+    /// A cache HIT deliberately writes nothing at all: that path is fast, and a status line that
+    /// flashes on and straight back off for every skip through already-cached songs is worse than
+    /// no line. Everything that keys off this — the panel's spinner, and
+    /// <see cref="CanSkipNext"/> — inherits that, so the fast path stays visually still.
+    /// </para>
     /// </summary>
     public readonly Bindable<string?> Status = new();
+
+    /// <summary>
+    /// Whether pressing next can currently change what plays next. False only while the radio is
+    /// mid-lookup with an empty queue: no song has been identified yet, so pressing next can do
+    /// nothing but abandon that search and start an identical one, making the wait longer. UI binds
+    /// this to disable its skip control (see <see cref="UI.TransportRow"/>).
+    ///
+    /// <para>
+    /// Deliberately NOT false for the whole of a slow round. While a DOWNLOAD is running there is a
+    /// real song to skip past, and skipping past it is exactly what the per-caller cancellation in
+    /// <see cref="BeatmapCache.GetAsync"/> exists to make instant — disabling next there would trap
+    /// the user behind a stalled download with no way out, which is a worse failure than the silent
+    /// wait this was added to fix. The queue term matters for the same reason: anything queued is
+    /// something concrete to skip TO, so next stays live even mid-lookup.
+    /// </para>
+    /// </summary>
+    public readonly Bindable<bool> CanSkipNext = new(true);
 
     /// <summary>
     /// The set id whose download the current advance round is waiting on, or null when it isn't
@@ -119,7 +143,27 @@ public partial class Jukebox : Component
     {
         base.LoadComplete();
         playback.TrackCompleted += onTrackCompleted;
+
+        // The queue is half of CanSkipNext's answer: enqueueing something during a lookup gives the
+        // user a concrete song to skip to, so next has to come back to life without waiting for the
+        // lookup to finish.
+        queue.Items.CollectionChanged += (_, _) => updateCanSkipNext();
     }
+
+    /// <summary>
+    /// Whether the radio is mid-lookup. Update thread only, like <see cref="statusShownBy"/> — set
+    /// from inside a <c>Schedule</c> either side of the search, and cleared again by the round's own
+    /// exit path as a safety net so a round that throws mid-search can't leave next dead.
+    /// </summary>
+    private bool lookingUp;
+
+    private void updateCanSkipNext() => CanSkipNext.Value = !lookingUp || queue.Items.Count > 0;
+
+    private void setLookingUp(bool value) => Schedule(() =>
+    {
+        lookingUp = value;
+        updateCanSkipNext();
+    });
 
     /// <summary>
     /// Marshals <paramref name="f"/> onto the update thread via <c>Schedule</c> and returns its
@@ -380,7 +424,7 @@ public partial class Jukebox : Component
 
     /// <summary>
     /// Which advance round currently owns the status line. Every write goes through
-    /// <see cref="showDownloadStatus"/>/<see cref="releaseStatus"/> carrying the round's own token,
+    /// <see cref="showStatus"/>/<see cref="releaseStatus"/> carrying the round's own token,
     /// and a write whose token is stale does nothing.
     ///
     /// <para>
@@ -409,14 +453,23 @@ public partial class Jukebox : Component
     /// </summary>
     private int statusShownBy;
 
-    private void showDownloadStatus(int owner, string title, int setId) => Schedule(() =>
+    /// <summary>
+    /// Puts <paramref name="text"/> on the status line on this round's behalf.
+    /// </summary>
+    /// <param name="owner">The round's status token.</param>
+    /// <param name="text">The line to show.</param>
+    /// <param name="setId">The set whose download progress the UI should poll and append as a
+    /// percentage, or null for a phase with no byte progress to report (the lookup, which hasn't
+    /// picked a set yet; the prepare, whose bytes are already down). The spinner runs for all of
+    /// them — it keys off the line existing, not off this.</param>
+    private void showStatus(int owner, string text, int? setId) => Schedule(() =>
     {
         // A superseded round must not announce at all — by the time this runs, the round that
         // replaced it may already be showing its own line.
         if (owner != Volatile.Read(ref statusOwner))
             return;
 
-        Status.Value = $"Downloading {title}…";
+        Status.Value = text;
         DownloadingSetId.Value = setId;
         statusShownBy = owner;
     });
@@ -464,6 +517,11 @@ public partial class Jukebox : Component
         {
             releaseStatus(owner);
 
+            // Safety net, in the same spirit as releaseStatus above: whatever happened in there —
+            // an unexpected fault mid-search, a cancellation, an early return — the lookup is over
+            // once the round is, and next must not be left permanently dead.
+            setLookingUp(false);
+
             lock (advanceLock)
             {
                 if (ReferenceEquals(roundCancellation, cancellation))
@@ -486,7 +544,26 @@ public partial class Jukebox : Component
             // to its CollectionChanged (see onUpdateThread's doc comment).
             BeatmapSetInfo? fromQueue = await onUpdateThread(() => queue.PopNext()).ConfigureAwait(false);
             bool viaRadio = fromQueue == null;
-            BeatmapSetInfo? next = fromQueue ?? await radio.PickRandomAsync().ConfigureAwait(false);
+            BeatmapSetInfo? next = fromQueue;
+
+            if (next == null)
+            {
+                // The phase the user actually complained about: searching a mirror for a random
+                // song takes seconds (longer still when mirrors are failing and RadioService works
+                // through its retries), and it used to show nothing whatsoever — no line, no
+                // spinner — so pressing next with an empty queue looked like a dead button.
+                showStatus(owner, "Looking for a song…", null);
+                setLookingUp(true);
+
+                try
+                {
+                    next = await radio.PickRandomAsync(ct).ConfigureAwait(false);
+                }
+                finally
+                {
+                    setLookingUp(false);
+                }
+            }
 
             if (next == null)
             {
@@ -502,7 +579,7 @@ public partial class Jukebox : Component
             bool wasCached = cache.IsCached(next.Id);
 
             if (!wasCached)
-                showDownloadStatus(owner, next.DisplayTitle, next.Id);
+                showStatus(owner, $"Downloading {next.DisplayTitle}…", next.Id);
 
             CachedBeatmapSet cached;
 
@@ -537,6 +614,14 @@ public partial class Jukebox : Component
                 abandonPrefetch(next.Id);
                 ct.ThrowIfCancellationRequested();
             }
+
+            // The gap between a download finishing and audio starting is the extract plus the
+            // track load — seconds for a large set, and previously as silent as the lookup was:
+            // the "Downloading…" line sat at 100% throughout, reading as a stuck download. Only
+            // announced for a round that actually downloaded; a cache hit reaches playback fast
+            // enough that a line here would just flicker (see Status's own doc).
+            if (!wasCached)
+                showStatus(owner, $"Preparing {next.DisplayTitle}…", null);
 
             // Set BEFORE the track starts, and set on every round (not just replay rounds), so the
             // rate a previous replay forced can never leak into the next song — this one write is

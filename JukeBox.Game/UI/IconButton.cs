@@ -104,7 +104,13 @@ internal partial class IconButton : ClickableContainer
 
     protected override bool OnHover(HoverEvent e)
     {
-        background.FadeColour(hoverColour, Theme.HoverFadeDuration);
+        // A disabled button that still lightens under the cursor reads as clickable, which is the
+        // one thing the disabled treatment exists to deny. ClickableContainer already refuses the
+        // click; this makes it look refused too. Costs nothing where Enabled is never cleared,
+        // which is every call site that simply sets Action.
+        if (Enabled.Value)
+            background.FadeColour(hoverColour, Theme.HoverFadeDuration);
+
         return base.OnHover(e);
     }
 
@@ -116,7 +122,7 @@ internal partial class IconButton : ClickableContainer
 
     protected override bool OnMouseDown(MouseDownEvent e)
     {
-        if (ready)
+        if (ready && Enabled.Value)
             this.ScaleTo(Theme.PressScale, Theme.PressScaleDuration, Easing.OutQuad);
         return base.OnMouseDown(e);
     }
