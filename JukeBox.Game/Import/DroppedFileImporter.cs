@@ -220,14 +220,22 @@ public partial class DroppedFileImporter : Component
             }
         }
 
+        var mods = ReplayMods.ForGameplay(score);
+
         var attachment = new ReplayAttachment
         {
             PlayerName = header.PlayerName,
             BeatmapMd5 = header.BeatmapMd5,
             OsuFile = osuFile,
             Score = score,
+            ModAcronyms = ReplayMods.Acronyms(mods),
+            Rate = ReplayMods.RateFor(mods),
+            RateShiftsPitch = ReplayMods.ShiftsPitch(mods),
             PlayedAt = header.PlayedAt,
         };
+
+        if (attachment.ModAcronyms.Count > 0)
+            Logger.Log($"[drop] {player} played with {string.Join(" ", attachment.ModAcronyms)} at {attachment.Rate:0.##}× speed");
 
         replays.Register(attachment);
         found.Replay = attachment;
