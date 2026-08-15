@@ -177,6 +177,72 @@ namespace JukeBox.Game.Tests.Visual
             AddUntilStep("fresh total adopted", () => engine.TotalResults == 42);
         }
 
+        // The exact user report: "i try change search api to mirror but it still use and show
+        // official". Asserts the WIRE, not just the row set — the next request must actually go to
+        // the mirror, carrying the filters the mirror rows are set to.
+        [Test]
+        public void SwitchingOfficialToMirrorSendsTheNextRequestToTheMirror()
+        {
+            AddStep("start on Official", () => config.SetValue(JukeBoxSetting.SearchApi, SearchApi.Official));
+            AddStep("search", () => engine.Query.Value = "camellia");
+            AddUntilStep("official answered", () => engine.LoadedFromOfficial);
+
+            AddStep("set filters the mirror supports", () =>
+            {
+                engine.Mode.Value = "m";
+                engine.Category.Value = "loved";
+            });
+            // Wait for the filter change's own debounced request to actually land, so the count
+            // snapshot below isn't taken with searches still queued.
+            AddUntilStep("official re-queried with the filters", () => officialHandler.LastSearchUrl!.Contains("s=loved"));
+            AddWaitStep("let the debounce settle", 10);
+
+            int officialRequestsBefore = 0;
+            AddStep("note the official request count", () => officialRequestsBefore = officialHandler.SearchRequests);
+
+            AddStep("switch the SETTING to Mirror", () => config.SetValue(JukeBoxSetting.SearchApi, SearchApi.Mirror));
+
+            AddUntilStep("the mirror answered", () => engine.LoadedSets.Any() && !engine.LoadedFromOfficial);
+            AddAssert("results are the mirror's", () => engine.LoadedSets[0].Title == "From Mirror");
+            AddAssert("official was not asked again", () => officialHandler.SearchRequests == officialRequestsBefore);
+
+            // The filters must travel on that mirror request — the whole point of the backend switch.
+            AddAssert("mirror request carried the mode", () => mirror.Requests.Last().Mode == "m");
+            AddAssert("mirror request carried the status", () => mirror.Requests.Last().Status == "loved");
+
+            AddAssert("mirror row set restored", () => listing.GenreRow.Alpha == 0 && listing.LanguageRow.Alpha == 0);
+        }
+
+        // A slow official response landing after the user already switched must not repaint the
+        // listing with official results — which is what "it still shows official" would look like
+        // even once the setting itself is honoured.
+        [Test]
+        public void OfficialResponseArrivingAfterASwitchIsDiscarded()
+        {
+            var gate = new TaskCompletionSource<bool>();
+
+            AddStep("hold the official response in flight", () =>
+            {
+                officialHandler.Gate = gate;
+                config.SetValue(JukeBoxSetting.SearchApi, SearchApi.Official);
+            });
+            AddStep("search", () => engine.Query.Value = "camellia");
+            AddUntilStep("official request is in flight", () => officialHandler.SearchRequests > 0);
+
+            AddStep("switch to Mirror mid-flight", () =>
+            {
+                officialHandler.Gate = null;
+                config.SetValue(JukeBoxSetting.SearchApi, SearchApi.Mirror);
+            });
+            AddUntilStep("mirror answered", () => engine.LoadedSets.Any() && !engine.LoadedFromOfficial);
+
+            AddStep("release the stale official response", () => gate.SetResult(true));
+            AddWaitStep("let it land", 10);
+
+            AddAssert("still the mirror's results", () => engine.LoadedSets[0].Title == "From Mirror");
+            AddAssert("still not marked official", () => !engine.LoadedFromOfficial);
+        }
+
         // ---- Fallback ---------------------------------------------------------------------------
 
         [Test]
@@ -383,6 +449,10 @@ namespace JukeBox.Game.Tests.Visual
         {
             public HttpStatusCode TokenStatus = HttpStatusCode.OK;
             public HttpStatusCode SearchStatus = HttpStatusCode.OK;
+
+            /// <summary>When set, searches block on this until the test releases it — the only way
+            /// to have an official response still in flight at the moment the backend changes.</summary>
+            public TaskCompletionSource<bool>? Gate;
             public string? NextCursor;
             public int SearchRequests;
             public string? LastSearchUrl;
@@ -407,6 +477,7 @@ namespace JukeBox.Game.Tests.Visual
             {
                 TokenStatus = HttpStatusCode.OK;
                 SearchStatus = HttpStatusCode.OK;
+                Gate = null;
                 NextCursor = null;
                 SearchRequests = 0;
                 LastSearchUrl = null;
@@ -428,6 +499,22 @@ namespace JukeBox.Game.Tests.Visual
 
                 SearchRequests++;
                 LastSearchUrl = url;
+
+                if (Gate != null)
+                    return respondAfterGate();
+
+                return respond();
+            }
+
+            private async Task<HttpResponseMessage> respondAfterGate()
+            {
+                await Gate!.Task.ConfigureAwait(false);
+                return await respond().ConfigureAwait(false);
+            }
+
+            private Task<HttpResponseMessage> respond()
+            {
+                string url = LastSearchUrl!;
 
                 if (SearchStatus != HttpStatusCode.OK)
                     return Task.FromResult(new HttpResponseMessage(SearchStatus) { Content = new StringContent("{}") });
