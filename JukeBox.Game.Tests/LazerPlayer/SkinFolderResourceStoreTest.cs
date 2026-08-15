@@ -75,6 +75,25 @@ namespace JukeBox.Game.Tests.LazerPlayer
             Assert.That(text(s.Get(@"sub dir\mixed case.png")), Is.EqualTo("mixed"));
         }
 
+        // The store sits below every ruleset, so the fix is not mania's alone — a taiko, catch or
+        // osu! element referenced the same way resolves the same way. Asserted rather than assumed,
+        // because "the mania fix probably generalises" is exactly the kind of claim that turns out
+        // to have an exception.
+        [TestCase("taiko", "taikohitcircle")]
+        [TestCase("catch", "fruit-apple")]
+        [TestCase("osu", "hitcircleoverlay")]
+        public void ResolvesEveryRulesetsElementsThroughTheSameNormalisation(string folder, string element)
+        {
+            Directory.CreateDirectory(Path.Combine(tmp, folder));
+            File.WriteAllText(Path.Combine(tmp, folder, element + ".png"), element);
+
+            using var s = store();
+            s.AddExtension("png");
+
+            // The capitalisation a skin.ini would carry, against the folder as it exists.
+            Assert.That(text(s.Get($@"{folder.ToUpperInvariant()}\{element}")), Is.EqualTo(element));
+        }
+
         // A name that genuinely isn't there must still miss, or every fallback in the skin chain
         // would stop at this store.
         [Test]
