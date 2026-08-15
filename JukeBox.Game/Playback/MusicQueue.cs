@@ -10,10 +10,18 @@ public class MusicQueue
 {
     public readonly BindableList<BeatmapSetInfo> Items = new();
 
-    public void Enqueue(BeatmapSetInfo set)
+    /// <summary>
+    /// Appends <paramref name="set"/> unless a set with the same id is already queued. Returns
+    /// whether it was actually added, so a caller can tell a real enqueue apart from a duplicate
+    /// that changed nothing (see <see cref="Jukebox.Enqueued"/>, which must not announce the
+    /// latter).
+    /// </summary>
+    public bool Enqueue(BeatmapSetInfo set)
     {
-        if (Items.Any(i => i.Id == set.Id)) return;
+        if (Items.Any(i => i.Id == set.Id)) return false;
+
         Items.Add(set);
+        return true;
     }
 
     public BeatmapSetInfo? PopNext()

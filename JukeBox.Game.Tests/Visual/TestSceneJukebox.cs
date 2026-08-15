@@ -232,6 +232,33 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("set2 waits queued instead of playing immediately", () => queue.Items.Any(i => i.Id == set2.Id));
         }
 
+        // Feeds MainScreen's "Added to queue: X" toast. Deliberately silent for a pick that was
+        // already queued: MusicQueue.Enqueue dedupes by set id, so a second announcement would
+        // claim something happened when the queue is unchanged.
+        [Test]
+        public void EnqueueRaisesTheEnqueuedEventOncePerNewlyQueuedSet()
+        {
+            var announced = new List<BeatmapSetInfo>();
+
+            AddStep("listen for enqueues", () => jukebox.Enqueued += set => announced.Add(set));
+
+            AddStep("enqueue set1", () => jukebox.EnqueueAndMaybePlayAsync(set1));
+            AddUntilStep("set1 announced", () => announced.Count == 1 && announced[0].Id == set1.Id);
+
+            // Both calls in one step body: MusicQueue.Enqueue and the event both run synchronously
+            // before EnqueueAndMaybePlayAsync's first await, so the second call is guaranteed to
+            // see set2 still queued — an advance round could only pop it a frame later.
+            AddStep("enqueue set2 twice in the same frame", () =>
+            {
+                _ = jukebox.EnqueueAndMaybePlayAsync(set2);
+                _ = jukebox.EnqueueAndMaybePlayAsync(set2);
+            });
+
+            AddWaitStep("let a few frames pass", 5);
+            AddAssert("set2 announced exactly once", () => announced.Count(a => a.Id == set2.Id) == 1);
+            AddAssert("nothing else announced", () => announced.Count == 2);
+        }
+
         // Builds a fixture .osz whose only difficulty has no AudioFilename key at all, so
         // BeatmapCache.LoadFromDirectory leaves CachedBeatmapSet.AudioFile null — the "no loadable
         // audio" case, distinct from `setFailing` above (which fails at the download/cache stage).
@@ -324,7 +351,7 @@ namespace JukeBox.Game.Tests.Visual
             public Task<List<BeatmapSetInfo>> SearchAsync(SearchRequest r, CancellationToken ct = default)
                 => Task.FromResult(searchResults);
 
-            public async Task DownloadAsync(int setId, bool noVideo, Stream destination, CancellationToken ct = default)
+            public async Task DownloadAsync(int setId, bool noVideo, Stream destination, CancellationToken ct = default, DownloadProgressCallback? progress = null)
             {
                 if (gates.TryGetValue(setId, out var gate))
                     await gate.Task.ConfigureAwait(false);
