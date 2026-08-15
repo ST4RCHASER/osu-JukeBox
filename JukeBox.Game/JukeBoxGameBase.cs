@@ -277,9 +277,10 @@ namespace JukeBox.Game
             // Cached unconditionally even with no credentials configured: BeatmapSearchEngine only
             // reaches for it when the user picked it, and it reports the missing credentials as an
             // ordinary search failure — which already falls back to the mirror.
-            dependencies.Cache(new OfficialBeatmapSearch(http,
+            var officialSearch = new OfficialBeatmapSearch(http,
                 config.GetBindable<string>(JukeBoxSetting.OsuClientId),
-                config.GetBindable<string>(JukeBoxSetting.OsuClientSecret)));
+                config.GetBindable<string>(JukeBoxSetting.OsuClientSecret));
+            dependencies.Cache(officialSearch);
 
             var cache = new BeatmapCache(Host.Storage.GetFullPath("cache"), mirror, config.Get<bool>(JukeBoxSetting.NoVideoDownloads));
             dependencies.Cache(cache);
@@ -291,7 +292,14 @@ namespace JukeBox.Game
             // played on. Cached before the visuals stack can resolve it (see BeatmapVisuals).
             dependencies.Cache(new Replays.ReplayStore());
 
-            var radio = new RadioService(mirror);
+            // The radio gets the SAME search backend the listing uses, plus the cache as a last
+            // resort. Both matter for reasons that only show up when the network is degraded: the
+            // mirrors' search endpoints and osu!'s own API fail independently (at the time of
+            // writing every mirror SEARCH was down while osu!'s API answered fine AND NeriNyan
+            // still served downloads), so a radio wired to the mirrors alone reported "nothing
+            // available" on a machine that could still find and play music.
+            var radio = new RadioService(mirror, null, officialSearch,
+                config.GetBindable<SearchApi>(JukeBoxSetting.SearchApi), cache);
             dependencies.Cache(radio);
 
             // Game.AddInternal is sealed to throw ("Use Add or Content instead") — Add routes
