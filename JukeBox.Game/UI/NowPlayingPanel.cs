@@ -429,7 +429,10 @@ public partial class NowPlayingPanel : CompositeDrawable
     private void openInBrowser()
     {
         var set = jukebox.NowPlaying.Value;
-        if (set == null)
+
+        // A non-positive id is a locally-imported set (see BeatmapCache.LocalSetId): there is no
+        // osu.ppy.sh page for it, so opening one would land the user on a 404.
+        if (set == null || set.Id <= 0)
             return;
 
         string url = $"https://osu.ppy.sh/beatmapsets/{set.Id}";
@@ -555,7 +558,8 @@ public partial class NowPlayingPanel : CompositeDrawable
         coverSprite = null;
         oldCover?.FadeOut(Theme.DurationNormal, Theme.EaseExit).Expire();
 
-        if (change.NewValue == null || thumbnailStore == null)
+        // Non-positive id: locally-imported set, no online cover to fetch (see CoverThumbnail).
+        if (change.NewValue == null || change.NewValue.Id <= 0 || thumbnailStore == null)
             return;
 
         _ = loadThumbnailAsync(change.NewValue.Id, myGeneration);

@@ -121,6 +121,131 @@ public class BeatmapCache
             : new DownloadProgress(0, true);
     }
 
+    /// <summary>
+    /// Imports a .osz that is already on disk (dragged onto the window — see
+    /// <see cref="Import.DroppedFileImporter"/>) into this cache, so it is indistinguishable from a
+    /// downloaded set everywhere downstream: same <c>cache/{setId}/</c> layout, same
+    /// <see cref="CachedBeatmapSet"/>, and a later <see cref="GetAsync"/> for the same id is a
+    /// plain cache hit that never touches a mirror.
+    ///
+    /// <para>
+    /// The id comes from the archive's own contents (see <see cref="ResolveArchiveSetId"/>). Extraction
+    /// goes to a staging directory first and is only moved into place once the id is known — the
+    /// staging name is deliberately not a bare integer, so <see cref="EvictToLimit"/> ignores it
+    /// exactly as it ignores <c>.extracting</c> directories. An existing directory for the resolved
+    /// id is replaced: re-dropping a .osz is the natural way to repair a partially-extracted or
+    /// stale copy.
+    /// </para>
+    /// </summary>
+    /// <returns>The imported set, loaded the same way a downloaded one is.</returns>
+    public CachedBeatmapSet ImportArchive(string archivePath)
+    {
+        Directory.CreateDirectory(root);
+
+        string staging = Path.Combine(root, $"import-{Guid.NewGuid():N}.extracting");
+
+        try
+        {
+            ZipFile.ExtractToDirectory(archivePath, staging);
+
+            if (!hasOsuFiles(staging))
+                throw new InvalidDataException("archive contains no .osu difficulty");
+
+            int setId = ResolveArchiveSetId(staging, archivePath);
+            string dir = Path.Combine(root, setId.ToString());
+
+            if (Directory.Exists(dir))
+                Directory.Delete(dir, true);
+
+            Directory.Move(staging, dir);
+            Logger.Log($"BeatmapCache: imported '{Path.GetFileName(archivePath)}' as set {setId}");
+
+            return LoadFromDirectory(setId, dir);
+        }
+        finally
+        {
+            // Only still present if something above threw before the move.
+            if (Directory.Exists(staging))
+            {
+                try
+                {
+                    Directory.Delete(staging, true);
+                }
+                catch (Exception ex)
+                {
+                    Logger.Error(ex, $"BeatmapCache: failed to clean up staging directory '{staging}'");
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// The cache id for an extracted archive: the first positive <c>[Metadata] BeatmapSetID</c> any
+    /// of its difficulties declares, else a synthetic local id derived from the set's metadata (see
+    /// <see cref="LocalSetId"/>).
+    ///
+    /// <para>
+    /// Unsubmitted maps, editor exports and some very old sets carry no id at all (or the -1
+    /// sentinel), and two different such sets must not collide on one cache directory — so the
+    /// fallback hashes the identity that actually distinguishes them (artist / title / creator),
+    /// which also means re-dropping the same .osz lands on the same directory instead of piling up
+    /// copies. Falls back to the archive's file name when even that metadata is absent.
+    /// </para>
+    /// </summary>
+    internal static int ResolveArchiveSetId(string extractedDir, string archivePath)
+    {
+        OsuFileInfo? first = null;
+
+        foreach (string osuFile in Directory.EnumerateFiles(extractedDir, "*.osu", osu_enum_options)
+                                            .OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
+        {
+            OsuFileInfo info;
+
+            try
+            {
+                info = OsuFileScanner.Scan(osuFile);
+            }
+            catch (Exception ex)
+            {
+                Logger.Error(ex, $"BeatmapCache: failed to scan '{osuFile}' while resolving an imported set id");
+                continue;
+            }
+
+            if (info.BeatmapSetId > 0)
+                return info.BeatmapSetId;
+
+            first ??= info;
+        }
+
+        string identity = string.Join('|', first?.Artist ?? "", first?.Title ?? "", first?.Creator ?? "");
+
+        if (identity.Replace("|", "").Length == 0)
+            identity = Path.GetFileNameWithoutExtension(archivePath);
+
+        return LocalSetId(identity);
+    }
+
+    /// <summary>
+    /// Hashes <paramref name="identity"/> into the NEGATIVE int range. Real osu! beatmapset ids are
+    /// always positive, so a negative id can never collide with one and doubles as the marker for
+    /// "local only, no mirror behind it" — which is why <see cref="EvictToLimit"/> refuses to evict
+    /// these (nothing could re-download them) and why the UI skips online cover/page lookups for
+    /// them. FNV-1a: no cryptographic requirement here, just a stable, dependency-free spread.
+    /// </summary>
+    internal static int LocalSetId(string identity)
+    {
+        uint hash = 2166136261;
+
+        foreach (char c in identity)
+        {
+            hash ^= c;
+            hash *= 16777619;
+        }
+
+        // [0, int.MaxValue] mapped onto [int.MinValue, -1] — every value negative, none zero.
+        return -(int)(hash & 0x7FFFFFFF) - 1;
+    }
+
     public CachedBeatmapSet LoadFromDirectory(int setId, string dir)
     {
         string[] osuFiles = Directory.EnumerateFiles(dir, "*.osu", osu_enum_options)
@@ -216,10 +341,19 @@ public class BeatmapCache
         {
             string name = Path.GetFileName(dir);
 
-            // Skip non-set directories: this also covers in-progress "<id>.extracting" dirs,
-            // since their name isn't a bare integer either.
+            // Skip non-set directories: this also covers in-progress "<id>.extracting" and
+            // "import-<guid>.extracting" dirs, since their names aren't bare integers either.
             if (!int.TryParse(name, out int setId))
                 continue;
+
+            // Locally-imported sets (negative ids — see LocalSetId) have no mirror behind them, so
+            // evicting one would destroy the only copy of a .osz the user dragged in. They still
+            // count towards the measured total below, they're just never candidates for deletion.
+            if (setId < 0)
+            {
+                total += dirSize(dir);
+                continue;
+            }
 
             long size = dirSize(dir);
             total += size;

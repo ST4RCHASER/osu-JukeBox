@@ -1,6 +1,7 @@
 #nullable enable
 
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 
@@ -15,18 +16,45 @@ public class OsuFileInfo
 
     /// <summary>[Metadata] Version — the difficulty name (e.g. "Easy", "Insane").</summary>
     public string? Version;
+
+    /// <summary>[Metadata] Title / TitleUnicode / Artist / ArtistUnicode / Creator, i.e. everything
+    /// <see cref="Online.BeatmapSetInfo"/> normally gets from a mirror's search response. Read here
+    /// so a locally-imported .osz (which never goes near a mirror — see
+    /// <see cref="BeatmapCache.ImportArchive"/>) can still present real metadata in the queue and
+    /// now-playing UI.</summary>
+    public string? Title;
+
+    public string? TitleUnicode;
+    public string? Artist;
+    public string? ArtistUnicode;
+    public string? Creator;
+
+    /// <summary>
+    /// [Metadata] BeatmapSetID, or -1 when the file doesn't declare one. Beatmaps exported from the
+    /// editor (and anything unsubmitted) legitimately have no id, or carry the sentinel -1 —
+    /// callers must treat any non-positive value as "no id" (see
+    /// <see cref="BeatmapCache.ResolveArchiveSetId"/>).
+    /// </summary>
+    public int BeatmapSetId = -1;
 }
 
 public class OsuFileScanner
 {
-    // Reads [General] (AudioFilename, Mode), [Metadata] (Version) and
-    // [Events] (background "0,0,\"bg.jpg\"" and video "Video,offset,\"v.mp4\"" / "1,offset,..." lines).
-    public static OsuFileInfo Scan(string osuPath)
+    // Reads [General] (AudioFilename, Mode), [Metadata] (Version, title/artist/creator,
+    // BeatmapSetID) and [Events] (background "0,0,\"bg.jpg\"" and video "Video,offset,\"v.mp4\"" /
+    // "1,offset,..." lines).
+    public static OsuFileInfo Scan(string osuPath) => ScanLines(File.ReadLines(osuPath));
+
+    /// <summary>
+    /// The line-level half of <see cref="Scan"/>, so a caller holding .osu content that isn't a
+    /// file on disk yet can reuse the exact same parse.
+    /// </summary>
+    public static OsuFileInfo ScanLines(IEnumerable<string> lines)
     {
         var info = new OsuFileInfo();
         string? section = null;
 
-        foreach (string rawLine in File.ReadLines(osuPath))
+        foreach (string rawLine in lines)
         {
             string line = rawLine.Trim();
             if (line.Length == 0 || line.StartsWith("//"))
@@ -67,8 +95,33 @@ public class OsuFileScanner
                     if (metaColon < 0)
                         break;
 
-                    if (line.Substring(0, metaColon).Trim() == "Version")
-                        info.Version = line.Substring(metaColon + 1).Trim();
+                    string metaKey = line.Substring(0, metaColon).Trim();
+                    string metaValue = line.Substring(metaColon + 1).Trim();
+
+                    switch (metaKey)
+                    {
+                        case "Version":
+                            info.Version = metaValue;
+                            break;
+                        case "Title":
+                            info.Title = metaValue;
+                            break;
+                        case "TitleUnicode":
+                            info.TitleUnicode = metaValue;
+                            break;
+                        case "Artist":
+                            info.Artist = metaValue;
+                            break;
+                        case "ArtistUnicode":
+                            info.ArtistUnicode = metaValue;
+                            break;
+                        case "Creator":
+                            info.Creator = metaValue;
+                            break;
+                        case "BeatmapSetID":
+                            int.TryParse(metaValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out info.BeatmapSetId);
+                            break;
+                    }
                     break;
 
                 case "Events":

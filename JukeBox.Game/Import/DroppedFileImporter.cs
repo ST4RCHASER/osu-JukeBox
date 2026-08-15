@@ -3,6 +3,8 @@
 using System;
 using System.IO;
 using System.Threading.Tasks;
+using JukeBox.Game.Beatmaps;
+using JukeBox.Game.Playback;
 using osu.Framework.Allocation;
 using osu.Framework.Bindables;
 using osu.Framework.Graphics;
@@ -37,6 +39,12 @@ public partial class DroppedFileImporter : Component
 
     [Resolved]
     private GameHost host { get; set; } = null!;
+
+    [Resolved]
+    private BeatmapCache cache { get; set; } = null!;
+
+    [Resolved]
+    private Jukebox jukebox { get; set; } = null!;
 
     private IWindow? subscribedWindow;
 
@@ -77,12 +85,16 @@ public partial class DroppedFileImporter : Component
         {
             switch (kind)
             {
+                case DroppedFileKind.BeatmapArchive:
+                    await importBeatmapArchiveAsync(path).ConfigureAwait(false);
+                    break;
+
                 case DroppedFileKind.Unsupported:
                     Notify($"Can't import {Path.GetFileName(path)} — drop a .osz, .osk or .osr", isError: true);
                     break;
 
                 default:
-                    // Phases 1-3 fill these in; every kind that reaches here is one the classifier
+                    // Phases 2-3 fill these in; every kind that reaches here is one the classifier
                     // recognises but nothing handles yet.
                     Notify($"Nothing handles {kind} yet", isError: true);
                     break;
@@ -93,8 +105,53 @@ public partial class DroppedFileImporter : Component
             Logger.Error(e, $"[drop] import of '{path}' failed");
             Notify($"Import failed: {e.Message}", isError: true);
         }
+    }
 
-        await Task.CompletedTask.ConfigureAwait(false);
+    /// <summary>
+    /// Extracts a dropped .osz into the beatmap cache and queues it. The extraction runs on the
+    /// threadpool (it is synchronous, disk-bound and can take seconds for a big set), and the
+    /// enqueue hops back onto the update thread — <see cref="Jukebox.EnqueueAndMaybePlayAsync"/>
+    /// touches the queue's <c>BindableList</c> directly and documents that requirement.
+    /// </summary>
+    private async Task importBeatmapArchiveAsync(string path)
+    {
+        var cached = await Task.Run(() => cache.ImportArchive(path)).ConfigureAwait(false);
+        var set = LocalBeatmapMetadata.Describe(cached);
+
+        await onUpdateThread(() => jukebox.EnqueueAndMaybePlayAsync(set, announce: false)).ConfigureAwait(false);
+
+        Notify($"Added: {(set.DisplayTitle.Length > 0 ? set.DisplayTitle : Path.GetFileName(path))}", isError: false);
+    }
+
+    /// <summary>
+    /// Runs <paramref name="action"/> on the update thread and completes once the task it returns
+    /// does. Mirrors <c>Jukebox.onUpdateThread</c>, and exists for the same reason: everything this
+    /// importer does after its first <c>await</c> is on the threadpool, but the jukebox's queue may
+    /// only be touched from the update thread.
+    /// </summary>
+    private Task onUpdateThread(Func<Task> action)
+    {
+        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        Schedule(() =>
+        {
+            try
+            {
+                action().ContinueWith(t =>
+                {
+                    if (t.IsFaulted)
+                        tcs.SetException(t.Exception!.InnerExceptions);
+                    else
+                        tcs.SetResult();
+                }, TaskScheduler.Default);
+            }
+            catch (Exception ex)
+            {
+                tcs.SetException(ex);
+            }
+        });
+
+        return tcs.Task;
     }
 
     /// <summary>
