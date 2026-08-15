@@ -577,9 +577,23 @@ namespace JukeBox.Game.Tests.Visual
         private DifficultySwitcher.DifficultyDropdown dropdown()
             => nowPlaying.ChildrenOfType<DifficultySwitcher.DifficultyDropdown>().Single();
 
-        // The badge strip the dropdown would draw for an item, without opening the menu — a
-        // DropdownMenu only builds its row drawables once it has been popped open.
-        private Drawable badgesFor(DifficultyInfo difficulty) => dropdown().BadgesForTest(difficulty)!;
+        /// <summary>
+        /// The dropdown's REAL menu rows, in list order. Deliberately not the badge factory that
+        /// builds a strip on demand: these assertions are about what the open list actually draws,
+        /// and a factory-based helper passed happily for a whole round while every real row rendered
+        /// a bare name (the framework builds a row's content inside a base constructor, before the
+        /// badges reach the subclass — see DifficultyMenuItem). Rows exist as soon as Items is set,
+        /// so the menu does not have to be popped open to inspect them.
+        /// </summary>
+        private System.Collections.Generic.List<Menu.DrawableMenuItem> menuRows()
+            => dropdown().ChildrenOfType<Menu.DrawableMenuItem>().ToList();
+
+        private static DifficultyInfo? difficultyOf(Menu.DrawableMenuItem row)
+            => (row.Item as DropdownMenuItem<DifficultyInfo?>)?.Value;
+
+        private Drawable badgesFor(DifficultyInfo difficulty)
+            => menuRows().Single(r => difficultyOf(r) == difficulty)
+                         .ChildrenOfType<DifficultySwitcher.DifficultyBadges>().Single();
 
         private IconUsage iconOf(DifficultyInfo difficulty)
             => badgesFor(difficulty).ChildrenOfType<SpriteIcon>().First().Icon;
@@ -592,6 +606,90 @@ namespace JukeBox.Game.Tests.Visual
 
         private Color4 pillColourOf(DifficultyInfo difficulty)
             => starPillOf(difficulty).ChildrenOfType<Box>().Single().Colour;
+
+        /// <summary>A three-difficulty set whose alphabetical order (Hard, Insane, Normal) and star
+        /// order (Normal 2.10, Hard 3.20, Insane 4.90) disagree — so a test can tell which one the
+        /// dropdown actually used. Mirrors the set in the user's screenshot.</summary>
+        private CachedBeatmapSet gradedSet(int setId = 110)
+        {
+            var set = new CachedBeatmapSet { SetId = setId, Directory = tmp, AudioFile = fixtureSet.AudioFile, PreferredOsuFile = "hard.osu" };
+            set.OsuFiles.AddRange(new[] { "hard.osu", "insane.osu", "normal.osu" });
+            set.Difficulties.Add(new DifficultyInfo { Path = "hard.osu", Version = "Hard", Mode = 0 });
+            set.Difficulties.Add(new DifficultyInfo { Path = "insane.osu", Version = "Insane", Mode = 0 });
+            set.Difficulties.Add(new DifficultyInfo { Path = "normal.osu", Version = "Normal", Mode = 0 });
+            return set;
+        }
+
+        private static BeatmapSetInfo gradedRatings(int setId = 110) => new BeatmapSetInfo
+        {
+            Id = setId,
+            Title = "Graded",
+            Beatmaps =
+            {
+                new BeatmapInfo { Mode = "osu", Version = "Hard", DifficultyRating = 3.20 },
+                new BeatmapInfo { Mode = "osu", Version = "Insane", DifficultyRating = 4.90 },
+                new BeatmapInfo { Mode = "osu", Version = "Normal", DifficultyRating = 2.10 },
+            },
+        };
+
+        // The regression this round exists for: every REAL row rendered a bare name while the closed
+        // header showed its badges, because the framework builds a row's content from inside a base
+        // constructor — before the subclass field holding the badges is assigned.
+        [Test]
+        public void DifficultyDropdownRowsCarryTheirIconAndPill()
+        {
+            AddStep("play a graded set with ratings", () =>
+            {
+                playback.Current.Value = gradedSet(113);
+                playback.SelectedOsuFile.Value = "hard.osu";
+                jukebox.NowPlaying.Value = gradedRatings(113);
+            });
+
+            AddUntilStep("rows built", () => menuRows().Count(r => difficultyOf(r) != null) == 3);
+
+            AddAssert("every row draws a badge strip", () => menuRows()
+                .Where(r => difficultyOf(r) != null)
+                .All(r => r.ChildrenOfType<DifficultySwitcher.DifficultyBadges>().Any()));
+            AddAssert("every row draws a ruleset icon", () => menuRows()
+                .Where(r => difficultyOf(r) != null)
+                .All(r => r.ChildrenOfType<SpriteIcon>().Any(i => i.Icon.Equals(OsuIcon.RulesetOsu))));
+            AddAssert("every row draws its own rating", () => menuRows()
+                .Where(r => difficultyOf(r) != null)
+                .Select(r => r.ChildrenOfType<CircularContainer>().Single()
+                              .ChildrenOfType<osu.Framework.Graphics.Sprites.SpriteText>().Single().Text.ToString())
+                .OrderBy(t => t)
+                .SequenceEqual(new[] { "2.10", "3.20", "4.90" }));
+            // The badge strip is auto-sized, so the label's inset is measured a frame late and only
+            // while the row is actually running Update — i.e. once the menu is open. Open it and
+            // poll, rather than asserting on a closed menu that never ran that pass.
+            AddStep("open the menu", () =>
+            {
+                InputManager.MoveMouseTo(dropdown().ChildrenOfType<DropdownHeader>().Single());
+                InputManager.Click(MouseButton.Left);
+            });
+
+            AddUntilStep("every label is pushed clear of its badges", () => menuRows()
+                .Where(r => difficultyOf(r) != null)
+                .All(r => r.ChildrenOfType<osu.Framework.Graphics.Sprites.SpriteText>()
+                           .Any(t => t.Text.ToString() == difficultyOf(r)!.Version
+                                     && t.Padding.Left > unbadged_label_inset)));
+
+            // …by at least the width of those badges, so the two can't collide. Compared against the
+            // measured strip rather than a constant: the pill's width follows its rendered digits.
+            AddAssert("by at least the badge strip's own width", () => menuRows()
+                .Where(r => difficultyOf(r) != null)
+                .All(r =>
+                {
+                    var badges = r.ChildrenOfType<DifficultySwitcher.DifficultyBadges>().Single();
+                    var label = r.ChildrenOfType<osu.Framework.Graphics.Sprites.SpriteText>()
+                                 .First(t => t.Text.ToString() == difficultyOf(r)!.Version);
+                    return badges.DrawWidth > 0 && label.Padding.Left >= unbadged_label_inset + badges.DrawWidth;
+                }));
+        }
+
+        /// <summary>Lazer's own label inset on an unbadged dropdown row — a badged row must clear
+        /// it by the width of its badges.</summary>
+        private const float unbadged_label_inset = 15;
 
         private IEnumerable<DifficultySwitcher.DifficultyBadges> headerBadges()
             => nowPlaying.DifficultySwitcher.ChildrenOfType<DifficultySwitcher.DifficultyBadges>();
