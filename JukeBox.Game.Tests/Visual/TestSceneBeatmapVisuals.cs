@@ -39,6 +39,11 @@ namespace JukeBox.Game.Tests.Visual
         [Cached]
         private readonly osu.Framework.Bindables.Bindable<osuTK.Vector2> playerBoxSize = new();
 
+        // Mirrors MainScreen's own [Cached] notifier, so the video-unplayable notice can be observed
+        // here rather than only through the full screen.
+        [Cached]
+        private readonly JukeBox.Game.Screens.VideoNotifier videoNotifier = new JukeBox.Game.Screens.VideoNotifier();
+
         [Resolved]
         private JukeBoxConfigManager config { get; set; } = null!;
 
@@ -389,6 +394,148 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("so it does not count as a playable video", () => !visuals.HasVideoLayer);
             AddAssert("and the background is not hidden for it", () => !visuals.StoryboardLayer.ShouldHideBackground);
             AddUntilStep("the user sees the background, not black", () => visuals.BackgroundVisible);
+
+            AddStep("remove visuals", () => Remove(visuals, true));
+        }
+
+        // The fallback to the background is silent on its own — indistinguishable from a map that
+        // simply has no video. Say it once, so the background reads as a deliberate fallback.
+        [Test]
+        public void AnUnplayableVideoIsAnnouncedOnce()
+        {
+            BeatmapVisuals visuals = null!;
+            int notices = 0;
+
+            AddStep("watch the notifier", () =>
+            {
+                videoNotifier.Notice.Value = null;
+                notices = 0;
+                videoNotifier.Notice.BindValueChanged(e =>
+                {
+                    if (e.NewValue != null)
+                        notices++;
+                });
+            });
+
+            AddStep("create visuals whose video file does not exist", () =>
+            {
+                string osuFile = Path.Combine(tmp, "notice [x].osu");
+                File.WriteAllText(osuFile, """
+                    osu file format v14
+
+                    [General]
+                    AudioFilename: audio.mp3
+                    Mode: 0
+
+                    [Events]
+                    0,0,"bg.png",0,0
+                    Video,0,"absent.avi"
+                    """);
+
+                var set = new CachedBeatmapSet
+                {
+                    SetId = 41,
+                    Directory = tmp,
+                    BackgroundFile = fixtureSetA.BackgroundFile,
+                    OsuFiles = { osuFile },
+                    PreferredOsuFile = osuFile,
+                };
+
+                Add(visuals = new BeatmapVisuals(set, playbackClock) { RelativeSizeAxes = Axes.Both });
+            });
+
+            AddUntilStep("the user is told", () => notices == 1);
+            AddAssert("and it says what happened instead",
+                () => videoNotifier.Notice.Value!.Contains("background", System.StringComparison.OrdinalIgnoreCase));
+
+            // A difficulty switch rebuilds the whole visual stack, which is exactly the case a
+            // per-drawable guard would miss — the notifier remembers the SET.
+            AddStep("rebuild the stack for the same set (as a difficulty switch does)", () =>
+            {
+                Remove(visuals, true);
+
+                var set = new CachedBeatmapSet
+                {
+                    SetId = 41,
+                    Directory = tmp,
+                    BackgroundFile = fixtureSetA.BackgroundFile,
+                    OsuFiles = { Path.Combine(tmp, "notice [x].osu") },
+                    PreferredOsuFile = Path.Combine(tmp, "notice [x].osu"),
+                };
+
+                Add(visuals = new BeatmapVisuals(set, playbackClock) { RelativeSizeAxes = Axes.Both });
+            });
+
+            AddUntilStep("the rebuilt stack loaded", () => visuals.IsLoaded);
+            AddWaitStep("give a second notice time to appear", 10);
+            AddAssert("still told exactly once", () => notices == 1);
+
+            AddStep("remove visuals", () => Remove(visuals, true));
+        }
+
+        // A video that plays, and a map with no video at all, must both stay silent — the notice
+        // exists for the broken case only.
+        [Test]
+        public void NothingIsAnnouncedForAWorkingVideoOrNoVideo()
+        {
+            BeatmapVisuals visuals = null!;
+            int notices = 0;
+
+            AddStep("watch the notifier", () =>
+            {
+                videoNotifier.Notice.Value = null;
+                notices = 0;
+                videoNotifier.Notice.BindValueChanged(e =>
+                {
+                    if (e.NewValue != null)
+                        notices++;
+                });
+            });
+
+            AddStep("create visuals with a video that really plays", () =>
+            {
+                File.Copy(Path.Combine(TestContext.CurrentContext.TestDirectory, "Fixtures", "sync-test-video.mp4"),
+                    Path.Combine(tmp, "works.mp4"), true);
+
+                string osuFile = Path.Combine(tmp, "works [x].osu");
+                File.WriteAllText(osuFile, """
+                    osu file format v14
+
+                    [General]
+                    AudioFilename: audio.mp3
+                    Mode: 0
+
+                    [Events]
+                    0,0,"bg.png",0,0
+                    Video,0,"works.mp4"
+                    """);
+
+                var set = new CachedBeatmapSet
+                {
+                    SetId = 42,
+                    Directory = tmp,
+                    BackgroundFile = fixtureSetA.BackgroundFile,
+                    OsuFiles = { osuFile },
+                    PreferredOsuFile = osuFile,
+                };
+
+                Add(visuals = new BeatmapVisuals(set, playbackClock) { RelativeSizeAxes = Axes.Both });
+            });
+
+            AddUntilStep("the video is playable", () => visuals.HasVideoLayer);
+            AddWaitStep("give a notice time to appear", 10);
+            AddAssert("nothing was announced", () => notices == 0);
+
+            AddStep("swap to a set with no video at all", () =>
+            {
+                Remove(visuals, true);
+                Add(visuals = new BeatmapVisuals(fixtureSetA, playbackClock) { RelativeSizeAxes = Axes.Both });
+            });
+
+            AddUntilStep("loaded", () => visuals.IsLoaded);
+            AddAssert("it has no video", () => !visuals.StoryboardLayer.HasVideo);
+            AddWaitStep("give a notice time to appear", 10);
+            AddAssert("still nothing announced", () => notices == 0);
 
             AddStep("remove visuals", () => Remove(visuals, true));
         }

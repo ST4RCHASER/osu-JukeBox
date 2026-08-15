@@ -33,6 +33,10 @@ namespace JukeBox.Game.Screens;
 public partial class BeatmapVisuals : CompositeDrawable
 {
     private readonly CachedBeatmapSet set;
+
+    /// <summary>Local latch so <see cref="reportUnplayableVideo"/> costs one bool per frame once it
+    /// has fired; the cross-rebuild memory lives in <see cref="VideoNotifier"/>.</summary>
+    private bool reportedUnplayableVideo;
     private readonly string? osuFile;
     private readonly IFrameBasedClock playbackClock;
     private FramedOffsetClock offsetClock = null!;
@@ -133,6 +137,12 @@ public partial class BeatmapVisuals : CompositeDrawable
     // difficulty ever has a replay and the chart is always autoplay-driven.
     [Resolved(canBeNull: true)]
     private ReplayStore? replays { get; set; }
+
+    // Only MainScreen caches this, which is deliberate: the detached VIEWER window builds its own
+    // visual stack and resolves nothing here, so the notice is raised once, in the master window
+    // the user is actually interacting with. See VideoNotifier.
+    [Resolved(canBeNull: true)]
+    private VideoNotifier? videoNotifier { get; set; }
 
     // MainScreen's playerBox live pixel size (see its own [Cached] remarks) — resolved as
     // nullable since only MainScreen's real hosting caches it; falls back to this Drawable's
@@ -559,6 +569,35 @@ public partial class BeatmapVisuals : CompositeDrawable
     /// the decoder's own thread, and the background must come back rather than leaving the user
     /// staring at pure black.
     /// </summary>
+    /// <summary>
+    /// Tells the user once when this beatmap declares a video that cannot play, so the background
+    /// they end up looking at reads as a deliberate fallback rather than a broken video.
+    ///
+    /// <para>
+    /// Polled from <see cref="Update"/> alongside the background rule because neither failure is
+    /// known at load: a decoder fault surfaces asynchronously on the decoder's thread, and a missing
+    /// file is only distinguishable once the storyboard's children exist (see
+    /// <see cref="LazerStoryboardLayer.VideoMissing"/>). Until then <c>VideoPlayable</c> is true, so
+    /// a loading video is never mistaken for a broken one.
+    /// </para>
+    ///
+    /// <para>
+    /// The once-per-song guarantee is <see cref="VideoNotifier"/>'s, not this flag's: this drawable
+    /// is rebuilt on every difficulty switch, so a local guard alone would re-announce.
+    /// </para>
+    /// </summary>
+    private void reportUnplayableVideo()
+    {
+        if (reportedUnplayableVideo || videoNotifier == null)
+            return;
+
+        if (!storyboardLayer.HasVideo || storyboardLayer.VideoPlayable)
+            return;
+
+        reportedUnplayableVideo = true;
+        videoNotifier.ReportUnplayableVideo(set.SetId);
+    }
+
     private void updateBackgroundVisibility()
     {
         if (backgroundSprite == null)
@@ -614,6 +653,7 @@ public partial class BeatmapVisuals : CompositeDrawable
         // A storyboard video's decoder fault only surfaces asynchronously — keep the background
         // rule live so a faulted (black) video brings the background back.
         updateBackgroundVisibility();
+        reportUnplayableVideo();
 
         // Catch alone needs chartContainer to actually BE a fixed 1024×768-ish canvas: its
         // PlayfieldAdjustmentContainer positions the catcher/fruits with ABSOLUTE pixel constants

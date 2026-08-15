@@ -123,6 +123,10 @@ public partial class MainScreen : Screen
     /// for the same lifetime reasons) as <see cref="lastError"/>.</summary>
     private readonly Bindable<string?> searchError = new Bindable<string?>();
 
+    /// <summary>The current beatmap's video being unplayable, bound the same way as
+    /// <see cref="lastError"/> — see <see cref="videoNotifier"/>.</summary>
+    private readonly Bindable<string?> videoNotice = new Bindable<string?>();
+
     private Bindable<UiLayout> uiLayout = null!;
     private Bindable<double> playfieldZoom = null!;
     private Bindable<bool> detachPlayer = null!;
@@ -155,6 +159,15 @@ public partial class MainScreen : Screen
     // playerBox.OnUpdate rather than this screen's Update()).
     [Cached]
     private readonly Bindable<Vector2> playerBoxSize = new();
+
+    /// <summary>
+    /// Cached HERE rather than app-wide on purpose: only the master window has a
+    /// <see cref="MainScreen"/>, so the detached viewer's own visual stack resolves nothing and
+    /// stays silent, and the notice appears in the window the user is interacting with. See
+    /// <see cref="VideoNotifier"/>.
+    /// </summary>
+    [Cached]
+    private readonly VideoNotifier videoNotifier = new VideoNotifier();
 
     private BeatmapListingOverlay listing = null!;
     private FullscreenListingOverlay fullscreenListing = null!;
@@ -206,6 +219,9 @@ public partial class MainScreen : Screen
     /// where its toasts land relative to the player area and the side columns.
     /// </summary>
     internal ToastOverlay Toasts => toastOverlay;
+
+    /// <summary>Test hook: the notifier the per-song visual stack reports unplayable videos to.</summary>
+    internal VideoNotifier VideoNotifier => videoNotifier;
 
     /// <summary>
     /// Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the visuals stack, to
@@ -514,6 +530,15 @@ public partial class MainScreen : Screen
         // that backend in settings and typed a query is looking at the cards, not the status line.
         searchError.BindTo(searchEngine.LastError);
         searchError.BindValueChanged(e =>
+        {
+            if (e.NewValue != null)
+                showToast(e.NewValue);
+        });
+
+        // A beatmap whose video can't play falls back to the background (see BeatmapVisuals), which
+        // on its own is indistinguishable from a map that simply has no video — so say it once.
+        videoNotice.BindTo(videoNotifier.Notice);
+        videoNotice.BindValueChanged(e =>
         {
             if (e.NewValue != null)
                 showToast(e.NewValue);
