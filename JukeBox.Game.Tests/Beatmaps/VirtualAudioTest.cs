@@ -37,8 +37,6 @@ namespace JukeBox.Game.Tests.Beatmaps
         [TestCase("virtual.mp3")]
         [TestCase("virtual.ogg")]
         [TestCase(" virtual ")]
-        [TestCase("")]
-        [TestCase(null)]
         public void VirtualFilenamesAreRecognised(string? audioFilename)
             => Assert.That(OsuFileScanner.IsVirtualAudioFilename(audioFilename), Is.True);
 
@@ -47,6 +45,18 @@ namespace JukeBox.Game.Tests.Beatmaps
         [TestCase("my virtual song.mp3")]
         [TestCase("virtual/audio.mp3")]
         public void RealFilenamesAreNotVirtual(string audioFilename)
+            => Assert.That(OsuFileScanner.IsVirtualAudioFilename(audioFilename), Is.False);
+
+        /// <summary>
+        /// A .osu with no AudioFilename at all is malformed, not keysounded — real keysound maps
+        /// declare "virtual" explicitly. Treating the absent key as virtual would turn every set
+        /// we failed to parse into three seconds of silence instead of a reported failure, undoing
+        /// TestSceneJukebox's silent-stall guard.
+        /// </summary>
+        [TestCase("")]
+        [TestCase("   ")]
+        [TestCase(null)]
+        public void AbsentFilenameIsNotVirtual(string? audioFilename)
             => Assert.That(OsuFileScanner.IsVirtualAudioFilename(audioFilename), Is.False);
 
         [Test]
