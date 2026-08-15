@@ -21,6 +21,8 @@ using osu.Framework.Graphics.UserInterface;
 using osu.Framework.Screens;
 using osu.Framework.Testing;
 using osu.Game.Overlays.Settings;
+using osu.Game.Rulesets.Mania.UI;
+using osu.Game.Rulesets.UI;
 using osuTK.Input;
 
 namespace JukeBox.Game.Tests.Visual
@@ -156,6 +158,35 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("no play hit sounds row left in settings", () => !checkboxLabels(settings).Contains("Play hit sounds"));
             AddAssert("no hit lighting row left in settings", () => !checkboxLabels(settings).Contains("Hit lighting"));
 
+            // The whole Rulesets section and its Analysis (osu!) subsection moved across too.
+            AddAssert("no ruleset or analysis rows left in settings", () =>
+            {
+                var labels = allSettingsLabels(settings);
+
+                return !new[]
+                {
+                    "Snaking in sliders", "Snaking out sliders", "Hit animations", "Cursor trail", "Cursor ripples",
+                    "Playfield border style", "Scrolling direction", "Scroll speed", "Timing-based note colouring",
+                    "Show click markers", "Show frame markers", "Show cursor path", "Hide gameplay cursor", "Display length",
+                }.Any(labels.Contains);
+            });
+
+            AddAssert("and they are all in the Chart tab instead", () =>
+            {
+                var labels = allSettingsLabels(chartPanel());
+
+                return new[]
+                {
+                    "Snaking in sliders", "Snaking out sliders", "Hit animations", "Cursor trail", "Cursor ripples",
+                    "Playfield border style", "Scrolling direction", "Scroll speed", "Timing-based note colouring",
+                    "Show click markers", "Show frame markers", "Show cursor path", "Hide gameplay cursor", "Display length",
+                }.All(labels.Contains);
+            });
+
+            // The settings that legitimately stayed behind.
+            AddAssert("gameplay skin stayed in settings", () => allSettingsLabels(settings).Contains("Gameplay skin"));
+            AddAssert("background dim stayed in settings", () => allSettingsLabels(settings).Contains("Background dim"));
+
             // Same key, so an existing user's value carries over rather than resetting.
             AddStep("tick render chart in the Chart tab", () => chartPanel().RenderChartCheckbox.Current.Value = true);
             AddAssert("it wrote the same config key it always did", () => config.Get<bool>(JukeBoxSetting.RenderChart));
@@ -166,6 +197,24 @@ namespace JukeBox.Game.Tests.Visual
 
         private static List<string> checkboxLabels(Drawable panel)
             => panel.ChildrenOfType<SettingsCheckbox>().Select(c => c.LabelText.ToString()).ToList();
+
+        /// <summary>
+        /// Every labelled settings row in a panel across the value types the moved rows use —
+        /// checkboxes, sliders and dropdowns alike, so a row can't slip past this by being a
+        /// dropdown rather than a checkbox. <c>SettingsItem&lt;T&gt;</c> is generic with no
+        /// non-generic label surface, hence the explicit list.
+        /// </summary>
+        private static List<string> allSettingsLabels(Drawable panel)
+            => labelsOf<bool>(panel)
+               .Concat(labelsOf<double>(panel))
+               .Concat(labelsOf<int>(panel))
+               .Concat(labelsOf<JukeBoxSkin>(panel))
+               .Concat(labelsOf<PlayfieldBorderStyle>(panel))
+               .Concat(labelsOf<ManiaScrollingDirection>(panel))
+               .ToList();
+
+        private static IEnumerable<string> labelsOf<T>(Drawable panel)
+            => panel.ChildrenOfType<SettingsItem<T>>().Select(i => i.LabelText.ToString());
 
         // Everything the deleted bottom bar carried, plus the controls that used to sit in
         // Settings → Playback, now lives in this one tab — with the queue underneath it. The

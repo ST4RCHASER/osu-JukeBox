@@ -19,7 +19,16 @@ using osu.Game.Graphics.Cursor;
 using osu.Game.Graphics.Sprites;
 using osu.Game.Overlays;
 using osu.Game.Overlays.Settings;
+using osu.Game.Rulesets;
+using osu.Game.Rulesets.Mania;
+using osu.Game.Rulesets.Mania.Configuration;
+using osu.Game.Rulesets.Mania.UI;
 using osu.Game.Rulesets.Mods;
+using osu.Game.Rulesets.Osu;
+using osu.Game.Rulesets.Osu.Configuration;
+using osu.Game.Rulesets.Taiko;
+using osu.Game.Rulesets.Taiko.Configuration;
+using osu.Game.Rulesets.UI;
 
 namespace JukeBox.Game.UI;
 
@@ -41,7 +50,12 @@ namespace JukeBox.Game.UI;
 /// which shows the replay's own mods instead — the same treatment (and the same underlying "is a
 /// replay playing" test) the difficulty switcher already uses.</item>
 /// <item><b>Playfield elements</b> — one checkbox per <see cref="PlayfieldElement"/>, grouped by
-/// ruleset with only the group(s) that apply to what is playing on screen.</item>
+/// ruleset, with EVERY ruleset's group listed at all times (user request): a stable, complete
+/// inventory of what can be hidden rather than a view of the current song, so the panel never
+/// reshuffles when the track changes. A toggle picked for a ruleset that isn't playing persists and
+/// takes effect when a map of that ruleset does.</item>
+/// <item><b>Rulesets</b> and <b>Analysis (osu!)</b> — the per-ruleset gameplay settings, MOVED here
+/// wholesale from Settings, on their real lazer per-ruleset config bindables.</item>
 /// </list>
 ///
 /// <para>
@@ -75,6 +89,34 @@ public partial class ChartPanel : CompositeDrawable
 
     [Resolved(canBeNull: true)]
     private OsuConfigManager? lazerConfig { get; set; }
+
+    [Resolved(canBeNull: true)]
+    private IRulesetConfigCache? rulesetConfigs { get; set; }
+
+    // ---- per-ruleset settings, moved here from Settings; only built with the ruleset config cache ----
+    private SettingsCheckbox snakingInCheckbox = null!;
+    private SettingsCheckbox snakingOutCheckbox = null!;
+    private SettingsCheckbox osuHitAnimationsCheckbox = null!;
+    private SettingsCheckbox cursorTrailCheckbox = null!;
+    private SettingsCheckbox cursorRipplesCheckbox = null!;
+    private SettingsEnumDropdown<PlayfieldBorderStyle> playfieldBorderDropdown = null!;
+    private SettingsCheckbox taikoHitAnimationsCheckbox = null!;
+    private SettingsEnumDropdown<ManiaScrollingDirection> maniaDirectionDropdown = null!;
+    private SettingsSlider<double> maniaScrollSpeedRow = null!;
+    private SettingsCheckbox maniaTimingColourCheckbox = null!;
+
+    // ---- replay analysis (osu! ruleset config), moved here from Settings ----
+    private SettingsCheckbox clickMarkersCheckbox = null!;
+    private SettingsCheckbox frameMarkersCheckbox = null!;
+    private SettingsCheckbox cursorPathCheckbox = null!;
+    private SettingsCheckbox hideCursorCheckbox = null!;
+    private SettingsSlider<int> analysisLengthRow = null!;
+
+    // Ranged local for the display-length slider, synced two-way with the config value: the config
+    // bindable is declared rangeless upstream, and BindTo would copy that (unusable) range onto
+    // whatever binds it.
+    private readonly BindableInt analysisDisplayLength = new BindableInt(800) { MinValue = 200, MaxValue = 2000, Precision = 100 };
+    private Bindable<int>? analysisLengthConfig;
 
     private SettingsCheckbox renderChartCheckbox = null!;
     private SettingsCheckbox playHitSoundsCheckbox = null!;
@@ -136,6 +178,9 @@ public partial class ChartPanel : CompositeDrawable
 
     /// <summary>Test-only: whether a mod category's block is on screen at all.</summary>
     internal bool ModCategoryVisible(ModType type) => modCategories[type].Alpha > 0;
+
+    /// <summary>Test-only: the mania scroll-speed slider, which moved here from Settings.</summary>
+    internal SettingsSlider<double> ManiaScrollSpeedSlider => maniaScrollSpeedRow;
 
     internal SettingsCheckbox ElementCheckbox(PlayfieldElement element) => elementCheckboxes[element];
 
@@ -201,11 +246,20 @@ public partial class ChartPanel : CompositeDrawable
             },
         };
 
+        // Deliberate order, widest scope first: what to draw at all (Chart), then what is being
+        // played (Mods), then which pieces of the playfield show (Playfield elements), then how each
+        // ruleset draws them (Rulesets), and last the osu!-only replay-analysis overlays, which sit
+        // on top of everything else.
         if (chartMods != null)
             sections.Add(createModsSection());
 
         if (elements != null)
             sections.Add(createElementsSection());
+
+        // Per-ruleset settings need the ruleset config cache (realm-backed); a bare test scene
+        // without it gets no dead controls, exactly as when these lived in Settings.
+        if (rulesetConfigs != null)
+            sections.Add(createRulesetsSection());
 
         return new FillFlowContainer
         {
@@ -215,6 +269,114 @@ public partial class ChartPanel : CompositeDrawable
             Direction = FillDirection.Vertical,
             Children = sections,
         };
+    }
+
+    /// <summary>
+    /// The per-ruleset gameplay settings, moved here wholesale from Settings — same rows, same
+    /// lazer controls, same per-ruleset config bindables (see <see cref="bindRulesetConfigs"/>),
+    /// in the same order and grouping they had there. Every ruleset's subsection is always listed,
+    /// whatever is playing, so the panel never reshuffles under the user; a setting picked for a
+    /// ruleset that isn't on screen simply applies when a map of that ruleset does.
+    ///
+    /// <para>
+    /// "Analysis (osu!)" keeps its own heading as the last subsection, where it already was: our
+    /// autoplay chart IS replay-driven, and <c>LazerChartLayer</c> attaches lazer's
+    /// <c>ReplayAnalysisOverlay</c> for osu! charts, bound to these keys.
+    /// </para>
+    /// </summary>
+    private Drawable createRulesetsSection() => new LazerSection("Rulesets", FontAwesome.Solid.Gamepad)
+    {
+        Children = new Drawable[]
+        {
+            new LazerSubsection("osu!")
+            {
+                Children = new Drawable[]
+                {
+                    snakingInCheckbox = new SettingsCheckbox { LabelText = "Snaking in sliders" },
+                    snakingOutCheckbox = new SettingsCheckbox { LabelText = "Snaking out sliders" },
+                    osuHitAnimationsCheckbox = new SettingsCheckbox { LabelText = "Hit animations" },
+                    cursorTrailCheckbox = new SettingsCheckbox { LabelText = "Cursor trail" },
+                    cursorRipplesCheckbox = new SettingsCheckbox { LabelText = "Cursor ripples" },
+                    playfieldBorderDropdown = new SettingsEnumDropdown<PlayfieldBorderStyle> { LabelText = "Playfield border style" },
+                },
+            },
+            new LazerSubsection("osu!taiko")
+            {
+                Children = new Drawable[]
+                {
+                    taikoHitAnimationsCheckbox = new SettingsCheckbox { LabelText = "Hit animations" },
+                },
+            },
+            new LazerSubsection("osu!mania")
+            {
+                Children = new Drawable[]
+                {
+                    maniaDirectionDropdown = new SettingsEnumDropdown<ManiaScrollingDirection> { LabelText = "Scrolling direction" },
+                    maniaScrollSpeedRow = new SettingsSlider<double> { LabelText = "Scroll speed", KeyboardStep = 0.5f },
+                    maniaTimingColourCheckbox = new SettingsCheckbox { LabelText = "Timing-based note colouring" },
+                },
+            },
+            new LazerSubsection("Analysis (osu!)")
+            {
+                Children = new Drawable[]
+                {
+                    clickMarkersCheckbox = new SettingsCheckbox { LabelText = "Show click markers" },
+                    frameMarkersCheckbox = new SettingsCheckbox { LabelText = "Show frame markers" },
+                    cursorPathCheckbox = new SettingsCheckbox { LabelText = "Show cursor path" },
+                    hideCursorCheckbox = new SettingsCheckbox { LabelText = "Hide gameplay cursor" },
+                    analysisLengthRow = new SettingsSlider<int> { LabelText = "Display length", KeyboardStep = 100 },
+                },
+            },
+        },
+    };
+
+    /// <summary>
+    /// Ruleset config managers are realm-backed and only exist once <c>LazerRulesetConfigCache</c>
+    /// has loaded on the update thread (its GetConfigFor throws before that, by design) — retry
+    /// next frame until it's ready. The bound bindables are the REAL per-ruleset config values, so
+    /// the DrawableRuleset pieces that bind them (snaking, cursor trail, mania scroll speed and
+    /// direction) react live on the chart already on screen; the rest apply on the next chart
+    /// (re)build. Unchanged from when this lived in SettingsOverlay.
+    /// </summary>
+    private void bindRulesetConfigs()
+    {
+        if (rulesetConfigs is Drawable { IsLoaded: false })
+        {
+            Schedule(bindRulesetConfigs);
+            return;
+        }
+
+        if (rulesetConfigs!.GetConfigFor(new OsuRuleset()) is OsuRulesetConfigManager osuRulesetConfig)
+        {
+            snakingInCheckbox.Current = osuRulesetConfig.GetBindable<bool>(OsuRulesetSetting.SnakingInSliders);
+            snakingOutCheckbox.Current = osuRulesetConfig.GetBindable<bool>(OsuRulesetSetting.SnakingOutSliders);
+            osuHitAnimationsCheckbox.Current = osuRulesetConfig.GetBindable<bool>(OsuRulesetSetting.HitAnimations);
+            cursorTrailCheckbox.Current = osuRulesetConfig.GetBindable<bool>(OsuRulesetSetting.ShowCursorTrail);
+            cursorRipplesCheckbox.Current = osuRulesetConfig.GetBindable<bool>(OsuRulesetSetting.ShowCursorRipples);
+            playfieldBorderDropdown.Current = osuRulesetConfig.GetBindable<PlayfieldBorderStyle>(OsuRulesetSetting.PlayfieldBorderStyle);
+
+            clickMarkersCheckbox.Current = osuRulesetConfig.GetBindable<bool>(OsuRulesetSetting.ReplayClickMarkersEnabled);
+            frameMarkersCheckbox.Current = osuRulesetConfig.GetBindable<bool>(OsuRulesetSetting.ReplayFrameMarkersEnabled);
+            cursorPathCheckbox.Current = osuRulesetConfig.GetBindable<bool>(OsuRulesetSetting.ReplayCursorPathEnabled);
+            hideCursorCheckbox.Current = osuRulesetConfig.GetBindable<bool>(OsuRulesetSetting.ReplayCursorHideEnabled);
+
+            // Two-way sync (see analysisDisplayLength's remarks) instead of a direct bind.
+            analysisLengthConfig = osuRulesetConfig.GetBindable<int>(OsuRulesetSetting.ReplayAnalysisDisplayLength);
+            analysisDisplayLength.Value = analysisLengthConfig.Value;
+            analysisDisplayLength.BindValueChanged(e => analysisLengthConfig!.Value = e.NewValue);
+            analysisLengthConfig.BindValueChanged(e => analysisDisplayLength.Value = e.NewValue);
+            analysisLengthRow.Current = analysisDisplayLength;
+        }
+
+        if (rulesetConfigs.GetConfigFor(new TaikoRuleset()) is TaikoRulesetConfigManager taikoRulesetConfig)
+            taikoHitAnimationsCheckbox.Current = taikoRulesetConfig.GetBindable<bool>(TaikoRulesetSetting.HitAnimations);
+
+        if (rulesetConfigs.GetConfigFor(new ManiaRuleset()) is ManiaRulesetConfigManager maniaRulesetConfig)
+        {
+            maniaDirectionDropdown.Current = maniaRulesetConfig.GetBindable<ManiaScrollingDirection>(ManiaRulesetSetting.ScrollDirection);
+            maniaScrollSpeedRow.Current = maniaRulesetConfig.GetBindable<double>(ManiaRulesetSetting.ScrollSpeed);
+            maniaTimingColourCheckbox.Current = maniaRulesetConfig.GetBindable<bool>(ManiaRulesetSetting.TimingBasedNoteColouring);
+        }
     }
 
     /// <summary>
@@ -345,6 +507,9 @@ public partial class ChartPanel : CompositeDrawable
 
         if (hitLightingCheckbox != null && lazerConfig != null)
             hitLightingCheckbox.Current = lazerConfig.GetBindable<bool>(OsuSetting.HitLighting);
+
+        if (rulesetConfigs != null)
+            bindRulesetConfigs();
 
         if (chartMods != null)
             bindMods(chartMods);
@@ -491,17 +656,23 @@ public partial class ChartPanel : CompositeDrawable
     /// </summary>
     private void updateVisibleElementGroups(int mode)
     {
+        // Every ruleset's group is listed at all times, whatever is playing (user request): the
+        // list is a stable, complete inventory of what the player can hide, not a view of the
+        // current song. A toggle picked for a ruleset that isn't on screen stays fully interactive
+        // and persists, and takes effect the moment a map of that ruleset plays — the filter is
+        // driven by PlayfieldElementVisibility, which knows nothing about what is playing.
+        foreach (var group in elementGroups.Values)
+            group.Alpha = 1;
+
+        // A ruleset's own rows are always shown with its group. The only row that still comes and
+        // goes is in the SHARED block, and not as scoping: osu!catch draws no hit-score popups at
+        // all (see PlayfieldElementCatalog.Entry.AppliesToRuleset), so while a catch map is on
+        // screen there is genuinely nothing for a judgements toggle to hide.
         foreach (var entry in PlayfieldElementCatalog.All)
-            elementCheckboxes[entry.Element].Alpha = entry.AppliesTo(mode) ? 1 : 0;
-
-        foreach (var (rulesetId, group) in elementGroups)
         {
-            bool anyRowApplies = PlayfieldElementCatalog.All.Any(e => e.RulesetId == rulesetId && e.AppliesTo(mode))
-                                 // Hit lighting is a lazer gameplay setting rather than a catalogued
-                                 // element, and it applies to every ruleset — so its group stays.
-                                 || (rulesetId == PlayfieldElementCatalog.all_rulesets && hitLightingCheckbox != null);
+            bool sharedRowThatDoesNotApply = entry.RulesetId == PlayfieldElementCatalog.all_rulesets && !entry.AppliesTo(mode);
 
-            group.Alpha = anyRowApplies ? 1 : 0;
+            elementCheckboxes[entry.Element].Alpha = sharedRowThatDoesNotApply ? 0 : 1;
         }
     }
 
