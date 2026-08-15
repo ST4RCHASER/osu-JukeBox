@@ -31,6 +31,11 @@ public partial class DifficultySwitcher : CompositeDrawable
     /// <summary>Keep the dropdown tidy on sets with absurd difficulty counts.</summary>
     private const int max_items = 10;
 
+    /// <summary>How far the dropdown dims while locked — see <see cref="updateLockedState"/>.
+    /// Enough to read as unavailable, not so much that the selected difficulty stops being
+    /// legible, since that difficulty is still the useful information.</summary>
+    private const float locked_alpha = 0.55f;
+
     [Resolved]
     private PlaybackController playback { get; set; } = null!;
 
@@ -82,7 +87,15 @@ public partial class DifficultySwitcher : CompositeDrawable
         // arrive — NowPlaying is what carries them, and it can land after the set has already been
         // handed to playback.
         dropdown.Current.BindValueChanged(e => dropdown.RefreshHeader(e.NewValue), true);
-        jukebox?.NowPlaying.BindValueChanged(_ => dropdown.RefreshHeader(dropdown.Current.Value));
+
+        // NowPlaying carries both the star ratings the header draws AND whether a replay is
+        // driving playback, and it lands AFTER the playback swap that queued onSetChanged — so the
+        // lock has to be re-evaluated here rather than only on a set change.
+        jukebox?.NowPlaying.BindValueChanged(_ =>
+        {
+            dropdown.RefreshHeader(dropdown.Current.Value);
+            updateLockedState();
+        });
     }
 
     /// <summary>
@@ -141,12 +154,47 @@ public partial class DifficultySwitcher : CompositeDrawable
             settingSelection = false;
 
             syncSelection();
-
-            // A single-difficulty set still shows its one entry (effectively always-selected) —
-            // just nothing to switch between, so it's locked non-interactive.
-            dropdown.Current.Disabled = set.Difficulties.Count <= 1;
+            updateLockedState();
         });
     }
+
+    /// <summary>
+    /// Locks the dropdown whenever picking a different difficulty would be meaningless or wrong:
+    ///
+    /// <list type="bullet">
+    /// <item>A <b>single-difficulty set</b> has its one entry effectively always-selected — there
+    /// is simply nothing to switch between.</item>
+    /// <item>A <b>replay</b> is tied to one exact .osu (matched by checksum — see
+    /// <see cref="Replays.ReplayAttachment.OsuFile"/>); switching away would silently drop the
+    /// replay back to autoplay on a difficulty the player never played. The replay's own
+    /// difficulty stays visible in the closed dropdown, it just can't be changed.</item>
+    /// </list>
+    ///
+    /// <para>
+    /// Both states also dim the control. A disabled dropdown that looks identical to a live one
+    /// reads as a bug rather than a rule — the single-difficulty case had that problem already, and
+    /// giving the two locked states one appearance is both less code and less to explain.
+    /// </para>
+    /// </summary>
+    private void updateLockedState()
+    {
+        var set = playback.Current.Value;
+
+        if (set == null || set.Difficulties.Count == 0)
+            return;
+
+        bool locked = set.Difficulties.Count <= 1 || ReplayLocked;
+
+        dropdown.Current.Disabled = locked;
+        dropdown.FadeTo(locked ? locked_alpha : 1, Theme.HoverFadeDuration, Easing.OutQuint);
+    }
+
+    /// <summary>
+    /// Whether a dropped replay is driving what's playing. Read off the now-playing set (the object
+    /// the replay actually travels on) rather than the replay registry, so it answers for the SET
+    /// being watched rather than for whichever difficulty happens to be selected mid-swap.
+    /// </summary>
+    internal bool ReplayLocked => jukebox?.NowPlaying.Value?.Replay != null;
 
     private void syncSelection()
     {
