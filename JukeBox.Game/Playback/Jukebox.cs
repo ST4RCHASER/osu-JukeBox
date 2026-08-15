@@ -21,7 +21,31 @@ namespace JukeBox.Game.Playback;
 /// </summary>
 public partial class Jukebox : Component
 {
-    private const double radio_retry_delay_ms = 5000;
+    /// <summary>First retry delay after the radio fails to find anything.</summary>
+    private const double radio_retry_base_ms = 5000;
+
+    /// <summary>
+    /// Ceiling on the retry delay. Doubling without one meant a radio that failed against dead
+    /// mirrors hammered them every five seconds forever; a ceiling keeps recovery prompt (a mirror
+    /// that comes back is picked up within a minute) without the tight loop.
+    /// </summary>
+    private const double radio_retry_max_ms = 60000;
+
+    /// <summary>
+    /// Consecutive failed radio lookups, driving the backoff below. Reset the moment a lookup
+    /// succeeds, so one bad minute doesn't leave the radio sluggish afterwards.
+    /// </summary>
+    private int radioFailures;
+
+    private double radioRetryDelay =>
+        Math.Min(radio_retry_base_ms * Math.Pow(2, Math.Max(0, radioFailures - 1)), radio_retry_max_ms);
+
+    /// <summary>
+    /// The delay the next radio retry would be scheduled with — the very value handed to
+    /// <c>AddDelayed</c>. Exposed so a test can assert the backoff grows and is capped without
+    /// spending a real minute waiting for the scheduler to prove it.
+    /// </summary>
+    internal double RadioRetryDelayMs => radioRetryDelay;
 
     public readonly Bindable<string?> LastError = new();
 
@@ -158,6 +182,34 @@ public partial class Jukebox : Component
     private bool lookingUp;
 
     private void updateCanSkipNext() => CanSkipNext.Value = !lookingUp || queue.Items.Count > 0;
+
+    /// <summary>
+    /// The failure currently on the error line that keeps recurring, or null when the last round
+    /// wasn't a repeat failure. Update thread only.
+    ///
+    /// <para>
+    /// This is what collapses a repeating failure into ONE announcement: while it is set, the
+    /// round-start clear is skipped, so re-reporting the same text leaves the bindable unchanged
+    /// and nothing downstream fires again. A DIFFERENT failure still changes the value and is still
+    /// announced, which is the behaviour worth keeping — the user needs to know when the problem
+    /// changes.
+    /// </para>
+    /// </summary>
+    private string? ongoingFailure;
+
+    /// <summary>Reports a failure, collapsing consecutive identical ones — see <see cref="ongoingFailure"/>.</summary>
+    private void announceFailure(string message) => Schedule(() =>
+    {
+        ongoingFailure = message;
+        LastError.Value = message;
+    });
+
+    /// <summary>
+    /// Marks the run of failures over. Deliberately does NOT clear <see cref="LastError"/> itself:
+    /// a failure met on the way to an eventual success stays readable for the rest of the round,
+    /// and the next round's start is what clears it.
+    /// </summary>
+    private void clearOngoingFailure() => Schedule(() => ongoingFailure = null);
 
     private void setLookingUp(bool value) => Schedule(() =>
     {
@@ -489,7 +541,17 @@ public partial class Jukebox : Component
         // Cleared once per round (not per pop-attempt below) so a round that eventually
         // succeeds ends with no stale error, while a failure encountered along the way to that
         // success is still visible for the rest of the round (see the failing-set test).
-        Schedule(() => LastError.Value = null);
+        //
+        // EXCEPT while the same failure is still ongoing. Clearing and re-setting an identical
+        // message is a value CHANGE either way, and every consumer of this bindable reacts to
+        // changes — so the radio retrying against dead mirrors fired a fresh, identical toast on
+        // every retry. Leaving the line untouched makes the re-announcement below a no-op, which
+        // is what turns N toasts for one problem back into one.
+        Schedule(() =>
+        {
+            if (ongoingFailure == null)
+                LastError.Value = null;
+        });
 
         // Taking ownership of the status line for this round. The finally below is the one thing
         // that guarantees it is handed back however this round ends — returning, falling out of the
@@ -555,21 +617,42 @@ public partial class Jukebox : Component
                 showStatus(owner, "Looking for a song…", null);
                 setLookingUp(true);
 
+                RadioPick pick;
+
                 try
                 {
-                    next = await radio.PickRandomAsync(ct).ConfigureAwait(false);
+                    pick = await radio.PickRandomAsync(ct).ConfigureAwait(false);
                 }
                 finally
                 {
                     setLookingUp(false);
                 }
-            }
 
-            if (next == null)
-            {
-                Schedule(() => LastError.Value = "No tracks available; retrying radio shortly.");
-                Scheduler.AddDelayed(() => AdvanceAsync(), radio_retry_delay_ms);
-                return;
+                next = pick.Set;
+
+                if (next == null)
+                {
+                    radioFailures++;
+
+                    // Says WHY, where "No tracks available" said nothing a user could act on. The
+                    // wording is deliberately FIXED — no countdown, no attempt number. Anything that
+                    // varies per retry is a new value on the bindable, and a new value is a new
+                    // toast: putting the (growing) delay in here reintroduced the very loop this
+                    // round exists to remove, which is how the test below caught it.
+                    announceFailure($"{pick.Failure} Retrying automatically.");
+                    Scheduler.AddDelayed(() => AdvanceAsync(), radioRetryDelay);
+                    return;
+                }
+
+                radioFailures = 0;
+
+                // Nothing was reachable, so this came off the disk. Said once (announceFailure
+                // collapses the repeats) because a radio that has quietly stopped reaching for new
+                // music, with no explanation, reads as broken rather than as degraded.
+                if (pick.FromCache)
+                    announceFailure("Can't reach any beatmap source — playing from your cache.");
+                else
+                    clearOngoingFailure();
             }
 
             // Checked before GetAsync rather than having GetAsync report hit/miss: the cache can

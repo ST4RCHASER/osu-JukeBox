@@ -49,6 +49,34 @@ public class BeatmapCache
     public bool IsCached(int setId) => hasOsuFiles(Path.Combine(root, setId.ToString()));
 
     /// <summary>
+    /// Every set id currently sitting on disk and playable. Enumerated fresh on each call (it walks
+    /// the cache root) rather than kept as an index — the only caller is the radio's last-resort
+    /// pick, which runs at most once per failed lookup.
+    ///
+    /// <para>
+    /// Directory-name parsing matches <see cref="EvictToLimit"/>'s: anything whose name is not a
+    /// bare integer is skipped, which is what excludes in-progress "&lt;id&gt;.extracting" and
+    /// "import-&lt;guid&gt;.extracting" staging directories. Locally-imported sets (negative ids)
+    /// ARE included — they are real, playable, and the least likely thing to be re-downloadable.
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<int> CachedSetIds()
+    {
+        var ids = new List<int>();
+
+        if (!Directory.Exists(root))
+            return ids;
+
+        foreach (string dir in Directory.EnumerateDirectories(root))
+        {
+            if (int.TryParse(Path.GetFileName(dir), out int setId) && hasOsuFiles(dir))
+                ids.Add(setId);
+        }
+
+        return ids;
+    }
+
+    /// <summary>
     /// True while a <see cref="GetAsync"/> call for <paramref name="setId"/> is in flight and
     /// hasn't completed yet — i.e. it's tracked in <see cref="inflight"/> but not yet cached on
     /// disk. Once the download/extract finishes, <see cref="IsCached"/> becomes true and this

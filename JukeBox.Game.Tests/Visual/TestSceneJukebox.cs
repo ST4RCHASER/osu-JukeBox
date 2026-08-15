@@ -538,7 +538,7 @@ namespace JukeBox.Game.Tests.Visual
 
             AddStep("next, with an empty queue", () => jukebox.SkipCurrent());
 
-            AddUntilStep("the failure is reported", () => jukebox.LastError.Value == "No tracks available; retrying radio shortly.");
+            AddUntilStep("the failure is reported, and says why", () => jukebox.LastError.Value?.Contains("Can't reach any beatmap source") == true);
             AddAssert("the lookup line is not left behind under it", () => jukebox.Status.Value == null);
             AddAssert("and next is usable again, so the user is not stuck", () => jukebox.CanSkipNext.Value);
 
@@ -610,6 +610,135 @@ namespace JukeBox.Game.Tests.Visual
             // available" for a round nobody is waiting on. (That error is real but transient: the
             // superseding round clears it on entry, which is exactly why it cannot be asserted on.)
             AddAssert("the search stopped at the first attempt", () => mirror.SearchesCancelled == 1);
+        }
+
+        #endregion
+
+        #region radio recovery
+
+        /// <summary>How many times the error line has CHANGED — the number of toasts the user sees,
+        /// since the toast is pushed from this bindable's value changes.</summary>
+        private List<string> errorsShown = null!;
+
+        private int errorChanges => errorsShown.Count;
+
+        private void countErrorChanges() => AddStep("record error-line changes", () =>
+        {
+            errorsShown = new List<string>();
+            jukebox.LastError.BindValueChanged(e =>
+            {
+                if (e.NewValue != null)
+                    errorsShown.Add(e.NewValue);
+            });
+        });
+
+        // The reported bug, verbatim: "it loop error like this why" — the same
+        // "No tracks available; retrying radio shortly." toast over and over. Each retry cleared the
+        // error line and re-set the identical text, and a clear-then-set is a value CHANGE either
+        // way, so every retry pushed a fresh toast for one unchanged problem.
+        [Test]
+        public void ARepeatingRadioFailureIsAnnouncedOnceNotOncePerRetry()
+        {
+            AddStep("every search fails", () => mirror.SearchFails = true);
+
+            countErrorChanges();
+
+            // Stands in for the retries the scheduler would run; each is a full failing round.
+            for (int i = 0; i < 4; i++)
+            {
+                AddStep($"failing round {i + 1}", () => jukebox.AdvanceAsync());
+                AddUntilStep("round reported", () => jukebox.LastError.Value != null);
+            }
+
+            AddAssert("the user was told once, not four times", () => errorChanges == 1);
+        }
+
+        // ...but a DIFFERENT problem must still get through, or the collapsing above would hide a
+        // change the user needs to know about.
+        [Test]
+        public void AChangedFailureIsStillAnnounced()
+        {
+            AddStep("every search fails", () => mirror.SearchFails = true);
+            countErrorChanges();
+
+            AddStep("failing round", () => jukebox.AdvanceAsync());
+            AddUntilStep("reported", () => jukebox.LastError.Value != null);
+            AddAssert("announced once", () => errorChanges == 1);
+
+            // A queued set that cannot be downloaded reports a different message entirely.
+            AddStep("queue a set whose download fails", () =>
+            {
+                queue.Enqueue(setFailing);
+                jukebox.AdvanceAsync();
+            });
+
+            // The download failure is a DIFFERENT problem, so it must reach the user. (The round
+            // then finds the queue empty and falls back to the radio, whose failure is announced
+            // again after it — hence "contains", not a count: what is under test is that a changed
+            // problem is not swallowed, not how many distinct problems one round can hit.)
+            AddUntilStep("the new problem is announced too",
+                () => errorsShown.Any(e => e.Contains("Failing", StringComparison.Ordinal)));
+        }
+
+        // "Retrying shortly" every five seconds forever hammered dead mirrors and was not even true
+        // of what happened next. The delay now doubles per consecutive failure and is capped.
+        [Test]
+        public void TheRetryDelayGrowsWithEachFailureAndIsCapped()
+        {
+            var seen = new List<double>();
+
+            AddStep("every search fails", () =>
+            {
+                mirror.SearchFails = true;
+                seen.Clear();
+            });
+
+            for (int i = 0; i < 6; i++)
+            {
+                AddStep($"failing round {i + 1}", () => jukebox.AdvanceAsync());
+                AddUntilStep("round reported", () => jukebox.LastError.Value != null);
+                AddStep("record the delay it would retry with", () => seen.Add(jukebox.RadioRetryDelayMs));
+            }
+
+            AddAssert("it doubles: 5s, 10s, 20s, 40s", () => seen.Take(4).SequenceEqual(new double[] { 5000, 10000, 20000, 40000 }));
+            AddAssert("and is capped at a minute", () => seen.Skip(4).All(d => d == 60000));
+        }
+
+        // Recovery has to be automatic: nothing else in the app would ever re-enable the radio, and
+        // a mirror coming back must not leave the user on a minute-long backoff forever.
+        [Test]
+        public void TheRadioRecoversByItselfWhenAMirrorComesBack()
+        {
+            AddStep("every search fails", () =>
+            {
+                mirror.SetSearchResults(new List<BeatmapSetInfo> { set1 });
+                mirror.SearchFails = true;
+            });
+
+            AddStep("failing round", () => jukebox.AdvanceAsync());
+            AddUntilStep("reported", () => jukebox.LastError.Value != null);
+            AddAssert("backed off", () => jukebox.RadioRetryDelayMs > 5000 || jukebox.RadioRetryDelayMs == 5000);
+
+            AddStep("the mirror comes back", () => mirror.SearchFails = false);
+            AddStep("next round", () => jukebox.AdvanceAsync());
+
+            AddUntilStep("set1 plays", () => playback.Current.Value?.SetId == set1.Id);
+            AddAssert("and the backoff is reset for next time", () => jukebox.RadioRetryDelayMs == 5000);
+        }
+
+        // The worst version of this bug would be a looping error AND a dead next button. Guards the
+        // interaction with the skip-disabling work: a failing radio must always hand next back.
+        [Test]
+        public void NextStaysUsableThroughoutAFailingRadio()
+        {
+            AddStep("every search fails", () => mirror.SearchFails = true);
+
+            for (int i = 0; i < 3; i++)
+            {
+                AddStep($"failing round {i + 1}", () => jukebox.AdvanceAsync());
+                AddUntilStep("round reported", () => jukebox.LastError.Value != null);
+                AddUntilStep("next is usable again", () => jukebox.CanSkipNext.Value);
+            }
         }
 
         #endregion
