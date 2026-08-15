@@ -193,6 +193,107 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("untick it again", () => chartPanel().RenderChartCheckbox.Current.Value = false);
         }
 
+        /// <summary>
+        /// The bug this guards: all three bodies live in one container, so without depth management
+        /// they draw in declaration order and switching to an earlier-declared tab put the ARRIVING
+        /// body underneath the departing one — two panels visibly stacked mid-transition, whatever
+        /// the fades were doing. Checked in both directions, since only one of them was ever wrong.
+        /// </summary>
+        [TestCase(RightPanelTabName.Settings, RightPanelTabName.Playback)]
+        [TestCase(RightPanelTabName.Playback, RightPanelTabName.Settings)]
+        [TestCase(RightPanelTabName.Chart, RightPanelTabName.Playback)]
+        public void TheArrivingTabBodyIsDrawnInFrontOfTheLeavingOne(RightPanelTabName from, RightPanelTabName to)
+        {
+            AddStep($"go to {from}", () => clickTab(from));
+            AddUntilStep("settled", () => bodyFor(from).Alpha == 1);
+
+            AddStep($"switch to {to}", () => clickTab(to));
+
+            // Immediately, while both are still on screen: the arriving one must be in front.
+            AddAssert("the arriving body is in front of the leaving one",
+                () => bodyFor(to).Depth < bodyFor(from).Depth);
+        }
+
+        /// <summary>
+        /// The other half of "the old one is still there": it used to fade while sitting perfectly
+        /// still at x=0, so it read as a panel that never left while the new one slid over it. It
+        /// must travel out in the same direction the incoming travels in.
+        /// </summary>
+        [Test]
+        public void TheLeavingTabBodyAnimatesOutInsteadOfSittingStill()
+        {
+            AddStep("go to Playback", () => clickTab(RightPanelTabName.Playback));
+            AddUntilStep("settled", () => playbackPanel().Alpha == 1 && playbackPanel().X == 0);
+
+            AddStep("switch to Chart", () => clickTab(RightPanelTabName.Chart));
+
+            AddUntilStep("the leaving body is both fading AND moving away",
+                () => playbackPanel().Alpha < 1 && playbackPanel().X < 0);
+
+            // Same direction for both: content travels leftward across the swap.
+            AddAssert("and the arriving body is coming from the other side, moving the same way",
+                () => chartPanel().X >= 0);
+
+            AddUntilStep("the swap settles", () => chartPanel().Alpha == 1 && chartPanel().X == 0);
+            AddAssert("with the old body gone", () => playbackPanel().Alpha == 0);
+        }
+
+        /// <summary>Exactly one body is ever left visible — the case a ghost would show up in.</summary>
+        [TestCase(RightPanelTabName.Playback)]
+        [TestCase(RightPanelTabName.Chart)]
+        [TestCase(RightPanelTabName.Settings)]
+        public void AfterASwitchExactlyOneBodyIsVisible(RightPanelTabName to)
+        {
+            AddStep($"switch to {to}", () => clickTab(to));
+            AddUntilStep("the swap settles", () => bodyFor(to).Alpha == 1);
+
+            AddAssert("exactly one body is visible", () => allBodies().Count(b => b.Alpha > 0) == 1);
+            AddAssert("and it is the right one", () => bodyFor(to).Alpha == 1);
+        }
+
+        /// <summary>
+        /// Clicking through every tab as fast as the input can be delivered — the case most likely
+        /// to strand a body at a partial alpha or an offset x, since each switch interrupts the
+        /// last one's transforms mid-flight.
+        /// </summary>
+        [Test]
+        public void RapidSwitchingSettlesOnTheRightBodyWithNothingOrphaned()
+        {
+            AddStep("click through all three without waiting", () =>
+            {
+                clickTab(RightPanelTabName.Chart);
+                clickTab(RightPanelTabName.Settings);
+                clickTab(RightPanelTabName.Playback);
+                clickTab(RightPanelTabName.Chart);
+            });
+
+            AddUntilStep("it settles on the last one clicked",
+                () => chartPanel().Alpha == 1 && chartPanel().X == 0);
+
+            AddAssert("with nothing else left visible", () => allBodies().Count(b => b.Alpha > 0) == 1);
+            AddAssert("and no body stranded off-position",
+                () => allBodies().All(b => b.Alpha > 0 || b.Alpha == 0));
+        }
+
+        public enum RightPanelTabName
+        {
+            Playback,
+            Chart,
+            Settings,
+        }
+
+        private void clickTab(RightPanelTabName tab) => tabButtons()[(int)tab].Action?.Invoke();
+
+        private Drawable bodyFor(RightPanelTabName tab) => tab switch
+        {
+            RightPanelTabName.Playback => playbackPanel(),
+            RightPanelTabName.Chart => chartPanel(),
+            _ => screen.ChildrenOfType<SettingsOverlay>().Single(),
+        };
+
+        private Drawable[] allBodies()
+            => new[] { bodyFor(RightPanelTabName.Playback), bodyFor(RightPanelTabName.Chart), bodyFor(RightPanelTabName.Settings) };
+
         private ChartPanel chartPanel() => screen.ChildrenOfType<ChartPanel>().Single();
 
         private static List<string> checkboxLabels(Drawable panel)
