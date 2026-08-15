@@ -189,6 +189,16 @@ public partial class BeatmapVisuals : CompositeDrawable
     /// </summary>
     internal bool BackgroundVisible => backgroundSprite is { Alpha: > 0 };
 
+    /// <summary>
+    /// Test-only: the background image file this stack actually resolved for its difficulty — the
+    /// selected .osu's own [Events] background where it declares one, else the set-level fallback.
+    /// Null when neither exists.
+    /// </summary>
+    internal string? BackgroundFile { get; private set; }
+
+    /// <summary>Test-only: the texture the background sprite was built from (null with no background).</summary>
+    internal Texture? BackgroundTexture => backgroundSprite?.Texture;
+
     /// <summary>The .osu file this stack was built for (selected difficulty).</summary>
     internal string? OsuFile => osuFile;
 
@@ -227,13 +237,31 @@ public partial class BeatmapVisuals : CompositeDrawable
             Colour = Color4.Black,
         });
 
-        if (set.BackgroundFile != null)
+        // [General] Mode and [Events] background both belong to the SELECTED difficulty, so scan it
+        // once here and let both the background and the chart read off the same result.
+        OsuFileInfo? selectedInfo = null;
+
+        if (osuFile != null)
+        {
+            try
+            {
+                selectedInfo = OsuFileScanner.Scan(osuFile);
+            }
+            catch (Exception e)
+            {
+                Logger.Error(e, $"Failed to scan '{osuFile}'; falling back to the set-level background, no chart");
+            }
+        }
+
+        BackgroundFile = resolveBackgroundFile(selectedInfo);
+
+        if (BackgroundFile != null)
         {
             backgroundTextures = new TextureStore(host.Renderer,
                 host.CreateTextureLoaderStore(new StorageBackedResourceStore(new NativeStorage(set.Directory, host))),
                 useAtlas: false, scaleAdjust: 1);
 
-            string relative = Path.GetRelativePath(set.Directory, set.BackgroundFile).Replace('\\', '/');
+            string relative = Path.GetRelativePath(set.Directory, BackgroundFile).Replace('\\', '/');
             var texture = backgroundTextures.Get(relative);
 
             if (texture != null)
@@ -318,11 +346,15 @@ public partial class BeatmapVisuals : CompositeDrawable
         {
             markChartUnavailable($"set {set.SetId} has no .osu difficulty to chart");
         }
+        else if (selectedInfo == null)
+        {
+            markChartUnavailable($"'{Path.GetFileName(osuFile)}' could not be scanned");
+        }
         else
         {
             try
             {
-                int mode = OsuFileScanner.Scan(osuFile).Mode;
+                int mode = selectedInfo.Mode;
                 chartMode = mode;
 
                 if (mode is < 0 or > 3)
@@ -434,6 +466,30 @@ public partial class BeatmapVisuals : CompositeDrawable
     }
 
     private void updateClockOffset() => offsetClock.Offset = beatmapOffset.Value + globalOffset.Value;
+
+    /// <summary>
+    /// The background image for the SELECTED difficulty. Every .osu in a set declares its own
+    /// [Events] background and they routinely differ, but <see cref="CachedBeatmapSet.BackgroundFile"/>
+    /// is scanned once off the set's default difficulty (<see cref="CachedBeatmapSet.PreferredOsuFile"/>) —
+    /// reading it directly here left the previous difficulty's image on screen after a mid-song
+    /// difficulty switch, even though the rebuilt stack was otherwise correct for the new diff.
+    /// (Video and widescreen sizing were never affected: both come from the storyboard lazer
+    /// decodes out of the selected .osu — see <see cref="LazerStoryboardLayer.DecodeStoryboard"/>.)
+    /// Falls back to the set-level value when the selected difficulty declares no background of its
+    /// own, or names a file that isn't actually in the folder.
+    /// </summary>
+    private string? resolveBackgroundFile(OsuFileInfo? info)
+    {
+        if (osuFile != null && !string.IsNullOrEmpty(info?.BackgroundFilename))
+        {
+            string path = Path.Combine(Path.GetDirectoryName(osuFile) ?? set.Directory, info.BackgroundFilename);
+
+            if (File.Exists(path))
+                return path;
+        }
+
+        return set.BackgroundFile;
+    }
 
     /// <summary>
     /// Hides our own background sprite when the storyboard replaces it or a working video plays,
