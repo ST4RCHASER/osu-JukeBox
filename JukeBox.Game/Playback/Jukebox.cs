@@ -342,9 +342,16 @@ public partial class Jukebox : Component
 
             // Set BEFORE the track starts, and set on every round (not just replay rounds), so the
             // rate a previous replay forced can never leak into the next song — this one write is
-            // the single point of control for it.
-            double replayRate = next.Replay?.Rate ?? 1;
-            Schedule(() => playback.ReplayRate.Value = replayRate);
+            // the single point of control for it. Tempo and frequency are carried separately
+            // because osu!'s rate mods disagree about pitch (DT preserves it, NC raises it).
+            double replayTempo = next.Replay?.RateTempo ?? 1;
+            double replayFrequency = next.Replay?.RateFrequency ?? 1;
+
+            Schedule(() =>
+            {
+                playback.ReplayTempo.Value = replayTempo;
+                playback.ReplayFrequency.Value = replayFrequency;
+            });
 
             bool played = await playback.PlayAsync(cached).ConfigureAwait(false);
 

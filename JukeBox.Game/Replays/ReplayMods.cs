@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using osu.Framework.Audio;
 using osu.Game.Rulesets.Mods;
 using osu.Game.Scoring;
 using osu.Game.Utils;
@@ -55,18 +56,35 @@ public static class ReplayMods
     public static double RateFor(IEnumerable<Mod> mods) => ModUtils.CalculateRateWithMods(mods);
 
     /// <summary>
-    /// Whether playing at <see cref="RateFor"/> should shift the audio's PITCH as well as its speed.
+    /// The track adjustments these mods want, split by whether they shift pitch:
+    /// <c>Tempo</c> changes speed while preserving pitch, <c>Frequency</c> changes both. Multiply
+    /// them for the effective playback rate.
     ///
     /// <para>
-    /// Always true when there is a rate change, because a .osr is by definition a stable replay and
-    /// every stable rate mod is a straight frequency change — DT and NC play the song higher, HT and
-    /// DC lower. The mod objects lazer hands back after decoding carry an <c>AdjustPitch</c> setting
-    /// sitting at lazer's own default (false), but that is lazer's UI preference for a mod the USER
-    /// selects; the .osr format has no pitch flag at all, so it says nothing about how this play
-    /// actually sounded. Reproducing what the player heard means pitching it.
+    /// The split matters because osu!'s rate mods are NOT uniform about it, and getting it wrong is
+    /// immediately audible: <b>DoubleTime is pitch-preserving</b> (1.5× tempo) while
+    /// <b>Nightcore</b> plays the song higher (1.5× frequency); likewise <b>HalfTime</b> preserves
+    /// pitch where <b>Daycore</b> lowers it. Applying everything as frequency made DT sound
+    /// chipmunked, which it never does in osu!.
+    /// </para>
+    ///
+    /// <para>
+    /// Rather than hard-coding that table, this ASKS THE MODS: each is applied to a throwaway
+    /// <see cref="AudioAdjustments"/> exactly as lazer applies them to a real track
+    /// (<see cref="IApplicableToTrack"/>), and the aggregate it produces is read back. So whatever
+    /// a mod does to audio — including a future one, or a user-configured <c>AdjustPitch</c> — is
+    /// what this reports, with no second implementation of the rules to drift out of step.
     /// </para>
     /// </summary>
-    public static bool ShiftsPitch(IEnumerable<Mod> mods) => Math.Abs(RateFor(mods) - 1) > 0.0001;
+    public static (double Tempo, double Frequency) TrackAdjustmentsFor(IEnumerable<Mod> mods)
+    {
+        var probe = new AudioAdjustments();
+
+        foreach (var mod in mods.OfType<IApplicableToTrack>())
+            mod.ApplyToTrack(probe);
+
+        return (probe.AggregateTempo.Value, probe.AggregateFrequency.Value);
+    }
 
     /// <summary>
     /// osu!'s own mod ordering — the order of the bits in a .osr's mod field, which is also the

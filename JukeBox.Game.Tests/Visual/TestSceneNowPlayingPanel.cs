@@ -764,7 +764,7 @@ namespace JukeBox.Game.Tests.Visual
                 {
                     PlayerName = "Cookiezi",
                     ModAcronyms = new[] { "HD", "HR", "DT" },
-                    Rate = 1.5,
+                    RateTempo = 1.5,
                 },
             });
 

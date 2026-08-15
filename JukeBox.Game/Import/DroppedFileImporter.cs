@@ -221,6 +221,7 @@ public partial class DroppedFileImporter : Component
         }
 
         var mods = ReplayMods.ForGameplay(score);
+        var (rateTempo, rateFrequency) = ReplayMods.TrackAdjustmentsFor(mods);
 
         var attachment = new ReplayAttachment
         {
@@ -229,13 +230,16 @@ public partial class DroppedFileImporter : Component
             OsuFile = osuFile,
             Score = score,
             ModAcronyms = ReplayMods.Acronyms(mods),
-            Rate = ReplayMods.RateFor(mods),
-            RateShiftsPitch = ReplayMods.ShiftsPitch(mods),
+            RateTempo = rateTempo,
+            RateFrequency = rateFrequency,
             PlayedAt = header.PlayedAt,
         };
 
         if (attachment.ModAcronyms.Count > 0)
-            Logger.Log($"[drop] {player} played with {string.Join(" ", attachment.ModAcronyms)} at {attachment.Rate:0.##}× speed");
+        {
+            Logger.Log($"[drop] {player} played with {string.Join(" ", attachment.ModAcronyms)}"
+                       + $" at {attachment.Rate:0.##}× speed (tempo {rateTempo:0.##}, frequency {rateFrequency:0.##})");
+        }
 
         replays.Register(attachment);
         found.Replay = attachment;
