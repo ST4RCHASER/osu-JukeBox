@@ -26,8 +26,6 @@ namespace JukeBox.Game.Tests.Visual
         private JukeBoxConfigManager config = null!;
         private SettingsOverlay overlay = null!;
 
-        [Resolved]
-        private osu.Game.Rulesets.IRulesetConfigCache rulesetConfigs { get; set; } = null!;
 
         [Resolved]
         private osu.Framework.Configuration.FrameworkConfigManager frameworkConfig { get; set; } = null!;
@@ -346,23 +344,6 @@ namespace JukeBox.Game.Tests.Visual
 
             AddStep("recreate overlay", () => Child = overlay = new SettingsOverlay());
             AddAssert("dropdown starts Triangles", () => overlay.SkinDropdown.Current.Value == JukeBoxSkin.Triangles);
-        }
-
-        [Test]
-        public void ManiaScrollSpeedReachesRulesetConfig()
-        {
-            AddStep("show overlay", () => overlay.Show());
-
-            // Ruleset bindings attach once the realm-backed config cache has loaded (scheduled
-            // retry in the overlay) — bound is observable as the slider taking the config's range.
-            AddUntilStep("mania slider bound", () => overlay.ManiaScrollSpeedSlider?.Current.Value >= 1);
-
-            AddStep("set scroll speed 20", () => overlay.ManiaScrollSpeedSlider!.Current.Value = 20);
-            AddAssert("ruleset config holds 20", () =>
-                (rulesetConfigs.GetConfigFor(new osu.Game.Rulesets.Mania.ManiaRuleset()) as osu.Game.Rulesets.Mania.Configuration.ManiaRulesetConfigManager)!
-                .Get<double>(osu.Game.Rulesets.Mania.Configuration.ManiaRulesetSetting.ScrollSpeed) == 20);
-
-            AddStep("restore default 8", () => overlay.ManiaScrollSpeedSlider!.Current.Value = 8);
         }
 
         [Test]

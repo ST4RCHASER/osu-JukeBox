@@ -17,7 +17,13 @@ using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Platform;
 using osu.Framework.Testing;
+using osu.Game.Overlays.Settings;
+using osu.Game.Rulesets;
+using osu.Game.Rulesets.Mania;
+using osu.Game.Rulesets.Mania.Configuration;
+using osu.Game.Rulesets.Mania.UI;
 using osu.Game.Rulesets.Mods;
+using osu.Game.Rulesets.UI;
 
 namespace JukeBox.Game.Tests.Visual
 {
@@ -40,6 +46,11 @@ namespace JukeBox.Game.Tests.Visual
 
         [Resolved]
         private Jukebox jukebox { get; set; } = null!;
+
+        /// <summary>lazer's realm-backed per-ruleset config cache — the Rulesets rows that moved
+        /// into this tab bind its bindables directly, so the tests read it back the same way.</summary>
+        [Resolved]
+        private IRulesetConfigCache rulesetConfigs { get; set; } = null!;
 
         protected override IReadOnlyDependencyContainer CreateChildDependencies(IReadOnlyDependencyContainer parent)
         {
@@ -84,42 +95,133 @@ namespace JukeBox.Game.Tests.Visual
         }
 
         /// <summary>
-        /// Only the ruleset on screen gets its element list — hiding a slider ball means nothing on
-        /// a taiko map. The shared block additionally filters its own rows: osu!catch draws no
-        /// hit-score popups, so the judgements toggle is not offered there even though it is for
-        /// every other mode.
+        /// Every ruleset's element group is listed at all times, whatever is playing (user request):
+        /// the section is a complete inventory of what can be hidden, not a view of the current
+        /// song. The one row that still comes and goes is the shared judgements toggle, and that is
+        /// a real absence rather than scoping — osu!catch draws no hit-score popups at all.
         /// </summary>
-        [TestCase(0, PlayfieldElement.OsuSliderFollowRing)]
-        [TestCase(1, PlayfieldElement.TaikoInputDrum)]
-        [TestCase(2, PlayfieldElement.CatchCatcher)]
-        [TestCase(3, PlayfieldElement.ManiaKeyArea)]
-        public void OnlyTheElementsOfTheRulesetOnScreenAreOffered(int mode, PlayfieldElement own)
+        [TestCase(0)]
+        [TestCase(1)]
+        [TestCase(2)]
+        [TestCase(3)]
+        public void EveryRulesetsElementGroupIsListedWhateverIsPlaying(int mode)
         {
             AddStep($"play a mode-{mode} difficulty", () => playing(mode));
 
-            AddAssert("its own group is shown", () => panel.ElementGroupVisible(mode));
-            AddAssert("its own elements are offered", () => panel.ElementCheckbox(own).Alpha == 1);
+            AddAssert("all four ruleset groups are shown",
+                () => new[] { 0, 1, 2, 3 }.All(panel.ElementGroupVisible));
 
-            AddAssert("no other ruleset's group is shown",
-                () => new[] { 0, 1, 2, 3 }.Where(r => r != mode).All(r => !panel.ElementGroupVisible(r)));
+            AddAssert("and the shared group with them",
+                () => panel.ElementGroupVisible(PlayfieldElementCatalog.all_rulesets));
 
-            AddAssert("the shared group is shown", () => panel.ElementGroupVisible(PlayfieldElementCatalog.all_rulesets));
+            AddAssert("every ruleset's own rows are offered, not just the playing one's",
+                () => new[]
+                {
+                    PlayfieldElement.OsuSliderFollowRing,
+                    PlayfieldElement.TaikoInputDrum,
+                    PlayfieldElement.CatchCatcher,
+                    PlayfieldElement.ManiaKeyArea,
+                }.All(e => panel.ElementCheckbox(e).Alpha == 1));
 
-            // The one shared element that isn't actually shared.
             AddAssert("judgements offered only where they are drawn",
                 () => (panel.ElementCheckbox(PlayfieldElement.Judgements).Alpha > 0) == (mode != 2));
         }
 
+        /// <summary>The panel must not reshuffle under the user when the song changes — the set of
+        /// groups is identical before and after a ruleset change.</summary>
         [Test]
-        public void SwitchingDifficultyToAnotherModeSwapsTheGroup()
+        public void ChangingRulesetDoesNotReshuffleTheElementGroups()
         {
+            bool[] before = Array.Empty<bool>();
+
             AddStep("play an osu! difficulty", () => playing(0));
-            AddAssert("osu! group shown", () => panel.ElementGroupVisible(0) && !panel.ElementGroupVisible(3));
+            AddStep("record which groups are shown", () => before = groupVisibility());
 
             AddStep("switch to the mania difficulty of the same set", () => playback.SelectedOsuFile.Value = "/set/diff3.osu");
+            AddAssert("the same groups are shown", () => groupVisibility().SequenceEqual(before));
 
-            AddAssert("mania group shown instead", () => panel.ElementGroupVisible(3) && !panel.ElementGroupVisible(0));
+            AddStep("switch to the taiko difficulty", () => playback.SelectedOsuFile.Value = "/set/diff1.osu");
+            AddAssert("still the same groups", () => groupVisibility().SequenceEqual(before));
         }
+
+        /// <summary>
+        /// The point of an always-complete list: a toggle set while another ruleset is playing is
+        /// remembered, persisted, and in force the moment a map of its own ruleset starts. The
+        /// filter never consults what is playing — it reads the shared visibility service — so this
+        /// is really a check that nothing re-scopes the value behind the user's back.
+        /// </summary>
+        [Test]
+        public void AToggleSetForAnotherRulesetIsHonouredWhenThatRulesetPlays()
+        {
+            AddStep("play an osu! difficulty", () => playing(0));
+
+            AddStep("hide mania's key area while osu! is on screen",
+                () => panel.ElementCheckbox(PlayfieldElement.ManiaKeyArea).Current.Value = false);
+
+            AddAssert("the service took it", () => visibility.IsHidden(PlayfieldElement.ManiaKeyArea));
+            AddAssert("and it persisted",
+                () => config.Get<string>(JukeBoxSetting.HiddenPlayfieldElements).Contains("ManiaKeyArea"));
+
+            AddStep("now play the mania difficulty", () => playback.SelectedOsuFile.Value = "/set/diff3.osu");
+
+            AddAssert("it is still hidden, and still ticked off in the tab",
+                () => visibility.IsHidden(PlayfieldElement.ManiaKeyArea)
+                      && !panel.ElementCheckbox(PlayfieldElement.ManiaKeyArea).Current.Value);
+        }
+
+        private bool[] groupVisibility()
+            => new[] { PlayfieldElementCatalog.all_rulesets, 0, 1, 2, 3 }.Select(panel.ElementGroupVisible).ToArray();
+
+        /// <summary>
+        /// The Rulesets and Analysis sections moved here wholesale. They keep their real lazer
+        /// per-ruleset config bindables, so a change here is a change to what the hosted ruleset
+        /// itself reads — nothing is mirrored into our own config.
+        /// </summary>
+        [Test]
+        public void ManiaScrollSpeedReachesLazersOwnRulesetConfig()
+        {
+            // Ruleset bindings attach once the realm-backed config cache has loaded (scheduled
+            // retry in the panel) — bound is observable as the slider taking the config's range.
+            AddUntilStep("mania slider bound", () => panel.ManiaScrollSpeedSlider.Current.Value >= 1);
+
+            AddStep("set scroll speed 20", () => panel.ManiaScrollSpeedSlider.Current.Value = 20);
+
+            AddAssert("lazer's mania ruleset config holds 20", () => maniaConfig().Get<double>(ManiaRulesetSetting.ScrollSpeed) == 20);
+
+            // And the other direction: whatever writes that config drives the slider.
+            AddStep("something else writes the config", () => maniaConfig().SetValue(ManiaRulesetSetting.ScrollSpeed, 12.0));
+            AddAssert("the slider followed", () => panel.ManiaScrollSpeedSlider.Current.Value == 12);
+
+            AddStep("restore default 8", () => panel.ManiaScrollSpeedSlider.Current.Value = 8);
+        }
+
+        [Test]
+        public void EveryMovedRulesetRowIsInTheChartTab()
+        {
+            AddUntilStep("ruleset rows bound", () => panel.ManiaScrollSpeedSlider.Current.Value >= 1);
+
+            AddAssert("all of Rulesets and Analysis came across", () =>
+            {
+                var labels = panel.ChildrenOfType<SettingsItem<bool>>().Select(i => i.LabelText.ToString())
+                                  .Concat(panel.ChildrenOfType<SettingsItem<double>>().Select(i => i.LabelText.ToString()))
+                                  .Concat(panel.ChildrenOfType<SettingsItem<int>>().Select(i => i.LabelText.ToString()))
+                                  .Concat(panel.ChildrenOfType<SettingsItem<PlayfieldBorderStyle>>().Select(i => i.LabelText.ToString()))
+                                  .Concat(panel.ChildrenOfType<SettingsItem<ManiaScrollingDirection>>().Select(i => i.LabelText.ToString()))
+                                  .ToList();
+
+                return new[]
+                {
+                    "Snaking in sliders", "Snaking out sliders", "Cursor trail", "Cursor ripples", "Playfield border style",
+                    "Scrolling direction", "Scroll speed", "Timing-based note colouring",
+                    "Show click markers", "Show frame markers", "Show cursor path", "Hide gameplay cursor", "Display length",
+                }.All(labels.Contains)
+                // "Hit animations" appears twice — once for osu!, once for osu!taiko.
+                && labels.Count(l => l == "Hit animations") == 2;
+            });
+        }
+
+        private ManiaRulesetConfigManager maniaConfig()
+            => (ManiaRulesetConfigManager)rulesetConfigs.GetConfigFor(new ManiaRuleset())!;
 
         /// <summary>
         /// A replay was played under mods of its own, so the toggles are not the user's to move
