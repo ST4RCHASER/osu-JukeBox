@@ -757,9 +757,12 @@ public partial class ChartPanel : CompositeDrawable
 
         if (convertsOnlyNote != null)
         {
-            convertsOnlyNote.Alpha = ChartModCatalog.Categories
-                                                    .SelectMany(c => c.Mods)
-                                                    .Any(m => ChartModCatalog.AppliesOnlyToConverts(m) && ChartModCatalog.OfferedBy(m, mode))
+            // Explaining why these rows can't bite is only true while they can't: a conversion is
+            // exactly the state in which they do, so the note goes when one is in force.
+            convertsOnlyNote.Alpha = !isConverting.Value
+                                     && ChartModCatalog.Categories
+                                                       .SelectMany(c => c.Mods)
+                                                       .Any(m => ChartModCatalog.AppliesOnlyToConverts(m) && ChartModCatalog.OfferedBy(m, mode))
                 ? 1
                 : 0;
         }

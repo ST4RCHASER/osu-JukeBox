@@ -472,6 +472,29 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("and nothing key-shaped persisted", () => !config.Get<string>(JukeBoxSetting.ChartMods).Contains("K"));
         }
 
+        /// <summary>
+        /// The live path, which is how the control is actually used now that conversion exists: a
+        /// key count picked while a conversion is in force must show up in the control, and the
+        /// converts-only explanation must go away — it is explaining a state we are no longer in.
+        /// </summary>
+        [Test]
+        public void UnderConversionTheControlIsLiveAndShowsTheSelectedCount()
+        {
+            AddStep("play an osu! difficulty", () => playing(0));
+            AddStep("convert an osu! map to mania", () => convertToMania());
+
+            AddUntilStep("the control went live", () => !panel.KeyOverrideInert);
+            AddAssert("and the converts-only note is gone", () => !panel.ConvertsOnlyNoteVisible);
+
+            AddStep("select 7 keys on the selection", () => chartMods.Enabled(ChartMod.Key7).Value = true);
+
+            AddAssert("the control shows ticked and 7",
+                () => panel.KeyOverrideCheckbox.Current.Value && panel.KeyCountSlider.Current.Value == 7);
+
+            AddStep("add Co-op", () => chartMods.Enabled(ChartMod.DualStages).Value = true);
+            AddAssert("Co-op is live too", () => !panel.ModInert(ChartMod.DualStages));
+        }
+
         private IReadOnlyList<ChartMod> keyModsOn()
             => ChartModCatalog.KeyCountMods.Where(m => chartMods.Enabled(m).Value).ToArray();
 
