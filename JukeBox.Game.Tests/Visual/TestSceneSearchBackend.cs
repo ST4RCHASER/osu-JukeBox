@@ -149,6 +149,33 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("end of results is exact", () => !engine.HasMore);
         }
 
+        // Observed live against osu.ppy.sh: a deeper page can come back carrying Elasticsearch's
+        // capped estimate (10,000) rather than the count page one reported, which made the status
+        // line drop from "56,325 results" to "10,000 results" partway down an infinite scroll. The
+        // total belongs to the search, not to the page.
+        [Test]
+        public void TotalIsTakenFromTheFirstPageAndNotOverwrittenWhilePaging()
+        {
+            AddStep("select official", () => engine.Api.Value = SearchApi.Official);
+            AddStep("serve a real total then a capped one", () =>
+            {
+                officialHandler.FirstPageTotal = 56325;
+                officialHandler.DeepPageTotal = 10000;
+                officialHandler.NextCursor = "cur-1";
+            });
+            AddStep("search", () => engine.Query.Value = "camellia");
+
+            AddUntilStep("both pages in", () => engine.LoadedSets.Count == 4);
+
+            AddAssert("total is still page one's", () => engine.TotalResults == 56325);
+            AddAssert("status still names it", () => engine.Status.Value.Contains("56,325 results"));
+
+            // A new search must of course pick up its own total.
+            AddStep("serve a different total", () => officialHandler.FirstPageTotal = 42);
+            AddStep("search again", () => engine.Query.Value = "different");
+            AddUntilStep("fresh total adopted", () => engine.TotalResults == 42);
+        }
+
         // ---- Fallback ---------------------------------------------------------------------------
 
         [Test]
@@ -294,6 +321,13 @@ namespace JukeBox.Game.Tests.Visual
             public int SearchRequests;
             public string? LastSearchUrl;
 
+            /// <summary>The `total` served for a first page and for a cursor-carrying (deeper) one
+            /// — split so a test can reproduce osu!'s real habit of answering a deeper page with
+            /// Elasticsearch's capped estimate instead of the count it gave on page one.</summary>
+            public int FirstPageTotal = 2;
+
+            public int DeepPageTotal = 2;
+
             /// <summary>Rejects both the token exchange AND the search — a token already cached from
             /// an earlier test in this scene would otherwise sail past a token-only rejection, which
             /// is exactly what caching it is for.</summary>
@@ -310,6 +344,8 @@ namespace JukeBox.Game.Tests.Visual
                 NextCursor = null;
                 SearchRequests = 0;
                 LastSearchUrl = null;
+                FirstPageTotal = 2;
+                DeepPageTotal = 2;
             }
 
             protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
@@ -332,6 +368,10 @@ namespace JukeBox.Game.Tests.Visual
 
                 string cursor = NextCursor == null ? "null" : $"\"{NextCursor}\"";
                 NextCursor = null;
+                // Keyed on the request carrying a cursor, not on a request counter: that is what
+                // actually distinguishes a first page from a deeper one, and it stays right across
+                // several searches in one test.
+                int total = url.Contains("cursor_string=") ? DeepPageTotal : FirstPageTotal;
 
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
                 {
@@ -339,7 +379,7 @@ namespace JukeBox.Game.Tests.Visual
                         "{\"beatmapsets\":["
                         + "{\"id\":1,\"title\":\"From Official\",\"artist\":\"a\",\"creator\":\"c\",\"genre_id\":3,\"beatmaps\":[]},"
                         + "{\"id\":2,\"title\":\"From Official 2\",\"artist\":\"a\",\"creator\":\"c\",\"genre_id\":3,\"beatmaps\":[]}"
-                        + $"],\"total\":2,\"cursor_string\":{cursor}}}"),
+                        + $"],\"total\":{total},\"cursor_string\":{cursor}}}"),
                 });
             }
         }
