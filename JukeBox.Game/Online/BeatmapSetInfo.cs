@@ -28,6 +28,17 @@ public class BeatmapSetInfo
     public NamedIdInfo? Language { get; set; }
     public AvailabilityInfo? Availability { get; set; }
     public List<BeatmapInfo> Beatmaps { get; set; } = new();
+
+    /// <summary>
+    /// A replay the user dropped onto the window that resolved to this set, or null for every set
+    /// that came from an ordinary search/download. Lives on this type — rather than alongside the
+    /// queue — because this is the object that actually travels: <see cref="Playback.MusicQueue"/>
+    /// holds these, <see cref="Playback.Jukebox.NowPlaying"/> publishes one, and the queue card and
+    /// playback panel both read their "Played by X" credit straight off it, with no parallel
+    /// bookkeeping to keep in step. Never serialised — no mirror has a field for it.
+    /// </summary>
+    [JsonIgnore]
+    public Replays.ReplayAttachment? Replay { get; set; }
     // Prefer the romanized Title/Artist: the default font has no CJK (or other non-Latin) glyph
     // coverage, so preferring TitleUnicode/ArtistUnicode drew as "????" tofu boxes whenever a set's
     // metadata was non-Latin. Fall back to the unicode variant only when the romanized one is
@@ -69,4 +80,13 @@ public class BeatmapInfo
     public string Version { get; set; } = "";
     public double DifficultyRating { get; set; }
     public int TotalLength { get; set; }
+
+    /// <summary>
+    /// osu-web's <c>checksum</c>: the MD5 of this difficulty's CANONICAL .osu file, i.e. the one
+    /// osu! itself hashes and the one a replay records. Deliberately not assumed to match the file
+    /// in our cache: mirrors that repack an archive (NeriNyan rewrites .osu files when serving a
+    /// no-video download) change those bytes and therefore their MD5, while this value keeps
+    /// naming the difficulty a replay means. See the replay import's difficulty resolution.
+    /// </summary>
+    public string Checksum { get; set; } = "";
 }

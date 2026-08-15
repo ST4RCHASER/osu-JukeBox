@@ -4,6 +4,7 @@ using System;
 using System.IO;
 using System.Linq;
 using JukeBox.Game.LazerPlayer;
+using JukeBox.Game.Replays;
 using NUnit.Framework;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
@@ -11,8 +12,10 @@ using osu.Framework.Timing;
 using osu.Game.Beatmaps;
 using osu.Game.Rulesets.Catch;
 using osu.Game.Rulesets.Mania;
+using osu.Game.Rulesets.Mods;
 using osu.Game.Rulesets.Osu;
 using osu.Game.Rulesets.Taiko;
+using osu.Game.Scoring;
 
 namespace JukeBox.Game.Tests.Visual
 {
@@ -138,6 +141,61 @@ namespace JukeBox.Game.Tests.Visual
 
             AddStep("seek backwards", () => manual.CurrentTime = 500);
             AddUntilStep("frame-stable clock followed the rewind", () => frameStableTimeNear(500));
+
+            AddStep("remove layer", () => Remove(host, true));
+        }
+
+        // A set queued from a dropped .osr must render the REAL play, not autoplay: the layer hands
+        // the decoded score straight to DrawableRuleset.SetReplayScore, so the cursor follows the
+        // frames the player actually produced.
+        [Test]
+        public void ADroppedReplayDrivesGameplayInsteadOfAutoplay()
+        {
+            Score replay = null!;
+
+            AddStep("create layer with a replay", () =>
+            {
+                manual.CurrentTime = 0;
+
+                string osu = Path.Combine(dir, "replayed [0].osu");
+                File.WriteAllText(osu, beatmapForMode(0));
+
+                string osr = Path.Combine(dir, "replayed.osr");
+                Import.ReplayFixture.Write(osr, osu, "Cookiezi");
+                replay = new JukeBoxScoreDecoder(osu).Decode(osr);
+
+                Add(host = new Container
+                {
+                    RelativeSizeAxes = Axes.Both,
+                    Clock = new FramedClock(manual),
+                    Child = layer = new LazerChartLayer(new FlatWorkingBeatmap(osu), osu, replay),
+                });
+            });
+
+            AddUntilStep("layer loaded", () => layer.IsLoaded && layer.DrawableRuleset != null);
+
+            AddAssert("the user's replay is what's driving it", () => layer.UsingUserReplay);
+            AddAssert("and it is the score the ruleset was given", () => ReferenceEquals(layer.DrawableRuleset!.ReplayScore, replay));
+            AddAssert("no autoplay mod was applied", () => layer.DrawableRuleset!.Mods.All(m => m is not ModAutoplay));
+
+            // The overlay still attaches, now drawing the real play's cursor path rather than a
+            // generated one.
+            AddUntilStep("analysis overlay attached", () => layer.HasAnalysisOverlay);
+
+            AddStep("remove layer", () => Remove(host, true));
+        }
+
+        // The fallback has to stay exactly as it was: no replay means the generated autoplay mod
+        // drives gameplay, same as before drag-and-drop existed.
+        [Test]
+        public void WithNoReplayGameplayStaysAutoplayDriven()
+        {
+            createLayer(0);
+
+            AddUntilStep("layer loaded", () => layer.IsLoaded && layer.DrawableRuleset != null);
+            AddAssert("not replay-driven", () => !layer.UsingUserReplay);
+            AddAssert("autoplay mod applied", () => layer.DrawableRuleset!.Mods.Any(m => m is ModAutoplay));
+            AddAssert("a generated replay is still attached", () => layer.DrawableRuleset!.ReplayScore?.Replay?.Frames.Count > 0);
 
             AddStep("remove layer", () => Remove(host, true));
         }

@@ -250,9 +250,13 @@ namespace JukeBox.Game.Tests.Visual
                 InputManager.Click(MouseButton.Left);
             });
 
+            // Counted off the enum rather than hardcoded, so adding a skin (e.g. Custom) doesn't
+            // silently turn this into a timeout with no hint of why.
+            int skinCount = System.Enum.GetValues<JukeBoxSkin>().Length;
+
             AddUntilStep("menu open with all skin entries", () => overlay.SkinDropdown
                 .ChildrenOfType<osu.Framework.Graphics.UserInterface.Menu>().Any(m =>
-                    m.State == osu.Framework.Graphics.UserInterface.MenuState.Open && m.Items.Count == 5));
+                    m.State == osu.Framework.Graphics.UserInterface.MenuState.Open && m.Items.Count == skinCount));
 
             AddStep("close menu", () => InputManager.Key(Key.Escape));
         }

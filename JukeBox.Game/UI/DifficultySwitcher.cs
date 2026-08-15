@@ -118,15 +118,28 @@ public partial class DifficultySwitcher : CompositeDrawable
             // while Disabled (which it will be, left over from a previous single-difficulty set).
             dropdown.Current.Disabled = false;
 
+            // Populating Items is emphatically not a user pick, but Dropdown<T> moves its own
+            // Current when the item list is replaced (the old selection is no longer in it), which
+            // reaches onSelectionCommitted and fires a real SwitchDifficultyAsync for whatever the
+            // control happened to land on — the set's default difficulty. That silently undid any
+            // difficulty another component had just selected: this Schedule runs a frame after the
+            // Current write that queued it, so a difficulty chosen in between (Jukebox selecting
+            // the one a dropped replay was recorded on) was reverted to the set default the moment
+            // this ran. Hence the same guard syncSelection uses, extended over the assignment.
+            settingSelection = true;
+
             if (set == null || set.Difficulties.Count == 0)
             {
                 dropdown.Items = System.Array.Empty<DifficultyInfo?>();
+                settingSelection = false;
                 dropdown.Hide(); // AutoSizeAxes on this CompositeDrawable then collapses to zero size, same as the old empty chip flow
                 return;
             }
 
             dropdown.Show();
             dropdown.Items = set.Difficulties.Take(max_items).Cast<DifficultyInfo?>().ToArray();
+            settingSelection = false;
+
             syncSelection();
 
             // A single-difficulty set still shows its one entry (effectively always-selected) —
