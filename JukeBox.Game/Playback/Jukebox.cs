@@ -155,9 +155,14 @@ public partial class Jukebox : Component
     /// <see cref="SkipCurrent"/>. Every current caller (UI event handlers such as
     /// MapIdOverlay/BeatmapListingOverlay's submit actions) already runs there.
     /// </remarks>
-    public async Task EnqueueAndMaybePlayAsync(BeatmapSetInfo set)
+    /// <param name="set">The set to queue.</param>
+    /// <param name="announce">Whether a successful enqueue raises <see cref="Enqueued"/>. Drag-and-drop
+    /// imports pass false and report the outcome themselves (see <see cref="Import.DroppedFileImporter"/>):
+    /// their message carries information the generic notification can't — the replay's player for a
+    /// dropped .osr — and the two toasts would otherwise be drawn on top of each other.</param>
+    public async Task EnqueueAndMaybePlayAsync(BeatmapSetInfo set, bool announce = true)
     {
-        if (queue.Enqueue(set))
+        if (queue.Enqueue(set) && announce)
             Enqueued?.Invoke(set);
 
         // Fire-and-forget: start caching this set immediately rather than waiting for its turn

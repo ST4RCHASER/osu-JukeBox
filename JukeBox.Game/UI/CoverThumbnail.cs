@@ -63,7 +63,9 @@ public partial class CoverThumbnail : CompositeDrawable
 
     private async Task loadCoverAsync()
     {
-        if (thumbnailStore == null)
+        // A non-positive id is a locally-imported set (see BeatmapCache.LocalSetId) — there is no
+        // osu! web page behind it, so the request could only ever 404. The placeholder stays.
+        if (thumbnailStore == null || setId <= 0)
             return;
 
         Texture? texture;
