@@ -44,20 +44,23 @@ public class OsuFileScanner
     /// Whether <paramref name="audioFilename"/> is osu!'s "there is no music file" marker rather
     /// than a real file to load. Keysound-only beatmaps — where the whole song is per-note samples
     /// and storyboard <c>Sample</c> events — declare <c>AudioFilename: virtual</c> (any extension,
-    /// any casing) or omit the key entirely; osu! runs them on a silent track and we do the same
-    /// (see <see cref="CachedBeatmapSet.HasVirtualAudio"/>).
+    /// any casing); osu! runs them on a silent track and we do the same (see
+    /// <see cref="CachedBeatmapSet.HasVirtualAudio"/>).
     ///
     /// <para>
-    /// Deliberately NOT "the audio file is missing": a difficulty naming a real file that isn't
-    /// there is a broken set, and must keep reporting as unplayable rather than silently becoming
-    /// a silent one. Callers pair this with an existence check so a set that genuinely ships a
-    /// file called <c>virtual.mp3</c> still plays it.
+    /// Deliberately requires that EXPLICIT declaration, and is deliberately NOT "the audio file is
+    /// missing". A difficulty naming a real file that isn't there — or declaring no AudioFilename
+    /// at all — is a broken set, and must keep reporting as unplayable: silently turning it into
+    /// three seconds of silence would resurrect the very stall this app already guards against
+    /// (see TestSceneJukebox.SetWithNoLoadableAudioReportsErrorAndAdvancesToNextQueuedSet).
+    /// Callers pair this with an existence check so a set that genuinely ships a file called
+    /// <c>virtual.mp3</c> still plays it.
     /// </para>
     /// </summary>
     public static bool IsVirtualAudioFilename(string? audioFilename)
     {
         if (string.IsNullOrWhiteSpace(audioFilename))
-            return true;
+            return false;
 
         return Path.GetFileNameWithoutExtension(audioFilename.Trim())
                    .Equals("virtual", StringComparison.OrdinalIgnoreCase);
