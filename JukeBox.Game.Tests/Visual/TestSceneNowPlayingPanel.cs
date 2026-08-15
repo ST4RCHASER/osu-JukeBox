@@ -632,6 +632,115 @@ namespace JukeBox.Game.Tests.Visual
             },
         };
 
+        private string[] listedVersions() => dropdown().Items.Select(d => d!.Version).ToArray();
+
+        // Sorted easiest-first: the list used to come out in scan order, which is alphabetical by
+        // filename, so a set read as Hard / Insane / Normal — nonsense as a difficulty ladder.
+        [Test]
+        public void DifficultyDropdownListsEasiestFirst()
+        {
+            AddStep("play a graded set with ratings", () =>
+            {
+                playback.Current.Value = gradedSet();
+                playback.SelectedOsuFile.Value = "hard.osu";
+                jukebox.NowPlaying.Value = gradedRatings();
+            });
+
+            AddUntilStep("list sorted by ascending stars",
+                () => listedVersions().SequenceEqual(new[] { "Normal", "Hard", "Insane" }));
+
+            // The framework flows rows in Items order, but assert the drawn rows too — the list the
+            // user reads is the one that matters, and it is a different object graph.
+            AddAssert("and the drawn rows follow the same order", () => menuRows()
+                .Where(r => difficultyOf(r) != null)
+                .OrderBy(r => r.ScreenSpaceDrawQuad.TopLeft.Y)
+                .Select(r => difficultyOf(r)!.Version)
+                .SequenceEqual(new[] { "Normal", "Hard", "Insane" }));
+        }
+
+        // THE REAL SEQUENCE, and the one the tests above skip by publishing both together: Jukebox
+        // starts the set first and publishes its metadata a few frames later, so the list is
+        // necessarily built before any rating exists. Everything rating-shaped has to catch up when
+        // it lands — including the rows' own pills, which are built with the rows.
+        //
+        // The alphabetical order here already matches the star order, so nothing about the SEQUENCE
+        // of items changes when the ratings arrive. That is the case the first fix got wrong: it
+        // rebuilt only on a changed order, leaving a rated header sitting above unrated rows.
+        [Test]
+        public void RatingsArrivingAfterPlaybackStartsStillReachTheRows()
+        {
+            AddStep("start the set with no metadata yet", () =>
+            {
+                playback.Current.Value = gradedSet(118);
+                playback.SelectedOsuFile.Value = "hard.osu";
+                jukebox.NowPlaying.Value = null;
+            });
+
+            AddUntilStep("rows built, unrated", () => menuRows().Count(r => difficultyOf(r) != null) == 3
+                                                     && menuRows().All(r => !r.ChildrenOfType<CircularContainer>().Any()));
+
+            AddStep("metadata lands, ordered so the sequence does NOT change", () => jukebox.NowPlaying.Value = new BeatmapSetInfo
+            {
+                Id = 118,
+                Title = "Already in order",
+                Beatmaps =
+                {
+                    new BeatmapInfo { Mode = "osu", Version = "Hard", DifficultyRating = 3.20 },
+                    new BeatmapInfo { Mode = "osu", Version = "Insane", DifficultyRating = 4.90 },
+                    new BeatmapInfo { Mode = "osu", Version = "Normal", DifficultyRating = 5.50 },
+                },
+            });
+
+            AddUntilStep("every row picks up its pill", () => menuRows()
+                .Where(r => difficultyOf(r) != null)
+                .All(r => r.ChildrenOfType<CircularContainer>().Any()));
+            AddAssert("order is unchanged, as this fixture intends",
+                () => listedVersions().SequenceEqual(new[] { "Hard", "Insane", "Normal" }));
+            AddAssert("and the header agrees with the rows", () => headerBadges()
+                .SelectMany(b => b.ChildrenOfType<CircularContainer>()).Any());
+        }
+
+        // Star ratings are computed, not stored in a .osu file, so a set with no online metadata (a
+        // local folder, a dropped .osz) has nothing to rank by. It must keep a stable, sensible
+        // order rather than shuffling — which means the scan order it always used.
+        [Test]
+        public void DifficultyDropdownFallsBackToScanOrderWithoutRatings()
+        {
+            AddStep("play a graded set with NO ratings", () =>
+            {
+                playback.Current.Value = gradedSet(111);
+                playback.SelectedOsuFile.Value = "hard.osu";
+                jukebox.NowPlaying.Value = new BeatmapSetInfo { Id = 111, Title = "No ratings" };
+            });
+
+            AddUntilStep("list keeps its alphabetical scan order",
+                () => listedVersions().SequenceEqual(new[] { "Hard", "Insane", "Normal" }));
+        }
+
+        // Ratings for the set being played — NOT whatever NowPlaying happens to hold. Jukebox
+        // publishes NowPlaying only after PlayAsync has already moved PlaybackController.Current, so
+        // there is a window where NowPlaying still describes the previous song; difficulty names
+        // like "Hard"/"Normal" recur across sets, so an unguarded match would sort and label a
+        // difficulty by a different song's numbers.
+        [Test]
+        public void DifficultyDropdownIgnoresRatingsBelongingToAnotherSet()
+        {
+            AddStep("play a set while NowPlaying still describes a different one", () =>
+            {
+                jukebox.NowPlaying.Value = gradedRatings(999); // same version names, different set
+                playback.Current.Value = gradedSet(112);
+                playback.SelectedOsuFile.Value = "hard.osu";
+            });
+
+            AddWaitStep("let the switcher settle", 5);
+
+            AddAssert("no pill borrowed from the other set", () => menuRows()
+                .Where(r => difficultyOf(r) != null)
+                .All(r => !r.ChildrenOfType<CircularContainer>().Any()));
+            AddAssert("and the order stays the scan order",
+                () => listedVersions().SequenceEqual(new[] { "Hard", "Insane", "Normal" }));
+        }
+
         // The regression this round exists for: every REAL row rendered a bare name while the closed
         // header showed its badges, because the framework builds a row's content from inside a base
         // constructor — before the subclass field holding the badges is assigned.
@@ -690,6 +799,85 @@ namespace JukeBox.Game.Tests.Visual
         /// <summary>Lazer's own label inset on an unbadged dropdown row — a badged row must clear
         /// it by the width of its badges.</summary>
         private const float unbadged_label_inset = 15;
+
+        // A set's own default difficulty is just the first osu!std file on disk — an arbitrary pick.
+        // Starting on the hardest is the useful default for a storyboard viewer.
+        [Test]
+        public void PlayingASetStartsOnItsHardestDifficulty()
+        {
+            AddStep("play a graded set with ratings", () =>
+            {
+                playback.Current.Value = gradedSet(114);
+                playback.SelectedOsuFile.Value = "hard.osu"; // the set's own PreferredOsuFile
+                jukebox.NowPlaying.Value = gradedRatings(114);
+            });
+
+            AddUntilStep("switched to the 4.90 difficulty", () => playback.SelectedOsuFile.Value == "insane.osu");
+            AddUntilStep("and the dropdown agrees", () => dropdown().Current.Value?.Version == "Insane");
+        }
+
+        // …but only once. Moving off it afterwards must stick, or the picker would drag the user
+        // back to the hardest difficulty every time anything republished NowPlaying.
+        [Test]
+        public void TheHardestDefaultDoesNotFightAManualPick()
+        {
+            AddStep("play a graded set with ratings", () =>
+            {
+                playback.Current.Value = gradedSet(115);
+                playback.SelectedOsuFile.Value = "hard.osu";
+                jukebox.NowPlaying.Value = gradedRatings(115);
+            });
+
+            AddUntilStep("started on the hardest", () => playback.SelectedOsuFile.Value == "insane.osu");
+
+            AddStep("user picks the easiest", () => dropdown().Current.Value =
+                playback.Current.Value!.Difficulties.Single(d => d.Version == "Normal"));
+            AddUntilStep("playback followed", () => playback.SelectedOsuFile.Value == "normal.osu");
+
+            AddStep("something republishes the same set's metadata", () => jukebox.NowPlaying.Value = gradedRatings(115));
+            AddWaitStep("let the switcher settle", 5);
+
+            AddAssert("still on the difficulty the user chose", () => playback.SelectedOsuFile.Value == "normal.osu");
+        }
+
+        // A replay is tied to one exact .osu (matched by checksum at import), so auto-switching to
+        // the hardest difficulty would silently drop it back to autoplay on a difficulty the player
+        // never played.
+        [Test]
+        public void TheHardestDefaultLeavesAReplayBackedSetAlone()
+        {
+            AddStep("play a graded set carrying a replay on the EASIEST difficulty", () =>
+            {
+                playback.Current.Value = gradedSet(116);
+                playback.SelectedOsuFile.Value = "normal.osu";
+
+                var info = gradedRatings(116);
+                info.Replay = new JukeBox.Game.Replays.ReplayAttachment { PlayerName = "Cookiezi", OsuFile = "normal.osu" };
+                jukebox.NowPlaying.Value = info;
+            });
+
+            AddUntilStep("dropdown is locked", () => dropdown().Current.Disabled);
+            AddWaitStep("let the switcher settle", 5);
+
+            AddAssert("still on the replay's own difficulty", () => playback.SelectedOsuFile.Value == "normal.osu");
+            AddAssert("and the dropdown still shows it", () => dropdown().Current.Value?.Version == "Normal");
+        }
+
+        // No ratings, nothing to rank by — the set keeps the difficulty it would have played before.
+        [Test]
+        public void TheHardestDefaultIsSkippedWithoutRatings()
+        {
+            AddStep("play a graded set with NO ratings", () =>
+            {
+                playback.Current.Value = gradedSet(117);
+                playback.SelectedOsuFile.Value = "hard.osu";
+                jukebox.NowPlaying.Value = new BeatmapSetInfo { Id = 117, Title = "No ratings" };
+            });
+
+            AddWaitStep("let the switcher settle", 5);
+
+            AddAssert("still on the set's own default", () => playback.SelectedOsuFile.Value == "hard.osu");
+        }
 
         private IEnumerable<DifficultySwitcher.DifficultyBadges> headerBadges()
             => nowPlaying.DifficultySwitcher.ChildrenOfType<DifficultySwitcher.DifficultyBadges>();

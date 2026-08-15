@@ -25,6 +25,13 @@ namespace JukeBox.Game.UI;
 /// <see cref="PlaybackController.SwitchDifficultyAsync"/>). A single-difficulty set still shows
 /// its one entry (locked via <see cref="Bindable{T}.Disabled"/> — non-interactive, since there's
 /// nothing to switch between); a zero-difficulty set hides the dropdown entirely.
+///
+/// <para>
+/// The list is ordered EASIEST FIRST by star rating and a set starts on its HARDEST difficulty —
+/// see <see cref="listedDifficulties"/> and <see cref="applyHardestDefault"/>. Both need ratings,
+/// which exist only in the set's online metadata (a .osu file has no star rating; it is computed),
+/// so both degrade to the previous behaviour on a set that has none.
+/// </para>
 /// </summary>
 public partial class DifficultySwitcher : CompositeDrawable
 {
@@ -55,6 +62,13 @@ public partial class DifficultySwitcher : CompositeDrawable
     /// actual user pick from the dropdown menu.
     /// </summary>
     private bool settingSelection;
+
+    /// <summary>The set <see cref="applyHardestDefault"/> has already been applied to, so it runs
+    /// exactly once per set however many times its inputs land.</summary>
+    private CachedBeatmapSet? autoSelectedFor;
+
+    /// <summary>What the list was last built from — see <see cref="refreshItems"/>.</summary>
+    private string? itemsSignature;
 
     /// <summary>Test-only access to the dropdown (JukeBox.Game.Tests has InternalsVisibleTo).</summary>
     internal DifficultyDropdown Dropdown => dropdown;
@@ -88,30 +102,59 @@ public partial class DifficultySwitcher : CompositeDrawable
         // handed to playback.
         dropdown.Current.BindValueChanged(e => dropdown.RefreshHeader(e.NewValue), true);
 
-        // NowPlaying carries both the star ratings the header draws AND whether a replay is
-        // driving playback, and it lands AFTER the playback swap that queued onSetChanged — so the
-        // lock has to be re-evaluated here rather than only on a set change.
+        // NowPlaying carries the star ratings the header draws, the ORDER the list is sorted into,
+        // the difficulty played by default AND whether a replay is driving playback — and it lands
+        // AFTER the playback swap that queued onSetChanged, so all four have to be re-evaluated here
+        // rather than only on a set change.
         jukebox?.NowPlaying.BindValueChanged(_ =>
         {
             dropdown.RefreshHeader(dropdown.Current.Value);
-            updateLockedState();
+
+            // Deferred for exactly the reason onSetChanged is (see its own comment): re-sorting the
+            // list goes through Dropdown<T>.Items, whose Menu.Insert reads a LayoutPosition the flow
+            // machinery only assigns once a frame has ticked. NowPlaying can land in the very same
+            // frame the menu was built in.
+            Schedule(() =>
+            {
+                refreshItems();
+                updateLockedState();
+                applyHardestDefault();
+            });
         });
     }
 
     /// <summary>
     /// The online star rating for a locally scanned difficulty, matched on ruleset + difficulty
     /// name against the set currently playing — the pair the osu! API itself treats as a
-    /// difficulty's identity within a set. Null (no pill) whenever the set is playing without
-    /// online metadata: a local folder opened directly, or a mirror response that carried no
-    /// beatmap list.
+    /// difficulty's identity within a set. Null (no pill, no sort key) whenever the set is playing
+    /// without online metadata: a local folder or a dropped .osz, or a mirror response that carried
+    /// no beatmap list.
     /// </summary>
-    private double? starsFor(DifficultyInfo difficulty)
-    {
-        string mode = RulesetIcons.ModeString(difficulty.Mode);
+    private double? starsFor(DifficultyInfo difficulty) => ratingsForCurrentSet()?
+        .FirstOrDefault(b => b.Version == difficulty.Version && b.Mode == RulesetIcons.ModeString(difficulty.Mode))
+        ?.DifficultyRating;
 
-        return jukebox?.NowPlaying.Value?.Beatmaps
-                      .FirstOrDefault(b => b.Version == difficulty.Version && b.Mode == mode)
-                      ?.DifficultyRating;
+    /// <summary>
+    /// The online beatmap list for the set playing RIGHT NOW, or null if there isn't one yet.
+    ///
+    /// <para>
+    /// The set-id check is what makes this safe to call at any moment: Jukebox publishes
+    /// <see cref="Jukebox.NowPlaying"/> only AFTER <c>PlayAsync</c> has already moved
+    /// <see cref="PlaybackController.Current"/>, so between those two points NowPlaying still
+    /// describes the PREVIOUS set. Difficulty names are what these lookups match on, and names like
+    /// "Hard"/"Insane"/"Normal" recur across sets — without the check, a difficulty could briefly be
+    /// labelled (and sorted) by another song's rating.
+    /// </para>
+    /// </summary>
+    private System.Collections.Generic.List<Online.BeatmapInfo>? ratingsForCurrentSet()
+    {
+        var online = jukebox?.NowPlaying.Value;
+        var set = playback.Current.Value;
+
+        if (online == null || set == null || online.Id != set.SetId)
+            return null;
+
+        return online.Beatmaps;
     }
 
     private void onSetChanged(ValueChangedEvent<CachedBeatmapSet?> change)
@@ -144,18 +187,143 @@ public partial class DifficultySwitcher : CompositeDrawable
             if (set == null || set.Difficulties.Count == 0)
             {
                 dropdown.Items = System.Array.Empty<DifficultyInfo?>();
+                itemsSignature = null;
                 settingSelection = false;
                 dropdown.Hide(); // AutoSizeAxes on this CompositeDrawable then collapses to zero size, same as the old empty chip flow
                 return;
             }
 
-            dropdown.Show();
-            dropdown.Items = set.Difficulties.Take(max_items).Cast<DifficultyInfo?>().ToArray();
             settingSelection = false;
 
-            syncSelection();
+            // A different set always rebuilds, whatever its difficulties happen to be called.
+            itemsSignature = null;
+
+            dropdown.Show();
+            refreshItems();
             updateLockedState();
+            applyHardestDefault();
         });
+    }
+
+    /// <summary>
+    /// Rebuilds the list when what it should show has changed. The single place <c>Items</c> is
+    /// populated, because BOTH things that can change are driven by ratings that arrive late (see
+    /// <see cref="ratingsForCurrentSet"/>):
+    ///
+    /// <list type="bullet">
+    /// <item>the ORDER, which is by rating (<see cref="listedDifficulties"/>);</item>
+    /// <item>each row's BADGES, since a row's star pill is built with the row, out of whatever was
+    /// known at that moment.</item>
+    /// </list>
+    ///
+    /// <para>
+    /// Hence a signature over paths AND ratings rather than a plain order comparison: a set whose
+    /// rating order happens to match its alphabetical one (common — mappers name difficulties in
+    /// ascending order) would otherwise keep the pill-less rows it was first built with, which is
+    /// exactly how the real app ended up showing a rated header above unrated rows.
+    /// </para>
+    ///
+    /// <para>
+    /// The no-op case matters: rebuilding <c>Items</c> tears down and recreates every menu row,
+    /// throwing away an open menu's hover/preselection state, and NowPlaying is written for reasons
+    /// that have nothing to do with difficulty.
+    /// </para>
+    /// </summary>
+    private void refreshItems()
+    {
+        var set = playback.Current.Value;
+
+        if (set == null || set.Difficulties.Count == 0)
+            return;
+
+        var listed = listedDifficulties(set).ToArray();
+        string signature = string.Join('|', listed.Select(d => $"{d.Path}@{starsFor(d)?.ToString("0.00") ?? "?"}"));
+
+        if (signature == itemsSignature)
+            return;
+
+        itemsSignature = signature;
+
+        // Same unlock-and-guard dance as onSetChanged above, and for the same reason: replacing
+        // Items moves Dropdown<T>'s own Current, which must not read as a user pick.
+        bool wasDisabled = dropdown.Current.Disabled;
+        dropdown.Current.Disabled = false;
+
+        settingSelection = true;
+        dropdown.Items = listed.Cast<DifficultyInfo?>().ToArray();
+        settingSelection = false;
+
+        dropdown.Current.Disabled = wasDisabled;
+
+        syncSelection();
+    }
+
+    /// <summary>
+    /// The difficulties this dropdown offers, EASIEST FIRST.
+    ///
+    /// <para>
+    /// The cap is applied before the sort, not after: it keeps "which difficulties are listed"
+    /// exactly as it was (the scan order, i.e. alphabetical by filename) so this change only
+    /// reorders the list rather than quietly swapping which entries a huge set shows — and, since
+    /// <see cref="applyHardestDefault"/> chooses from this same list, it also guarantees the
+    /// difficulty auto-selected on play is one the user can actually see.
+    /// </para>
+    ///
+    /// <para>
+    /// Difficulties with no known rating sort to the END and keep their relative order, because
+    /// <see cref="Enumerable.OrderBy{T,K}(IEnumerable{T},Func{T,K})"/> is a stable sort. A set with
+    /// NO online metadata at all (a local folder, a dropped .osz) therefore falls back to exactly
+    /// the alphabetical order this dropdown used before — every key is equal, so nothing moves.
+    /// </para>
+    /// </summary>
+    private System.Collections.Generic.IEnumerable<DifficultyInfo> listedDifficulties(CachedBeatmapSet set)
+        => set.Difficulties.Take(max_items).OrderBy(d => starsFor(d) ?? double.PositiveInfinity);
+
+    /// <summary>
+    /// Starts a set on its HARDEST difficulty rather than the set's own default (which is just the
+    /// first osu!std file on disk). Applied once per set, and never when it would override a
+    /// deliberate choice:
+    ///
+    /// <list type="bullet">
+    /// <item>A <b>replay</b> pins the exact .osu it was recorded on (see
+    /// <see cref="updateLockedState"/>) — switching away would drop it back to autoplay.</item>
+    /// <item>A difficulty the <b>user picked</b> for this set stands. Any selection that isn't the
+    /// set's own <see cref="CachedBeatmapSet.PreferredOsuFile"/> got there by someone choosing it,
+    /// so it is left alone.</item>
+    /// <item>A set with <b>no star ratings</b> has nothing to rank by, so it keeps today's
+    /// behaviour.</item>
+    /// </list>
+    ///
+    /// <para>
+    /// Called both when the set changes and when <see cref="Jukebox.NowPlaying"/> lands, because the
+    /// ratings this needs arrive on the LATTER — usually after the former (see
+    /// <see cref="ratingsForCurrentSet"/>). <see cref="autoSelectedFor"/> is what keeps that from
+    /// re-running and stomping a switch the user made in between.
+    /// </para>
+    /// </summary>
+    private void applyHardestDefault()
+    {
+        var set = playback.Current.Value;
+
+        if (set == null || set.Difficulties.Count <= 1 || ReferenceEquals(autoSelectedFor, set) || ReplayLocked)
+            return;
+
+        string? selected = playback.SelectedOsuFile.Value;
+
+        if (selected != null && selected != set.PreferredOsuFile)
+            return;
+
+        var hardest = listedDifficulties(set).LastOrDefault(d => starsFor(d) != null);
+
+        if (hardest == null)
+            return;
+
+        // Claimed even when no switch follows: the set HAS been considered, and re-considering it
+        // later (once the user has moved off this difficulty) would drag them back here.
+        autoSelectedFor = set;
+
+        if (hardest.Path != selected)
+            _ = playback.SwitchDifficultyAsync(hardest.Path);
     }
 
     /// <summary>
@@ -203,7 +371,9 @@ public partial class DifficultySwitcher : CompositeDrawable
             return;
 
         string? selectedPath = playback.SelectedOsuFile.Value ?? set.PreferredOsuFile;
-        var match = set.Difficulties.FirstOrDefault(d => d.Path == selectedPath) ?? set.Difficulties[0];
+        // Falls back to the first LISTED difficulty (the easiest), not set.Difficulties[0] — the
+        // list is sorted by rating now, so the raw scan order's first entry may not even be shown.
+        var match = set.Difficulties.FirstOrDefault(d => d.Path == selectedPath) ?? listedDifficulties(set).First();
 
         // Only sync if the target difficulty actually made it into the (possibly capped) dropdown
         // Items list — matches the old chip flow's max_items cap.
