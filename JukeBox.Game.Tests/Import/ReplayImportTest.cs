@@ -2,6 +2,8 @@
 
 using System.IO;
 using System.Linq;
+using JukeBox.Game.Beatmaps;
+using JukeBox.Game.Import;
 using JukeBox.Game.Online;
 using JukeBox.Game.Replays;
 using NUnit.Framework;
@@ -94,6 +96,80 @@ namespace JukeBox.Game.Tests.Import
             File.WriteAllText(path, content);
 
             Assert.That(() => OsrReader.ReadHeader(path), Throws.InstanceOf<InvalidDataException>());
+        }
+
+        [Test]
+        public void TheDifficultyPlayedIsFoundByHashingTheCachedFiles()
+        {
+            string other = Path.Combine(tmp, "map [Easy].osu");
+            File.WriteAllText(other, osu_content.Replace("Version:Hard", "Version:Easy"));
+
+            var cached = new CachedBeatmapSet
+            {
+                SetId = 777333,
+                Directory = tmp,
+                OsuFiles = { other, beatmapPath },
+                PreferredOsuFile = other,
+            };
+
+            string resolved = DroppedFileImporter.ResolveDifficulty(cached, new BeatmapSetInfo { Id = 777333 }, ReplayFixture.Md5OfFile(beatmapPath))!;
+
+            Assert.That(resolved, Is.EqualTo(beatmapPath));
+        }
+
+        // The case that actually bites in production: mirrors repack archives (NeriNyan rewrites
+        // .osu files when serving a no-video download), so the cached bytes hash to something the
+        // replay has never heard of — measured against a real set, EVERY cached difficulty hashed
+        // differently from the checksums osu! publishes. The mirror's own per-difficulty checksums
+        // still name the right one.
+        [Test]
+        public void ARepackedArchiveStillResolvesTheDifficultyViaThePublishedChecksums()
+        {
+            var cached = new CachedBeatmapSet
+            {
+                SetId = 777333,
+                Directory = tmp,
+                OsuFiles = { beatmapPath },
+                PreferredOsuFile = beatmapPath,
+                Difficulties = { new DifficultyInfo { Path = beatmapPath, Version = "Hard", Mode = 0 } },
+            };
+
+            // Nothing in the cache hashes to this — it is the CANONICAL checksum, which the mirror
+            // publishes for the difficulty named "Hard".
+            const string canonical = "5a79fbf5ade4343aefa09991d6af0dc4";
+
+            var online = new BeatmapSetInfo
+            {
+                Id = 777333,
+                Beatmaps = { new BeatmapInfo { Version = "Hard", Mode = "osu", Checksum = canonical } },
+            };
+
+            Assert.That(DroppedFileImporter.ResolveDifficulty(cached, online, canonical), Is.EqualTo(beatmapPath));
+        }
+
+        [Test]
+        public void AnUnmatchableChecksumResolvesToNoDifficulty()
+        {
+            var cached = new CachedBeatmapSet
+            {
+                SetId = 777333,
+                Directory = tmp,
+                OsuFiles = { beatmapPath },
+                Difficulties = { new DifficultyInfo { Path = beatmapPath, Version = "Hard", Mode = 0 } },
+            };
+
+            Assert.That(DroppedFileImporter.ResolveDifficulty(cached, new BeatmapSetInfo { Id = 777333 }, "0000000000000000000000000000dead"), Is.Null,
+                "an unmatched difficulty must fall back to autoplay on the set default, not guess");
+        }
+
+        [Test]
+        public void PublishedChecksumsAreParsedFromMirrorResponses()
+        {
+            var sets = BeatmapSetInfo.ParseList("""
+                [{"id":1,"beatmaps":[{"id":2,"mode":"osu","version":"Hard","checksum":"5a79fbf5ade4343aefa09991d6af0dc4"}]}]
+                """);
+
+            Assert.That(sets[0].Beatmaps[0].Checksum, Is.EqualTo("5a79fbf5ade4343aefa09991d6af0dc4"));
         }
 
         [Test]

@@ -201,7 +201,7 @@ public partial class DroppedFileImporter : Component
 
         // The replay names ONE .osu by checksum; the set generally has several. Matching here is
         // what lets playback select the difficulty actually played.
-        string? osuFile = await Task.Run(() => cached.OsuFiles.FirstOrDefault(f => md5OfFile(f) == header.BeatmapMd5)).ConfigureAwait(false);
+        string? osuFile = await Task.Run(() => ResolveDifficulty(cached, found, header.BeatmapMd5)).ConfigureAwait(false);
         Score? score = null;
 
         if (osuFile == null)
@@ -238,12 +238,12 @@ public partial class DroppedFileImporter : Component
     }
 
     /// <summary>
-    /// Finds the beatmapset a replay's beatmap checksum belongs to. NeriNyan's legacy search takes
-    /// <c>option=checksum</c>, which matches the .osu's own MD5 — the same field-restricting
-    /// mechanism the map-ID lookup uses with <c>option=setId</c>. The retry widens the status
-    /// filter, since the default only covers ranked maps and people replay loved/graveyard ones
-    /// too. The fallback mirrors ignore <c>option</c> entirely, so a chain that falls through to
-    /// them returns nothing useful and is treated as "not found".
+    /// Finds the beatmapset a replay's beatmap checksum belongs to — the only identity a replay
+    /// carries. Issued as a checksum-restricted search (see
+    /// <see cref="SearchRequest.CHECKSUM_OPTION"/>), so whichever mirror the chain lands on either
+    /// answers it properly or refuses and lets the next one try. The retry widens the status
+    /// filter, since the default only covers ranked maps and people replay loved and graveyard
+    /// ones too.
     /// </summary>
     private async Task<Online.BeatmapSetInfo?> findSetByChecksumAsync(string md5)
     {
@@ -254,7 +254,7 @@ public partial class DroppedFileImporter : Component
                 var results = await mirror.SearchAsync(new SearchRequest
                 {
                     Query = md5,
-                    Option = "checksum",
+                    Option = SearchRequest.CHECKSUM_OPTION,
                     Status = status,
                     PageSize = 5,
                 }).ConfigureAwait(false);
@@ -269,6 +269,50 @@ public partial class DroppedFileImporter : Component
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Which cached .osu the replay was played on, given the checksum it recorded.
+    ///
+    /// <para>
+    /// The obvious answer — hash each cached .osu and compare — is tried first and is correct
+    /// whenever the archive we hold contains the canonical files. It is NOT always correct: mirrors
+    /// repack, and NeriNyan in particular rewrites .osu files when serving a no-video download
+    /// (<see cref="Configuration.JukeBoxSetting.NoVideoDownloads"/>), which changes their bytes and
+    /// so their MD5 while the beatmap is otherwise the same one. Measured against a real set: every
+    /// cached difficulty hashed differently from the checksums osu! itself publishes.
+    /// </para>
+    ///
+    /// <para>
+    /// So the fallback goes through the mirror's own per-difficulty <see cref="BeatmapInfo.Checksum"/>
+    /// values, which DO name the canonical files: find the difficulty whose published checksum the
+    /// replay recorded, then match that difficulty's name against the cached files' own
+    /// <c>[Metadata] Version</c>. Null when neither route identifies one — the set still plays,
+    /// just on its default difficulty under autoplay.
+    /// </para>
+    /// </summary>
+    internal static string? ResolveDifficulty(Beatmaps.CachedBeatmapSet cached, Online.BeatmapSetInfo set, string replayMd5)
+    {
+        string? exact = cached.OsuFiles.FirstOrDefault(f => md5OfFile(f) == replayMd5);
+
+        if (exact != null)
+            return exact;
+
+        string? version = set.Beatmaps
+                             .FirstOrDefault(b => string.Equals(b.Checksum, replayMd5, StringComparison.OrdinalIgnoreCase))
+                             ?.Version;
+
+        if (string.IsNullOrEmpty(version))
+            return null;
+
+        string? byVersion = cached.Difficulties
+                                  .FirstOrDefault(d => string.Equals(d.Version, version, StringComparison.Ordinal))
+                                  ?.Path;
+
+        if (byVersion != null)
+            Logger.Log($"[drop] cached files don't hash to the replay's checksum (repacked archive); matched difficulty '{version}' through the mirror's published checksums instead");
+
+        return byVersion;
     }
 
     private static string md5OfFile(string path)

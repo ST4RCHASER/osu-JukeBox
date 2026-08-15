@@ -387,6 +387,40 @@ namespace JukeBox.Game.Tests.Visual
             AddUntilStep("playback switched to hard.osu", () => playback.SelectedOsuFile.Value == "hard.osu");
         }
 
+        // Regression coverage for the switcher silently undoing someone else's difficulty choice.
+        // The switcher repopulates its item list a frame AFTER the set changes; replacing the items
+        // moves the control's own Current, which used to reach its selection-committed handler and
+        // fire a real SwitchDifficultyAsync back to the set's default — clobbering a difficulty
+        // selected in between. That gap is exactly where Jukebox selects the difficulty a dropped
+        // replay was recorded on, which was reverted to the default every time.
+        [Test]
+        public void ADifficultyChosenWhileTheSwitcherRepopulatesIsNotRevertedToTheDefault()
+        {
+            // Built inside the step rather than in the method body: step bodies are enqueued before
+            // the scene has loaded, so the fixture fields CreateChildDependencies sets aren't
+            // populated yet at this point (this test sorts first in the fixture, so it can't rely
+            // on an earlier one having forced the load).
+            AddStep("swap set and pick a non-default difficulty in the same frame", () =>
+            {
+                var multiSet = new CachedBeatmapSet { SetId = 106, Directory = tmp, AudioFile = fixtureSet.AudioFile, PreferredOsuFile = "easy.osu" };
+                multiSet.OsuFiles.AddRange(new[] { "easy.osu", "hard.osu" });
+                multiSet.Difficulties.Add(new DifficultyInfo { Path = "easy.osu", Version = "Easy", Mode = 0 });
+                multiSet.Difficulties.Add(new DifficultyInfo { Path = "hard.osu", Version = "Hard", Mode = 0 });
+
+                // Both writes in ONE frame, the way PlaybackController.PlayAsync's swap and the
+                // difficulty selection that follows it land: the switcher's repopulation is
+                // deferred a frame, so it runs after both — and used to overwrite the second.
+                playback.Current.Value = multiSet;
+                playback.SelectedOsuFile.Value = "hard.osu";
+            });
+
+            AddWaitStep("let the switcher repopulate and settle", 10);
+
+            AddAssert("still on Hard", () => playback.SelectedOsuFile.Value == "hard.osu");
+            AddAssert("the set itself is unchanged", () => playback.Current.Value?.SetId == 106);
+            AddAssert("and the dropdown agrees", () => nowPlaying.DifficultySwitcher.Dropdown.Current.Value?.Version == "Hard");
+        }
+
         // The mode used to be a text tag baked into the item's label ("[taiko] Oni"). It's now drawn
         // as lazer's real ruleset icon in the item's badge strip instead, so the label carries only
         // the difficulty name — no bracketed prefix left behind.

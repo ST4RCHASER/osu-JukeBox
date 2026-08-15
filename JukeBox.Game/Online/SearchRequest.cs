@@ -19,10 +19,24 @@ public class SearchRequest
     public string Sort = "ranked_desc";
     public SearchExtra Extra = SearchExtra.None;
 
-    // Restricts which field NerinyanMirror's legacy search matches Query against (e.g. "setId").
-    // Only NerinyanMirror honours this — the fallback mirrors (CatboyMirror/OsuDirectMirror)
-    // ignore it and match their own default field(s) instead.
+    /// <summary>
+    /// Restricts which field NerinyanMirror's legacy search matches <see cref="Query"/> against
+    /// (e.g. "setId"). The fallback mirrors ignore it and match their own default field(s)
+    /// instead — with one exception: <see cref="CHECKSUM_OPTION"/>, which asks a question a
+    /// substring search simply cannot answer, and which every mirror therefore either performs
+    /// properly or refuses (see <see cref="CatboyMirror"/>).
+    /// </summary>
     public string? Option;
+
+    /// <summary>
+    /// <see cref="Option"/> value for "match <see cref="Query"/> against the .osu file's MD5" — the
+    /// only identity a dropped replay carries for its beatmap (see
+    /// <c>DroppedFileImporter</c>). NerinyanMirror serves it through its legacy
+    /// <c>option=checksum</c>; OsuDirectMirror resolves it through its own <c>/md5/</c> route;
+    /// CatboyMirror has no equivalent and throws, so <see cref="MirrorChain"/> moves on rather
+    /// than mistaking "can't answer" for "no such beatmap".
+    /// </summary>
+    public const string CHECKSUM_OPTION = "checksum";
 
     // Ruleset filter as NeriNyan's legacy `m` value ("o"/"t"/"c"/"m"); null = any mode.
     // NerinyanMirror-only — the fallback mirrors ignore it (accepted degradation, their search
