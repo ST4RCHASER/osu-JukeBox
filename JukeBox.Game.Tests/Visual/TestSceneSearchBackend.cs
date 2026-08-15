@@ -17,6 +17,7 @@ using osu.Framework.Bindables;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Testing;
+using osu.Framework.Utils;
 
 namespace JukeBox.Game.Tests.Visual
 {
@@ -73,6 +74,7 @@ namespace JukeBox.Game.Tests.Visual
                 mirror.Sets.Add(new BeatmapSetInfo { Id = 100, Title = "From Mirror", Genre = new NamedIdInfo { Id = 3 } });
                 mirror.Requests.Clear();
                 mirror.DropFiltersAs = null;
+                mirror.SupportedFilters = SearchFilters.AllMirror;
 
                 officialHandler.Reset();
                 clientId.Value = "1234";
@@ -310,6 +312,166 @@ namespace JukeBox.Game.Tests.Visual
             AddUntilStep("warning cleared", () => engine.FiltersDroppedBy.Value == null && !engine.Status.Value.Contains("can't apply"));
         }
 
+        // The user's complaint: "why you not just hide filter when unsupport?" — a control that
+        // silently does nothing is worse than no control.
+        [Test]
+        public void RowsFollowWhatTheBackendCanActuallyApply()
+        {
+            AddAssert("a capable mirror offers its rows", () => listing.RulesetRow.Alpha == 1
+                                                                && listing.CategoryRow.Alpha == 1
+                                                                && listing.ExtraRow.Alpha == 1
+                                                                && listing.StarsRow.Alpha == 1
+                                                                && listing.SortStrip.Alpha == 1);
+            AddAssert("but never genre/language, which no mirror has", () => listing.GenreRow.Alpha == 0 && listing.LanguageRow.Alpha == 0);
+
+            // osu.direct alone: a keyword and nothing else.
+            AddStep("degrade the mirror set to keyword-only", () =>
+            {
+                mirror.SupportedFilters = SearchFilters.Keyword;
+                engine.Query.Value = "camellia";
+            });
+            AddUntilStep("rows collapse", () => listing.RulesetRow.Alpha == 0);
+
+            AddAssert("every refinement is gone", () => listing.CategoryRow.Alpha == 0
+                                                        && listing.ExtraRow.Alpha == 0
+                                                        && listing.StarsRow.Alpha == 0
+                                                        && listing.SortStrip.Alpha == 0);
+            AddAssert("and it reads as deliberate", () => listing.KeywordOnlyHint.Alpha == 1);
+
+            // A mirror that can do ruleset and status comes back (catboy's shape).
+            AddStep("a better mirror returns", () =>
+            {
+                mirror.SupportedFilters = SearchFilters.Keyword | SearchFilters.Mode | SearchFilters.Status | SearchFilters.Paging;
+                engine.Query.Value = "camellia 2";
+            });
+            AddUntilStep("its rows come back", () => listing.RulesetRow.Alpha == 1);
+
+            AddAssert("status too", () => listing.CategoryRow.Alpha == 1);
+            AddAssert("but not the ones it still can't do", () => listing.ExtraRow.Alpha == 0 && listing.StarsRow.Alpha == 0 && listing.SortStrip.Alpha == 0);
+            AddAssert("the keyword-only line is gone", () => listing.KeywordOnlyHint.Alpha == 0);
+        }
+
+        [Test]
+        public void OfficialOffersTheWholeBlock()
+        {
+            AddStep("select official", () => config.SetValue(JukeBoxSetting.SearchApi, SearchApi.Official));
+
+            AddUntilStep("genre appears", () => listing.GenreRow.Alpha == 1);
+            AddAssert("and everything else with it", () => listing.RulesetRow.Alpha == 1
+                                                           && listing.CategoryRow.Alpha == 1
+                                                           && listing.LanguageRow.Alpha == 1
+                                                           && listing.ExtraRow.Alpha == 1
+                                                           && listing.StarsRow.Alpha == 1
+                                                           && listing.SortStrip.Alpha == 1);
+            AddAssert("no keyword-only line", () => listing.KeywordOnlyHint.Alpha == 0);
+
+            // A degraded MIRROR must not drag the official row set down with it.
+            AddStep("degrade the mirrors", () => mirror.SupportedFilters = SearchFilters.Keyword);
+            AddStep("search", () => engine.Query.Value = "camellia");
+            AddUntilStep("official answered", () => engine.LoadedFromOfficial);
+            AddAssert("official rows unaffected", () => listing.GenreRow.Alpha == 1 && listing.StarsRow.Alpha == 1);
+        }
+
+        // A hidden filter is hidden, not forgotten: the value stays put and is sent again the
+        // moment something that can apply it is back.
+        [Test]
+        public void AHiddenFiltersValueSurvivesAndIsResentOnRecovery()
+        {
+            AddStep("set a star range and a mode", () =>
+            {
+                engine.MinStars.Value = 5;
+                engine.Mode.Value = "m";
+                engine.Query.Value = "camellia";
+            });
+            AddUntilStep("sent with both", () => mirror.Requests.Any(r => r.MinStars == 5 && r.Mode == "m"));
+
+            AddStep("the capable mirror goes down", () =>
+            {
+                mirror.SupportedFilters = SearchFilters.Keyword;
+                mirror.Requests.Clear();
+                engine.Query.Value = "camellia 2";
+            });
+            AddUntilStep("a request went out without them", () => mirror.Requests.Any());
+
+            AddAssert("stars not sent", () => mirror.Requests.Last().MinStars == null);
+            AddAssert("mode not sent", () => mirror.Requests.Last().Mode == null);
+            AddAssert("stars row hidden", () => listing.StarsRow.Alpha == 0);
+
+            // The user never touched the slider, so the value must still be there.
+            AddAssert("value kept in state", () => engine.MinStars.Value == 5 && engine.Mode.Value == "m");
+
+            AddStep("the mirror recovers", () =>
+            {
+                mirror.SupportedFilters = SearchFilters.AllMirror;
+                mirror.Requests.Clear();
+                engine.Query.Value = "camellia 3";
+            });
+            AddUntilStep("sent again, unchanged", () => mirror.Requests.Any(r => r.MinStars == 5 && r.Mode == "m"));
+            AddAssert("stars row back", () => listing.StarsRow.Alpha == 1);
+        }
+
+        // With nothing unsupported ever offered, there is nothing left to apologise for.
+        [Test]
+        public void NoDropNoticeWhenNothingUnsupportedWasOffered()
+        {
+            AddStep("keyword-only mirror set", () =>
+            {
+                mirror.SupportedFilters = SearchFilters.Keyword;
+                engine.Query.Value = "camellia";
+            });
+            AddUntilStep("answered", () => engine.LoadedSets.Any());
+
+            AddAssert("nothing was dropped", () => engine.FiltersDroppedBy.Value == null);
+            AddAssert("and no apology in the status line", () => !engine.Status.Value.Contains("can't apply"));
+        }
+
+        // Hiding rows must not leave holes, orphaned labels, or a jumping block: the flow has to
+        // close over whatever went away.
+        [Test]
+        public void LayoutStaysTightAsRowsDisappear()
+        {
+            float fullHeight = 0;
+
+            AddStep("note the full block height", () => fullHeight = listing.FilterBlock.DrawHeight);
+            AddAssert("rows are evenly spaced with no gaps", () => rowGapsAreUniform());
+
+            AddStep("degrade to keyword-only", () =>
+            {
+                mirror.SupportedFilters = SearchFilters.Keyword;
+                engine.Query.Value = "camellia";
+            });
+            AddUntilStep("rows gone", () => listing.RulesetRow.Alpha == 0);
+            AddWaitStep("let layout settle", 5);
+
+            AddAssert("the block actually shrank", () => listing.FilterBlock.DrawHeight < fullHeight);
+            AddAssert("no hidden row occupies space", () => listing.FilterBlock.Children
+                .Where(c => c.Alpha == 0).All(c => !c.IsPresent));
+            AddAssert("what remains is still evenly spaced", () => rowGapsAreUniform());
+
+            AddStep("restore", () =>
+            {
+                mirror.SupportedFilters = SearchFilters.AllMirror;
+                engine.Query.Value = "camellia 2";
+            });
+            AddUntilStep("rows back", () => listing.RulesetRow.Alpha == 1);
+            AddWaitStep("let layout settle", 5);
+
+            AddAssert("height restored exactly", () => Precision.AlmostEquals(listing.FilterBlock.DrawHeight, fullHeight, 0.5f));
+            AddAssert("still evenly spaced", () => rowGapsAreUniform());
+        }
+
+        /// <summary>Every consecutive pair of VISIBLE rows must sit the same distance apart — a hole
+        /// left by a hidden row would show up here as one oversized gap.</summary>
+        private bool rowGapsAreUniform()
+        {
+            var visible = listing.FilterBlock.Children.Where(c => c.IsPresent)
+                                 .OrderBy(c => c.DrawPosition.Y).ToList();
+
+            var gaps = visible.Zip(visible.Skip(1), (a, b) => b.DrawPosition.Y - (a.DrawPosition.Y + a.DrawHeight)).ToList();
+
+            return gaps.Count == 0 || gaps.All(g => Precision.AlmostEquals(g, gaps[0], 0.5f));
+        }
+
         // ---- Debounce ---------------------------------------------------------------------------
 
         [Test]
@@ -422,6 +584,11 @@ namespace JukeBox.Game.Tests.Visual
             public List<BeatmapSetInfo> Sets { get; } = new List<BeatmapSetInfo>();
 
             public List<SearchRequest> Requests { get; } = new List<SearchRequest>();
+
+            /// <summary>What this stand-in claims to support. Defaults to the best a real mirror
+            /// can do (everything but genre and language, which no mirror search exposes);
+            /// individual tests narrow it to model a degraded mirror set.</summary>
+            public SearchFilters SupportedFilters { get; set; } = SearchFilters.AllMirror;
 
             /// <summary>When set, answers like a mirror that could not express the filters — which
             /// is what MirrorChain reports once no capable mirror could be reached.</summary>

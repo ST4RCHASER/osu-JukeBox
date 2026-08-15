@@ -60,15 +60,20 @@ namespace JukeBox.Game.Online
         };
 
         /// <summary>
-        /// Ruleset, status and paging travel (see <see cref="BuildSearchUrl"/>); sort order, the
+        /// Ruleset, status and paging travel (see <see cref="BuildSearchUrl"/>). Sort order, the
         /// video/storyboard extras and star ranges have no parameter on this API and are silently
-        /// ignored if sent, so a request carrying any of them is one this mirror would answer
-        /// wrongly rather than partially. "Leaderboard" is likewise inexpressible.
+        /// ignored if sent, so they are not claimed here and the listing does not offer them while
+        /// this is the best mirror available.
+        /// </summary>
+        public SearchFilters SupportedFilters
+            => SearchFilters.Keyword | SearchFilters.Mode | SearchFilters.Status | SearchFilters.Paging;
+
+        /// <summary>
+        /// One value-level exception the flags can't express: "Has Leaderboard" is ranked, approved,
+        /// qualified and loved at once, which this API has no single status int for.
         /// </summary>
         public bool CanApplyFilters(SearchRequest r)
-            => r.Extra == SearchExtra.None
-               && !r.HasStarRange
-               && r.Sort == SearchRequest.DEFAULT_SORT
+            => (r.RequiredFilters & ~SupportedFilters) == SearchFilters.None
                && (r.Status == SearchRequest.ANY_STATUS || StatusInt(r.Status) != null);
 
         public async Task<List<BeatmapSetInfo>> SearchAsync(SearchRequest request, CancellationToken ct = default)

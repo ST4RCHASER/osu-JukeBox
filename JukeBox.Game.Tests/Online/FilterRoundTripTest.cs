@@ -92,7 +92,10 @@ namespace JukeBox.Game.Tests.Online
         [Test]
         public void CatboyAdmitsWhatItCannotFilter()
         {
-            var catboy = new CatboyMirror(new System.Net.Http.HttpClient());
+            IBeatmapMirror catboy = new CatboyMirror(new System.Net.Http.HttpClient());
+
+            Assert.That(catboy.SupportedFilters, Is.EqualTo(
+                SearchFilters.Keyword | SearchFilters.Mode | SearchFilters.Status | SearchFilters.Paging));
 
             Assert.That(catboy.CanApplyFilters(requestFrom(mode: "m", category: "loved", page: 3)), Is.True);
 
@@ -100,6 +103,9 @@ namespace JukeBox.Game.Tests.Online
             Assert.That(catboy.CanApplyFilters(requestFrom(storyboard: true)), Is.False);
             Assert.That(catboy.CanApplyFilters(requestFrom(minStars: 5)), Is.False);
             Assert.That(catboy.CanApplyFilters(requestFrom(sortKey: "plays")), Is.False);
+
+            // "Has Leaderboard" is four statuses at once, which this API has no single int for —
+            // a value-level gap the per-filter flags deliberately cannot express.
             Assert.That(catboy.CanApplyFilters(requestFrom(category: "leaderboard")), Is.False);
         }
 
@@ -108,7 +114,9 @@ namespace JukeBox.Game.Tests.Online
         [Test]
         public void OsuDirectAdmitsItCannotFilterAtAll()
         {
-            var osuDirect = new OsuDirectMirror(new System.Net.Http.HttpClient());
+            IBeatmapMirror osuDirect = new OsuDirectMirror(new System.Net.Http.HttpClient());
+
+            Assert.That(osuDirect.SupportedFilters, Is.EqualTo(SearchFilters.Keyword));
 
             Assert.That(osuDirect.CanApplyFilters(requestFrom(category: "all")), Is.True);
 
@@ -118,6 +126,44 @@ namespace JukeBox.Game.Tests.Online
             Assert.That(osuDirect.CanApplyFilters(requestFrom(category: "all", minStars: 5)), Is.False);
             Assert.That(osuDirect.CanApplyFilters(requestFrom(category: "all", sortKey: "plays")), Is.False);
             Assert.That(osuDirect.CanApplyFilters(requestFrom(category: "all", page: 1)), Is.False);
+        }
+
+        [Test]
+        public void NerinyanTakesTheWholeMirrorVocabulary()
+        {
+            IBeatmapMirror nerinyan = new NerinyanMirror(new System.Net.Http.HttpClient());
+
+            Assert.That(nerinyan.SupportedFilters, Is.EqualTo(SearchFilters.AllMirror));
+
+            // Genre and language are osu-web concepts no mirror search exposes.
+            Assert.That(nerinyan.SupportedFilters.HasFlag(SearchFilters.Genre), Is.False);
+            Assert.That(nerinyan.SupportedFilters.HasFlag(SearchFilters.Language), Is.False);
+
+            Assert.That(nerinyan.CanApplyFilters(requestFrom(
+                mode: "m", category: "loved", video: true, storyboard: true, sortKey: "plays", minStars: 4, page: 2)), Is.True);
+        }
+
+        [Test]
+        public void ARequestOnlyRequiresTheFiltersItActuallyExercises()
+        {
+            // A filter left at its neutral value asks nothing of the backend — which is what lets
+            // osu.direct answer a plain keyword search at all.
+            Assert.That(requestFrom(category: "all").RequiredFilters, Is.EqualTo(SearchFilters.Keyword));
+
+            Assert.That(requestFrom(category: "all", mode: "m").RequiredFilters,
+                Is.EqualTo(SearchFilters.Keyword | SearchFilters.Mode));
+
+            Assert.That(requestFrom(category: "ranked").RequiredFilters,
+                Is.EqualTo(SearchFilters.Keyword | SearchFilters.Status));
+
+            Assert.That(requestFrom(category: "all", minStars: 5).RequiredFilters,
+                Is.EqualTo(SearchFilters.Keyword | SearchFilters.Stars));
+
+            Assert.That(requestFrom(category: "all", sortKey: "plays").RequiredFilters,
+                Is.EqualTo(SearchFilters.Keyword | SearchFilters.Sort));
+
+            Assert.That(requestFrom(category: "all", page: 2).RequiredFilters,
+                Is.EqualTo(SearchFilters.Keyword | SearchFilters.Paging));
         }
 
         // ---- Official: the same values, in that endpoint's spelling -----------------------------

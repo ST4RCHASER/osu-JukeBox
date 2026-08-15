@@ -86,6 +86,49 @@ public class SearchRequest
     public bool IncludeNsfw;
 
     /// <summary>
+    /// Which filters this request actually EXERCISES — a filter left at its neutral value asks
+    /// nothing of the backend, so a request with only a keyword can be served by any of them. This
+    /// is what turns a backend's <see cref="IBeatmapMirror.SupportedFilters"/> into a yes/no answer
+    /// for one particular search.
+    /// </summary>
+    public SearchFilters RequiredFilters
+    {
+        get
+        {
+            var required = SearchFilters.None;
+
+            if (!string.IsNullOrWhiteSpace(Query))
+                required |= SearchFilters.Keyword;
+
+            if (Mode != null)
+                required |= SearchFilters.Mode;
+
+            if (Status != ANY_STATUS)
+                required |= SearchFilters.Status;
+
+            if (Extra != SearchExtra.None)
+                required |= SearchFilters.Extra;
+
+            if (HasStarRange)
+                required |= SearchFilters.Stars;
+
+            if (Sort != DEFAULT_SORT)
+                required |= SearchFilters.Sort;
+
+            if (GenreId != null)
+                required |= SearchFilters.Genre;
+
+            if (LanguageId != null)
+                required |= SearchFilters.Language;
+
+            if (Page > 0 || Cursor != null)
+                required |= SearchFilters.Paging;
+
+            return required;
+        }
+    }
+
+    /// <summary>
     /// Invoked by <see cref="MirrorChain"/> when the mirror that actually answered could not express
     /// every filter this request carries — the mirrors differ widely in what their search accepts
     /// (see <see cref="IBeatmapMirror.CanApplyFilters"/>), and results quietly ignoring half the

@@ -172,6 +172,16 @@ public partial class BeatmapSearchEngine : Component
     public readonly Bindable<string?> FiltersDroppedBy = new Bindable<string?>();
 
     /// <summary>
+    /// Which filters the backend about to serve the next search can actually express — the listing
+    /// shows exactly these rows and hides the rest, rather than offering controls that would be
+    /// silently ignored. Moves with the backend setting AND with mirror health, so a row can vanish
+    /// when the only mirror that could apply it goes down and return when it recovers. The
+    /// corresponding bindables keep their values throughout; they are simply not sent (see
+    /// <see cref="BuildRequest"/>).
+    /// </summary>
+    public readonly Bindable<SearchFilters> AvailableFilters = new Bindable<SearchFilters>(SearchFilters.All);
+
+    /// <summary>
     /// The rendered result set changed — fired on the update thread. The argument is true for a
     /// FRESH search (views should scroll back to the top), false for a page append or a
     /// client-side filter change (views rebuild in place).
@@ -247,7 +257,13 @@ public partial class BeatmapSearchEngine : Component
             Api.BindTo(apiConfig);
         }
 
-        Api.BindValueChanged(_ => ScheduleSearch());
+        Api.BindValueChanged(_ =>
+        {
+            updateAvailableFilters();
+            ScheduleSearch();
+        });
+
+        updateAvailableFilters();
 
         Query.BindValueChanged(_ => ScheduleSearch());
         Mode.BindValueChanged(_ => ScheduleSearch());
@@ -323,28 +339,68 @@ public partial class BeatmapSearchEngine : Component
         if (min != null && max != null && min > max)
             (min, max) = (max, min);
 
+        // Filters the active backend can't express are left OUT of the request rather than sent to
+        // be ignored — sending one would only push the chain onto a mirror that can't serve it. The
+        // BINDABLES keep their values (the rows are merely hidden, see AvailableFilters), so a
+        // filter comes back exactly as the user left it the moment a backend that can apply it
+        // returns.
+        var available = AvailableFilters.Value;
+
+        bool can(SearchFilters filter) => (available & filter) != 0;
+
         return new SearchRequest
         {
-            Query = Query.Value,
-            Page = page,
+            Query = can(SearchFilters.Keyword) ? Query.Value : string.Empty,
+            Page = can(SearchFilters.Paging) ? page : 0,
             PageSize = PAGE_SIZE,
-            Status = Category.Value,
-            Sort = $"{SortKey.Value}_{(SortDescending.Value ? "desc" : "asc")}",
-            Mode = Mode.Value,
-            Extra = HasVideo.Value && HasStoryboard.Value ? SearchExtra.VideoAndStoryboard
+            Status = can(SearchFilters.Status) ? Category.Value : SearchRequest.ANY_STATUS,
+            Sort = can(SearchFilters.Sort)
+                ? $"{SortKey.Value}_{(SortDescending.Value ? "desc" : "asc")}"
+                : SearchRequest.DEFAULT_SORT,
+            Mode = can(SearchFilters.Mode) ? Mode.Value : null,
+            Extra = !can(SearchFilters.Extra) ? SearchExtra.None
+                : HasVideo.Value && HasStoryboard.Value ? SearchExtra.VideoAndStoryboard
                 : HasVideo.Value ? SearchExtra.Video
                 : HasStoryboard.Value ? SearchExtra.Storyboard
                 : SearchExtra.None,
-            MinStars = min,
-            MaxStars = max,
-            GenreId = GenreId.Value,
-            LanguageId = LanguageId.Value,
-            Cursor = cursor,
+            MinStars = can(SearchFilters.Stars) ? min : null,
+            MaxStars = can(SearchFilters.Stars) ? max : null,
+            GenreId = can(SearchFilters.Genre) ? GenreId.Value : null,
+            LanguageId = can(SearchFilters.Language) ? LanguageId.Value : null,
+            Cursor = can(SearchFilters.Paging) ? cursor : null,
             // Matching the mirrors, which apply no explicit-content filter of their own: the
             // official default for a user-less token would otherwise silently hide sets the mirror
             // backend shows, making the two backends disagree for no reason the user can see.
             IncludeNsfw = true,
         };
+    }
+
+    /// <summary>
+    /// Recomputes what the backend about to serve the next search can actually apply. Called at
+    /// load, whenever the backend setting changes, and after every search — the mirror set's
+    /// capability moves with mirror HEALTH (see <see cref="MirrorHealth"/>), so a mirror failing or
+    /// recovering is precisely when a row needs to disappear or come back.
+    /// </summary>
+    private void updateAvailableFilters()
+    {
+        var previous = AvailableFilters.Value;
+
+        AvailableFilters.Value = Api.Value == SearchApi.Official
+            // osu!'s own API expresses the entire filter block.
+            ? SearchFilters.All
+            : mirror.SupportedFilters;
+
+        if (AvailableFilters.Value == previous)
+            return;
+
+        // The offer just changed, which retires any standing "these filters were dropped" notice:
+        // it described a request built against the OLD set, and the rows it apologised for are no
+        // longer on screen to apologise about. A genuine drop on the next search raises it again.
+        if (FiltersDroppedBy.Value != null)
+        {
+            FiltersDroppedBy.Value = null;
+            updateStatus(null, null);
+        }
     }
 
     private async Task runSearchAsync(bool fresh)
@@ -359,6 +415,11 @@ public partial class BeatmapSearchEngine : Component
         // Cleared rather than set to a "searching…" line: a spinner carries "busy" now, and a
         // stale "no results" left showing underneath it would contradict it.
         Schedule(() => Status.Value = string.Empty);
+
+        // Refreshed immediately BEFORE the request is built, not only after it lands: mirror health
+        // can have moved since the last search (a failed download counts too), and the request must
+        // be shaped by what will serve THIS search rather than what served the previous one.
+        updateAvailableFilters();
 
         var request = BuildRequest(page, cursor);
 
@@ -416,6 +477,18 @@ public partial class BeatmapSearchEngine : Component
             currentPage = page;
             nextCursor = resultCursor;
             loadedFromOfficial = fromOfficial;
+
+            // A search is the only thing that changes mirror health, so it is also the only thing
+            // that can change which rows the listing should be offering.
+            var offerBefore = AvailableFilters.Value;
+            updateAvailableFilters();
+
+            // A drop discovered by THIS search, which also narrowed the offer, needs no notice: the
+            // rows it would apologise for have just been taken off screen, and the next search
+            // won't ask for them. Reporting it anyway is what left "osu.direct can't apply these
+            // filters" sitting under a filter block that no longer had any filters in it.
+            if (AvailableFilters.Value != offerBefore)
+                unfilteredBy = null;
 
             // The total describes the SEARCH, not the page, so it is captured once and left alone
             // while paging: osu!'s endpoint sometimes answers a deeper page with Elasticsearch's

@@ -130,6 +130,17 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
     /// costs — see <see cref="updateFilterAvailability"/>.</summary>
     private SpriteText backendHint = null!;
 
+    // The two rows that aren't lazer BeatmapSearchFilterRows, kept so they can be shown and hidden
+    // on exactly the same terms as the ones that are.
+    private Drawable starsRow = null!;
+    private Container sortStrip = null!;
+
+    /// <summary>Shown in place of the whole filter block when the reachable source can do nothing
+    /// but keyword search, so the empty block reads as deliberate rather than broken.</summary>
+    private SpriteText keywordOnlyHint = null!;
+
+    private FillFlowContainer filterBlock = null!;
+
     /// <summary>The (category, hasQuery) pair the sort strip's item list was last built for — see
     /// <see cref="updateSortAvailability"/>.</summary>
     private (SearchCategory category, bool hasQuery)? appliedSortParameters;
@@ -182,6 +193,16 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
     internal BeatmapSearchMultipleSelectionFilterRow<SearchExtra> ExtraRow => extraRow;
     internal BeatmapListingSortTabControl SortControl => sortControl;
     internal RoundedSliderBar<double> MinStarsSlider => minStarsSlider;
+
+    // The rows that aren't lazer filter rows, plus the keyword-only line, exposed so the
+    // per-backend visibility rules can be asserted without depending on internal layout.
+    internal Drawable StarsRow => starsRow;
+    internal Container SortStrip => sortStrip;
+    internal SpriteText KeywordOnlyHint => keywordOnlyHint;
+
+    /// <summary>Test-only: the vertical flow holding the filter rows, so a test can assert the
+    /// block really closes over a hidden row rather than leaving a hole.</summary>
+    internal FillFlowContainer FilterBlock => filterBlock;
     internal RoundedSliderBar<double> MaxStarsSlider => maxStarsSlider;
 
     public FullscreenListingOverlay(BeatmapSearchEngine engine)
@@ -380,11 +401,12 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
 
         // Which filter rows exist at all is a property of the ACTIVE BACKEND, not of this view —
         // switching the setting re-renders the block live (and the engine re-runs the search).
-        engine.Api.BindValueChanged(_ =>
-        {
-            updateFilterAvailability();
-            updateSortAvailability();
-        }, true);
+        // Row visibility follows what the backend about to serve the next search can actually
+        // apply — which moves with mirror health, not just with the setting, so this binds the
+        // capability set rather than the backend enum.
+        engine.AvailableFilters.BindValueChanged(_ => updateFilterAvailability(), true);
+
+        engine.Api.BindValueChanged(_ => updateSortAvailability(), true);
 
         // Relevance only exists with a query, Nominations only under Pending — both are properties
         // of the current search, so they have to be re-evaluated as it changes.
@@ -518,7 +540,7 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
     /// label-column geometry so every row aligns. Rows osu-web shows but this app can't back with
     /// real data (General/Rank Achieved/Played/Spotlights…) are OMITTED, not faked.
     /// </summary>
-    private Drawable createFilterBlock() => new FillFlowContainer
+    private Drawable createFilterBlock() => filterBlock = new FillFlowContainer
     {
         RelativeSizeAxes = Axes.X,
         AutoSizeAxes = Axes.Y,
@@ -531,8 +553,14 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
             genreRow = new BeatmapSearchFilterRow<SearchGenre>(BeatmapsStrings.ListingSearchFiltersGenre),
             languageRow = new BeatmapSearchFilterRow<SearchLanguage>(BeatmapsStrings.ListingSearchFiltersLanguage),
             extraRow = new BeatmapSearchMultipleSelectionFilterRow<SearchExtra>(BeatmapsStrings.ListingSearchFiltersExtra),
-            createStarsRow(),
-            new Container // sort strip below the filters, like lazer/osu-web
+            starsRow = createStarsRow(),
+            keywordOnlyHint = new SpriteText
+            {
+                Font = FontUsage.Default.With(size: Theme.CaptionTextSize),
+                Colour = Theme.TextTertiary,
+                Alpha = 0,
+            },
+            sortStrip = new Container // sort strip below the filters, like lazer/osu-web
             {
                 RelativeSizeAxes = Axes.X,
                 AutoSizeAxes = Axes.Y,
@@ -663,17 +691,34 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
     /// </summary>
     private void updateFilterAvailability()
     {
-        bool official = engine.Api.Value == SearchApi.Official;
+        var available = engine.AvailableFilters.Value;
 
-        // Alpha rather than removal: these rows carry two-way bindings to the engine that must
-        // survive a switch, and a zero-Alpha child is not IsPresent, so the filter block's flow
-        // closes over it rather than leaving a gap.
-        genreRow.Alpha = official ? 1 : 0;
-        languageRow.Alpha = official ? 1 : 0;
+        bool can(SearchFilters filter) => (available & filter) != 0;
 
-        backendHint.Text = official
+        // Alpha rather than removal: every row carries a two-way binding to the engine that must
+        // survive a backend change, and the VALUE must survive too — a filter hidden because the
+        // only backend that could apply it went away has to come back exactly as the user left it.
+        // A zero-Alpha child is not IsPresent, so the block's flow closes over it rather than
+        // leaving a gap or an orphaned label.
+        rulesetRow.Alpha = can(SearchFilters.Mode) ? 1 : 0;
+        categoryRow.Alpha = can(SearchFilters.Status) ? 1 : 0;
+        genreRow.Alpha = can(SearchFilters.Genre) ? 1 : 0;
+        languageRow.Alpha = can(SearchFilters.Language) ? 1 : 0;
+        extraRow.Alpha = can(SearchFilters.Extra) ? 1 : 0;
+        starsRow.Alpha = can(SearchFilters.Stars) ? 1 : 0;
+        sortStrip.Alpha = can(SearchFilters.Sort) ? 1 : 0;
+
+        // With every refinement gone the block collapses to the keyword box alone, which would
+        // otherwise read as the filters having vanished by accident. The hint moves up into the
+        // block (the sort strip it normally sits in is itself hidden) and says what the source is.
+        bool keywordOnly = (available & ~(SearchFilters.Keyword | SearchFilters.Paging)) == SearchFilters.None;
+
+        keywordOnlyHint.Alpha = keywordOnly ? 1 : 0;
+        keywordOnlyHint.Text = "this beatmap source can only search by keyword";
+
+        backendHint.Text = engine.Api.Value == SearchApi.Official
             ? "official osu! API"
-            : "beatmap mirror search — genre & language unavailable";
+            : "beatmap mirror search";
     }
 
     /// <summary>

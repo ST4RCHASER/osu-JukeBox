@@ -30,6 +30,26 @@ namespace JukeBox.Game.Online
 
         public string Name => "chain";
 
+        /// <summary>
+        /// The union across every mirror that is currently REACHABLE, because the chain routes each
+        /// request to whichever mirror can serve it: if NeriNyan is healthy, star ranges work even
+        /// when osu.direct is the user's preferred mirror, since a starred request skips straight
+        /// past it. Falls back to the union across all mirrors when every one of them is cooling
+        /// down — they are still tried in that state, so the rows should still be offered.
+        /// </summary>
+        public SearchFilters SupportedFilters
+        {
+            get
+            {
+                var healthy = mirrors.Where(m => health?.IsCoolingDown(m) != true).ToList();
+
+                if (healthy.Count == 0)
+                    healthy = mirrors.ToList();
+
+                return healthy.Aggregate(SearchFilters.None, (acc, m) => acc | m.SupportedFilters);
+            }
+        }
+
         public MirrorChain(params IBeatmapMirror[] mirrors)
             : this(null, mirrors)
         {
