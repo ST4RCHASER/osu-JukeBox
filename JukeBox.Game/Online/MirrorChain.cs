@@ -14,8 +14,43 @@ namespace JukeBox.Game.Online
         public string Name => "chain";
         public MirrorChain(params IBeatmapMirror[] mirrors) => this.mirrors = mirrors;
 
-        public Task<List<BeatmapSetInfo>> SearchAsync(SearchRequest r, CancellationToken ct = default)
-            => tryEach(m => m.SearchAsync(r, ct));
+        /// <summary>
+        /// Mirrors that can express every filter on the request are tried FIRST, in the caller's
+        /// preferred order; only if none of them answers do the rest get a turn, and then
+        /// <see cref="SearchRequest.OnFiltersDropped"/> fires so the listing can say the results
+        /// are unfiltered. Without this ordering a preferred-but-limited mirror (osu.direct takes
+        /// nothing but a keyword) answers first and every filter row silently does nothing — which
+        /// is exactly how this looked in the wild.
+        /// </summary>
+        public async Task<List<BeatmapSetInfo>> SearchAsync(SearchRequest r, CancellationToken ct = default)
+        {
+            var capable = new List<IBeatmapMirror>();
+            var limited = new List<IBeatmapMirror>();
+
+            foreach (var m in mirrors)
+                (m.CanApplyFilters(r) ? capable : limited).Add(m);
+
+            var errors = new List<Exception>();
+
+            foreach (var m in capable)
+            {
+                try { return await m.SearchAsync(r, ct).ConfigureAwait(false); }
+                catch (Exception e) { errors.Add(e); }
+            }
+
+            foreach (var m in limited)
+            {
+                try
+                {
+                    var results = await m.SearchAsync(r, ct).ConfigureAwait(false);
+                    r.OnFiltersDropped?.Invoke(m.Name);
+                    return results;
+                }
+                catch (Exception e) { errors.Add(e); }
+            }
+
+            throw new AggregateException("all mirrors failed", errors);
+        }
 
         public async Task DownloadAsync(int setId, bool noVideo, Stream destination, CancellationToken ct = default, DownloadProgressCallback? progress = null)
         {
@@ -37,17 +72,6 @@ namespace JukeBox.Game.Online
                     await m.DownloadAsync(setId, noVideo, destination, ct, progress).ConfigureAwait(false);
                     return;
                 }
-                catch (Exception e) { errors.Add(e); }
-            }
-            throw new AggregateException("all mirrors failed", errors);
-        }
-
-        private async Task<T> tryEach<T>(Func<IBeatmapMirror, Task<T>> action)
-        {
-            var errors = new List<Exception>();
-            foreach (var m in mirrors)
-            {
-                try { return await action(m).ConfigureAwait(false); }
                 catch (Exception e) { errors.Add(e); }
             }
             throw new AggregateException("all mirrors failed", errors);

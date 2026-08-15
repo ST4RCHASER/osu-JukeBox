@@ -23,6 +23,20 @@ public interface IBeatmapMirror
     Task<List<BeatmapSetInfo>> SearchAsync(SearchRequest request, CancellationToken ct = default);
 
     /// <summary>
+    /// Whether this mirror's search can express every filter <paramref name="request"/> carries.
+    /// The three mirrors are wildly unequal here — NeriNyan takes the full osu-web filter
+    /// vocabulary, catboy.best takes ruleset/status/paging only, and osu.direct takes nothing but a
+    /// keyword — and a mirror that cannot express a filter does not reject it, it silently returns
+    /// unfiltered results. <see cref="MirrorChain"/> therefore asks first, and only falls back to a
+    /// mirror that would drop filters once no capable one could answer (reporting it through
+    /// <see cref="SearchRequest.OnFiltersDropped"/>), so the filter rows can never quietly lie.
+    ///
+    /// Defaulted to true: a mirror that accepts everything — and any test stub, which is asked
+    /// nothing more than the query — needs no opinion here.
+    /// </summary>
+    bool CanApplyFilters(SearchRequest request) => true;
+
+    /// <summary>
     /// Streams set <paramref name="setId"/>'s .osz into <paramref name="destination"/>, optionally
     /// reporting byte progress along the way. <paramref name="progress"/> trails
     /// <paramref name="ct"/> so that every existing positional call site (which passes the token

@@ -12,11 +12,18 @@ public enum SearchExtra
 
 public class SearchRequest
 {
+    /// <summary>The sort every search starts on, and therefore the one a mirror that ignores
+    /// <see cref="Sort"/> entirely still happens to agree with.</summary>
+    public const string DEFAULT_SORT = "ranked_desc";
+
+    /// <summary><see cref="Status"/> value meaning "no status filter".</summary>
+    public const string ANY_STATUS = "all";
+
     public string Query = "";
     public int Page;                       // 0-indexed
     public int PageSize = 50;
     public string Status = "ranked";
-    public string Sort = "ranked_desc";
+    public string Sort = DEFAULT_SORT;
     public SearchExtra Extra = SearchExtra.None;
 
     /// <summary>
@@ -77,4 +84,13 @@ public class SearchRequest
     /// server default, which for a user-less (client-credentials) token means "hide".
     /// </summary>
     public bool IncludeNsfw;
+
+    /// <summary>
+    /// Invoked by <see cref="MirrorChain"/> when the mirror that actually answered could not express
+    /// every filter this request carries — the mirrors differ widely in what their search accepts
+    /// (see <see cref="IBeatmapMirror.CanApplyFilters"/>), and results quietly ignoring half the
+    /// filter block are indistinguishable from filters that do nothing. The argument names the
+    /// mirror. Set by <see cref="BeatmapSearchEngine"/>; may be invoked off the update thread.
+    /// </summary>
+    public System.Action<string>? OnFiltersDropped;
 }
