@@ -31,7 +31,10 @@ internal class ImportedLegacySkin : LegacySkin
         : base(
             new SkinInfo { Name = Path.GetFileName(directory) },
             resources,
-            new StorageBackedResourceStore(new NativeStorage(directory, host)),
+            // SkinFolderResourceStore rather than a bare StorageBackedResourceStore: a legacy
+            // skin.ini names its files as osu! stable wrote them, with Windows separators and the
+            // author's own capitalisation, neither of which need match the folder. See that class.
+            new SkinFolderResourceStore(new NativeStorage(directory, host)),
             "skin.ini")
     {
     }
