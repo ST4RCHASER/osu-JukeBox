@@ -1,0 +1,68 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore JukeBox.sln
+
+      # osu!framework opens a headless GL context; xvfb provides the display.
+      - name: Test
+        run: xvfb-run -a dotnet test JukeBox.sln --no-restore --verbosity minimal
+
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x64
+            os: ubuntu-latest
+            rid: linux-x64
+          - name: macos-arm64
+            os: macos-latest
+            rid: osx-arm64
+          - name: windows-x64
+            os: windows-latest
+            rid: win-x64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Publish
+        run: >
+          dotnet publish JukeBox.Desktop/JukeBox.Desktop.csproj
+          -c Release
+          -r ${{ matrix.rid }}
+          --self-contained true
+          -p:PublishSingleFile=false
+          -o publish/${{ matrix.name }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: osu-JukeBox-${{ matrix.name }}
+          path: publish/${{ matrix.name }}
+          if-no-files-found: error
