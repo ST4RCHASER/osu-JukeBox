@@ -16,3 +16,6 @@ obj/
 
 ## Project tooling (not part of the shipped repo)
 .superpowers/
+
+## Agent worktrees / tooling
+.claude/
