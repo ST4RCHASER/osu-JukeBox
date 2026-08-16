@@ -1,6 +1,6 @@
 # osu!JukeBox
 
-[![Build](https://github.com/ST4RCHASER/osu-JukeBox/actions/workflows/build.yml/badge.svg)](https://github.com/ST4RCHASER/osu-JukeBox/actions/workflows/build.yml)
+[![Tests](https://github.com/ST4RCHASER/osu-JukeBox/actions/workflows/test.yml/badge.svg)](https://github.com/ST4RCHASER/osu-JukeBox/actions/workflows/test.yml)
 
 A standalone music player for osu! beatmaps. Search for a map, queue it, and it plays the song with
 the real thing attached — the beatmap's storyboard, its video, and its chart being played out in
@@ -79,7 +79,7 @@ dotnet test
 
 On a headless Linux machine the test host needs an audio device to exist and a display to open, so
 install `libasound2t64` and run the suite under `xvfb-run` — see
-[`.github/workflows/build.yml`](.github/workflows/build.yml), which does exactly that.
+[`.github/workflows/test.yml`](.github/workflows/test.yml), which does exactly that.
 
 ## How it works
 
