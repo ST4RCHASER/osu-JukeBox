@@ -101,6 +101,16 @@ public partial class SettingsOverlay : FocusedOverlayContainer
 
     private OsuScrollContainer scroll = null!;
 
+    /// <summary>The build stamp at the very bottom of the body — see where it's built in
+    /// <see cref="createBody"/>.</summary>
+    private OsuSpriteText versionText = null!;
+
+    /// <summary>Test hook: what the footer is actually displaying.</summary>
+    internal string VersionText => versionText.Text.ToString();
+
+    /// <summary>Test hook: the footer drawable, for asserting where it sits.</summary>
+    internal Drawable VersionDrawable => versionText;
+
     // ---- our settings ----
     private SkinSettingsDropdown skinDropdown = null!;
     private SettingsCheckbox showStoryboardVideoCheckbox = null!;
@@ -442,6 +452,21 @@ public partial class SettingsOverlay : FocusedOverlayContainer
                     },
                 },
             },
+        });
+
+        // Quiet build stamp, last thing in the scrolling body — lazer puts its own version in the
+        // same place. Deliberately NOT a settings row: no label column, no separator, centred and
+        // muted so it reads as a footnote about the app rather than something to change. It lives
+        // inside the same flow as the sections (rather than pinned to the panel) so it scrolls into
+        // view at the end and can't overlap the last section.
+        sections.Add(versionText = new OsuSpriteText
+        {
+            Anchor = Anchor.TopCentre,
+            Origin = Anchor.TopCentre,
+            Font = OsuFont.GetFont(size: 12),
+            Colour = Theme.TextTertiary,
+            Margin = new MarginPadding { Top = 12, Bottom = 4 },
+            Text = AppVersion.DisplayString,
         });
 
         return new FillFlowContainer

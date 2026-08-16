@@ -235,6 +235,39 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("account page opened", () => opened == SettingsOverlay.oauth_application_url);
         }
 
+        // User request: "add version at bottom of settings too". It has to be the LAST thing in the
+        // body (below every section), readable once scrolled there, and it must not read as a
+        // setting row — hence a bare centred sprite rather than a SettingsItem.
+        [Test]
+        public void TheVersionSitsAtTheVeryBottomOfSettings()
+        {
+            SettingsOverlay dockedOverlay = null!;
+            AddStep("create docked overlay", () => Child = dockedOverlay = new SettingsOverlay(docked: true));
+
+            AddAssert("it shows the build's own version", () => dockedOverlay.VersionText == AppVersion.DisplayString);
+            AddAssert("which is not empty", () => dockedOverlay.VersionText.Length > 1);
+
+            // Below everything: no settings control sits lower than it.
+            AddUntilStep("nothing in the body sits below it", () =>
+            {
+                float versionTop = dockedOverlay.VersionDrawable.ScreenSpaceDrawQuad.AABBFloat.Top;
+
+                return dockedOverlay.ChildrenOfType<osu.Game.Overlays.Settings.SettingsItem<bool>>()
+                                    .All(item => item.ScreenSpaceDrawQuad.AABBFloat.Top < versionTop);
+            });
+
+            // ...and it is reachable rather than clipped off the end of the scroll.
+            AddStep("scroll the version into view", () => dockedOverlay.ScrollControlIntoView(dockedOverlay.VersionDrawable));
+            AddUntilStep("it is fully inside the panel", () =>
+            {
+                var panel = dockedOverlay.ScreenSpaceDrawQuad.AABBFloat;
+                var version = dockedOverlay.VersionDrawable.ScreenSpaceDrawQuad.AABBFloat;
+
+                return version.Top >= panel.Top - 0.5f && version.Bottom <= panel.Bottom + 0.5f
+                       && dockedOverlay.VersionDrawable.DrawWidth > 0;
+            });
+        }
+
         // Docked mode (the three-column layout's "Settings" tab body): permanently visible from
         // load, no scrim/floating card, and Escape is a no-op (there's nothing here to close — the
         // owning tab strip controls visibility via Alpha instead).
