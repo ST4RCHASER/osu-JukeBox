@@ -17,12 +17,17 @@
 # made without -p:IncludeNativeLibrariesForSelfExtract=true, the bundle will build fine and then
 # fail at runtime, which is exactly the failure mode the CI smoke step exists to catch.
 #
-# Usage: package-macos.sh <publish-dir> <staging-dir> <version>
+# Usage: package-macos.sh <publish-dir> <staging-dir> <version> [numeric-version]
 set -euo pipefail
 
 PUBLISH_DIR="${1:?publish directory}"
 STAGING_DIR="${2:?staging directory}"
+# What the tag said — "1.0.0-rc1" — shown to the user as the app's version.
 VERSION="${3:-0.0.0}"
+# CFBundleVersion is a numeric-only build number: Apple's tooling rejects a prerelease suffix
+# there, even though CFBundleShortVersionString carries it happily. Defaults to the version with
+# any suffix cut off, so a caller that passes only one argument still produces a valid bundle.
+NUMERIC_VERSION="${4:-${VERSION%%-*}}"
 
 APP_NAME="osu!JukeBox"
 # The bundle DIRECTORY name, which is what Finder shows and what ends up in /Applications. Kept
@@ -33,7 +38,7 @@ BUNDLE_ID="dev.starchaser.osujukebox"
 EXECUTABLE="JukeBox"
 
 APP="$STAGING_DIR/$BUNDLE_NAME.app"
-DMG="$STAGING_DIR/$BUNDLE_NAME-macos-arm64.dmg"
+DMG="$STAGING_DIR/$BUNDLE_NAME-$VERSION-macos-arm64.dmg"
 
 rm -rf "$APP" "$DMG"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
@@ -87,7 +92,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleIdentifier</key>
     <string>$BUNDLE_ID</string>
     <key>CFBundleVersion</key>
-    <string>$VERSION</string>
+    <string>$NUMERIC_VERSION</string>
     <key>CFBundleShortVersionString</key>
     <string>$VERSION</string>
     <key>CFBundleExecutable</key>

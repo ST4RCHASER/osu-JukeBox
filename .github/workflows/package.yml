@@ -1,21 +1,29 @@
 name: Package
 
-# Distributable single artifacts: one .exe for Windows, one binary for Linux, one drag-to-
-# Applications .dmg for macOS. Deliberately a SEPARATE workflow from build.yml, which keeps
-# publishing the per-RID folders — these are an addition, not a replacement, and the two have
-# different failure modes worth reading separately.
+# Release packaging: one .exe for Windows, one binary for Linux, one drag-to-Applications .dmg for
+# macOS, all stamped with the tag's version and attached to a GitHub Release.
+#
+# Runs on RELEASE TAGS ONLY. build.yml still runs the tests and the per-RID publishes on every
+# push — that is the regression net; this is the thing people download, and it should exist once
+# per released version rather than once per commit.
 #
 # Every job runs the packaged artifact before uploading it. A green `dotnet publish` proves
 # nothing here: single-file publishing embeds osu!framework's native dependencies (BASS/BASS_FX/
 # BASSmix, SDL2, FFmpeg, veldrid/MoltenVK) and extracts them at runtime, and that is exactly the
-# step that breaks. See scripts/smoke-run.sh.
+# step that breaks. See scripts/smoke-run.sh. A release build is when that matters most.
 
 on:
   push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+    tags: ['v*']
+  # Kept so the packaging can be exercised without minting a version tag. A manual run builds and
+  # smoke-tests all three artifacts but deliberately publishes NO release — see the release job's
+  # condition.
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to stamp, without the leading v (e.g. 1.0.0-rc1)'
+        required: true
+        default: '0.0.0-manual'
 
 env:
   DOTNET_NOLOGO: true
@@ -25,8 +33,49 @@ env:
   DOTNET_BUNDLE_EXTRACT_BASE_DIR: ${{ github.workspace }}/.bundle-extract
 
 jobs:
+  version:
+    name: Derive version
+    runs-on: ubuntu-latest
+    outputs:
+      full: ${{ steps.derive.outputs.full }}
+      numeric: ${{ steps.derive.outputs.numeric }}
+      prerelease: ${{ steps.derive.outputs.prerelease }}
+    steps:
+      # Derived once, here, rather than three times in three different shells. The two forms exist
+      # because Windows will not accept the one humans want:
+      #
+      #   full     1.0.0-rc1   what the tag says, and what InformationalVersion carries
+      #   numeric  1.0.0.0     Win32's FILEVERSION resource and CFBundleVersion are numeric-only
+      #                        fields; a prerelease suffix in either is rejected outright
+      - id: derive
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            FULL="${{ inputs.version }}"
+          else
+            FULL="${GITHUB_REF_NAME#v}"
+          fi
+
+          # A typo'd tag must fail here rather than produce a release labelled something nobody
+          # meant. MAJOR.MINOR.PATCH, optionally followed by a prerelease suffix.
+          if [[ ! "$FULL" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::'$FULL' is not a version — tag as vMAJOR.MINOR.PATCH[-suffix], e.g. v1.0.0-rc1"
+            exit 1
+          fi
+
+          NUMERIC="${FULL%%-*}.0"
+
+          # Anything with a suffix (-rc1, -beta.2, -alpha) is a prerelease; a bare 1.0.0 is not.
+          if [[ "$FULL" == *-* ]]; then PRERELEASE=true; else PRERELEASE=false; fi
+
+          echo "full=$FULL" >> "$GITHUB_OUTPUT"
+          echo "numeric=$NUMERIC" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+
+          echo "version: $FULL (numeric $NUMERIC, prerelease $PRERELEASE)"
+
   windows:
     name: Windows single .exe
+    needs: version
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
@@ -44,15 +93,41 @@ jobs:
           -p:PublishSingleFile=true
           -p:IncludeNativeLibrariesForSelfExtract=true
           -p:DebugType=none
+          -p:Version=${{ needs.version.outputs.full }}
+          -p:InformationalVersion=${{ needs.version.outputs.full }}
+          -p:AssemblyVersion=${{ needs.version.outputs.numeric }}
+          -p:FileVersion=${{ needs.version.outputs.numeric }}
           -o publish/win
 
       - name: Name it for humans
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path artifact | Out-Null
-          Copy-Item publish/win/JukeBox.exe artifact/osu-JukeBox.exe
-          $size = (Get-Item artifact/osu-JukeBox.exe).Length / 1MB
-          Write-Host ("osu-JukeBox.exe: {0:N1} MB" -f $size)
+          Copy-Item publish/win/JukeBox.exe "artifact/osu-JukeBox-${{ needs.version.outputs.full }}-windows-x64.exe"
+          $exe = Get-Item "artifact/osu-JukeBox-${{ needs.version.outputs.full }}-windows-x64.exe"
+          Write-Host ("{0}: {1:N1} MB" -f $exe.Name, ($exe.Length / 1MB))
+
+      # The whole point of stamping is that the file says what it is, so read it back off the
+      # produced binary rather than trusting the build. FileVersion is the numeric Win32 field;
+      # ProductVersion is where InformationalVersion lands, and is the one that keeps the -rc1.
+      - name: Check the stamped version
+        shell: pwsh
+        run: |
+          $exe = Get-Item "artifact/osu-JukeBox-${{ needs.version.outputs.full }}-windows-x64.exe"
+          $info = $exe.VersionInfo
+          Write-Host "FileVersion:    $($info.FileVersion)"
+          Write-Host "ProductVersion: $($info.ProductVersion)"
+
+          $fail = $false
+          if ($info.FileVersion -ne '${{ needs.version.outputs.numeric }}') {
+            Write-Host "::error::FileVersion reads '$($info.FileVersion)', expected '${{ needs.version.outputs.numeric }}'"
+            $fail = $true
+          }
+          if ($info.ProductVersion -notlike '${{ needs.version.outputs.full }}*') {
+            Write-Host "::error::ProductVersion reads '$($info.ProductVersion)', expected it to start with '${{ needs.version.outputs.full }}'"
+            $fail = $true
+          }
+          if ($fail) { exit 1 }
 
       # Same contract as scripts/smoke-run.sh, in PowerShell because the runner has no bash-native
       # process control worth fighting: launch the real .exe, let it start, then read its own log
@@ -60,7 +135,7 @@ jobs:
       - name: Smoke test the .exe
         shell: pwsh
         run: |
-          $exe = Resolve-Path artifact/osu-JukeBox.exe
+          $exe = Resolve-Path "artifact/osu-JukeBox-${{ needs.version.outputs.full }}-windows-x64.exe"
           $logRoot = Join-Path $env:APPDATA 'JukeBox'
           if (Test-Path $logRoot) { Remove-Item -Recurse -Force $logRoot }
 
@@ -117,11 +192,12 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: osu-JukeBox-windows-x64-exe
-          path: artifact/osu-JukeBox.exe
+          path: artifact/osu-JukeBox-${{ needs.version.outputs.full }}-windows-x64.exe
           if-no-files-found: error
 
   linux:
     name: Linux single binary
+    needs: version
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -149,32 +225,44 @@ jobs:
           -p:PublishSingleFile=true
           -p:IncludeNativeLibrariesForSelfExtract=true
           -p:DebugType=none
+          -p:Version=${{ needs.version.outputs.full }}
+          -p:InformationalVersion=${{ needs.version.outputs.full }}
+          -p:AssemblyVersion=${{ needs.version.outputs.numeric }}
+          -p:FileVersion=${{ needs.version.outputs.numeric }}
           -o publish/linux
 
       - name: Name it for humans
         run: |
           mkdir -p artifact
-          cp publish/linux/JukeBox artifact/osu-JukeBox
-          chmod +x artifact/osu-JukeBox
-          ls -l artifact/osu-JukeBox
+          cp publish/linux/JukeBox "artifact/osu-JukeBox-${{ needs.version.outputs.full }}-linux-x64"
+          chmod +x "artifact/osu-JukeBox-${{ needs.version.outputs.full }}-linux-x64"
+          ls -l artifact/
 
       - name: Smoke test the binary
-        run: ./scripts/smoke-run.sh artifact/osu-JukeBox "$HOME/.local/share/JukeBox" 75
+        run: ./scripts/smoke-run.sh "artifact/osu-JukeBox-${{ needs.version.outputs.full }}-linux-x64" "$HOME/.local/share/JukeBox" 75
+
+      # ELF carries no version resource the way a PE does, so the binary's own startup line is the
+      # honest place to read it back — osu!framework logs the entry assembly's version there.
+      - name: Check the stamped version
+        run: ./scripts/check-logged-version.sh "$HOME/.local/share/JukeBox" "${{ needs.version.outputs.numeric }}"
 
       # Tarred deliberately. actions/upload-artifact zips its input and the zip format as GitHub
       # writes it does NOT carry the executable bit, so a raw upload would hand the user a file
       # they have to chmod before it runs. Inside a tar the mode survives the round trip.
       - name: Preserve the executable bit
-        run: tar -C artifact -czf osu-JukeBox-linux-x64.tar.gz osu-JukeBox
+        run: |
+          tar -C artifact -czf "osu-JukeBox-${{ needs.version.outputs.full }}-linux-x64.tar.gz" \
+            "osu-JukeBox-${{ needs.version.outputs.full }}-linux-x64"
 
       - uses: actions/upload-artifact@v7
         with:
           name: osu-JukeBox-linux-x64-binary
-          path: osu-JukeBox-linux-x64.tar.gz
+          path: osu-JukeBox-${{ needs.version.outputs.full }}-linux-x64.tar.gz
           if-no-files-found: error
 
   macos:
     name: macOS .dmg
+    needs: version
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
@@ -192,6 +280,10 @@ jobs:
           -p:PublishSingleFile=true
           -p:IncludeNativeLibrariesForSelfExtract=true
           -p:DebugType=none
+          -p:Version=${{ needs.version.outputs.full }}
+          -p:InformationalVersion=${{ needs.version.outputs.full }}
+          -p:AssemblyVersion=${{ needs.version.outputs.numeric }}
+          -p:FileVersion=${{ needs.version.outputs.numeric }}
           -o publish/osx
 
       # Run the bare executable BEFORE bundling. If this fails the problem is single-file
@@ -202,10 +294,27 @@ jobs:
           chmod +x publish/osx/JukeBox
           ./scripts/smoke-run.sh publish/osx/JukeBox "$HOME/Library/Application Support/JukeBox" 75
 
+      - name: Check the stamped version
+        run: ./scripts/check-logged-version.sh "$HOME/Library/Application Support/JukeBox" "${{ needs.version.outputs.numeric }}"
+
       - name: Build the .app and .dmg
         run: |
           mkdir -p artifact
-          ./scripts/package-macos.sh publish/osx artifact "0.0.${{ github.run_number }}"
+          ./scripts/package-macos.sh publish/osx artifact \
+            "${{ needs.version.outputs.full }}" "${{ needs.version.outputs.numeric }}"
+
+      - name: Check the version in Info.plist
+        run: |
+          APP=artifact/osu-JukeBox.app
+          SHORT=$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist")
+          BUNDLE=$(plutil -extract CFBundleVersion raw "$APP/Contents/Info.plist")
+          echo "CFBundleShortVersionString: $SHORT"
+          echo "CFBundleVersion:            $BUNDLE"
+
+          fail=0
+          [[ "$SHORT" == "${{ needs.version.outputs.full }}" ]] || { echo "::error::CFBundleShortVersionString reads '$SHORT'"; fail=1; }
+          [[ "$BUNDLE" == "${{ needs.version.outputs.numeric }}" ]] || { echo "::error::CFBundleVersion reads '$BUNDLE'"; fail=1; }
+          exit $fail
 
       # And again from INSIDE the mounted image, which is the copy the user actually gets: this is
       # what catches an Info.plist that names the wrong executable, a missing chmod, or an ad-hoc
@@ -213,7 +322,7 @@ jobs:
       - name: Smoke test the app from the mounted .dmg
         run: |
           rm -rf "$HOME/Library/Application Support/JukeBox"
-          hdiutil attach artifact/osu-JukeBox-macos-arm64.dmg -nobrowse -mountpoint /tmp/dmg
+          hdiutil attach "artifact/osu-JukeBox-${{ needs.version.outputs.full }}-macos-arm64.dmg" -nobrowse -mountpoint /tmp/dmg
           ls -l /tmp/dmg
           test -L /tmp/dmg/Applications || { echo "::error::no /Applications symlink — nothing to drag onto"; exit 1; }
           cp -R /tmp/dmg/osu-JukeBox.app /tmp/osu-JukeBox.app
@@ -223,12 +332,48 @@ jobs:
       - name: Ship the first-launch note beside it
         run: |
           cp docs/macos-first-launch.md artifact/README-FIRST.md
-          du -h artifact/osu-JukeBox-macos-arm64.dmg
+          du -h "artifact/osu-JukeBox-${{ needs.version.outputs.full }}-macos-arm64.dmg"
 
       - uses: actions/upload-artifact@v7
         with:
           name: osu-JukeBox-macos-arm64-dmg
           path: |
-            artifact/osu-JukeBox-macos-arm64.dmg
+            artifact/osu-JukeBox-${{ needs.version.outputs.full }}-macos-arm64.dmg
             artifact/README-FIRST.md
           if-no-files-found: error
+
+  release:
+    name: GitHub Release
+    needs: [version, windows, linux, macos]
+    # Tag pushes only. A manual dispatch is for exercising the packaging, and should not mint a
+    # release for a version nobody tagged.
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          path: dist
+
+      - name: Collect the files
+        run: |
+          mkdir -p release
+          find dist -type f \( -name '*.exe' -o -name '*.tar.gz' -o -name '*.dmg' -o -name 'README-FIRST.md' \) \
+            -exec cp {} release/ \;
+          ls -lh release/
+
+      # Attached to a Release rather than left as workflow artifacts, which expire and are not
+      # reachable without a GitHub login.
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PRERELEASE=""
+          if [[ "${{ needs.version.outputs.prerelease }}" == "true" ]]; then PRERELEASE="--prerelease"; fi
+
+          gh release create "$GITHUB_REF_NAME" release/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "osu!JukeBox ${{ needs.version.outputs.full }}" \
+            --generate-notes \
+            $PRERELEASE
