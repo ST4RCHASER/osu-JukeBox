@@ -10,12 +10,12 @@ It does that by hosting **osu!lazer itself** as a library rather than reimplemen
 storyboard, a slider or a mania stage looks the way it does in the game because it *is* the game's
 renderer drawing it.
 
-![The three-column layout, an osu! chart playing over the beatmap background, and the Chart tab](docs/images/chart-and-chart-tab.png)
+![The three-column layout: search on the left, an osu! chart playing over the beatmap background in the centre, and the Chart tab on the right](docs/images/chart-and-chart-tab.png)
 
 <table>
 <tr>
-<td><img src="docs/images/video-and-storyboard.png" alt="A beatmap video and storyboard playing"></td>
-<td><img src="docs/images/taiko-legacy-skin.png" alt="A taiko chart drawn with an imported legacy skin"></td>
+<td><img src="docs/images/video-and-storyboard.png" alt="A beatmap video playing behind the chart"></td>
+<td><img src="docs/images/taiko-conversion.png" alt="An osu! map converted to taiko and playing, with the queue alongside"></td>
 </tr>
 </table>
 
