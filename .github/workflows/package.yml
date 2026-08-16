@@ -1,0 +1,234 @@
+name: Package
+
+# Distributable single artifacts: one .exe for Windows, one binary for Linux, one drag-to-
+# Applications .dmg for macOS. Deliberately a SEPARATE workflow from build.yml, which keeps
+# publishing the per-RID folders — these are an addition, not a replacement, and the two have
+# different failure modes worth reading separately.
+#
+# Every job runs the packaged artifact before uploading it. A green `dotnet publish` proves
+# nothing here: single-file publishing embeds osu!framework's native dependencies (BASS/BASS_FX/
+# BASSmix, SDL2, FFmpeg, veldrid/MoltenVK) and extracts them at runtime, and that is exactly the
+# step that breaks. See scripts/smoke-run.sh.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  # Self-extraction needs somewhere to put the native libraries; pinning it makes the smoke step's
+  # failure mode legible instead of "somewhere under TMP".
+  DOTNET_BUNDLE_EXTRACT_BASE_DIR: ${{ github.workspace }}/.bundle-extract
+
+jobs:
+  windows:
+    name: Windows single .exe
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Publish
+        run: >
+          dotnet publish JukeBox.Desktop/JukeBox.Desktop.csproj
+          -c Release
+          -r win-x64
+          --self-contained true
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:DebugType=none
+          -o publish/win
+
+      - name: Name it for humans
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifact | Out-Null
+          Copy-Item publish/win/JukeBox.exe artifact/osu-JukeBox.exe
+          $size = (Get-Item artifact/osu-JukeBox.exe).Length / 1MB
+          Write-Host ("osu-JukeBox.exe: {0:N1} MB" -f $size)
+
+      # Same contract as scripts/smoke-run.sh, in PowerShell because the runner has no bash-native
+      # process control worth fighting: launch the real .exe, let it start, then read its own log
+      # for the lines that only appear once the native libraries have loaded.
+      - name: Smoke test the .exe
+        shell: pwsh
+        run: |
+          $exe = Resolve-Path artifact/osu-JukeBox.exe
+          $logRoot = Join-Path $env:APPDATA 'JukeBox'
+          if (Test-Path $logRoot) { Remove-Item -Recurse -Force $logRoot }
+
+          $p = Start-Process -FilePath $exe -PassThru
+          Start-Sleep -Seconds 75
+
+          # Checked before anything else, and before we kill it: a GUI app with no exit path that
+          # has already quit has crashed. Startup markers alone are not enough — a build published
+          # with compression enabled logged every marker below and then died seconds later.
+          $crashed = $p.HasExited
+          $exitCode = if ($crashed) { $p.ExitCode } else { $null }
+          if (-not $crashed) { Stop-Process -Id $p.Id -Force }
+
+          $log = Get-ChildItem -Path $logRoot -Recurse -Filter '*runtime.log' -ErrorAction SilentlyContinue |
+                 Sort-Object LastWriteTime -Descending | Select-Object -First 1
+
+          if (-not $log) {
+            Write-Host "::error::no runtime log under $logRoot — the app did not get far enough to open one"
+            exit 1
+          }
+
+          Write-Host "---- $($log.FullName) ----"
+          Get-Content $log.FullName
+          Write-Host "---- end of log ----"
+
+          $text = Get-Content $log.FullName -Raw
+          $fail = $false
+
+          if ($crashed) {
+            Write-Host "::error::the app exited on its own with code $exitCode — it should still have been running"
+            $fail = $true
+          }
+
+          foreach ($check in @(
+            @{ Marker = 'Renderer initialised'; What = 'renderer started' },
+            @{ Marker = 'BASS initialised';     What = 'audio started' },
+            @{ Marker = 'ScreenStack';          What = 'the game screen loaded' }
+          )) {
+            if ($text -match [regex]::Escape($check.Marker)) {
+              Write-Host "ok: $($check.What)"
+            } else {
+              Write-Host "::error::$($check.What) — expected '$($check.Marker)' in the runtime log"
+              $fail = $true
+            }
+          }
+
+          if ($text -match 'Unable to load shared library|DllNotFoundException') {
+            Write-Host "::error::a native library failed to load — the single-file extraction is missing something"
+            $fail = $true
+          }
+
+          if ($fail) { exit 1 }
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: osu-JukeBox-windows-x64-exe
+          path: artifact/osu-JukeBox.exe
+          if-no-files-found: error
+
+  linux:
+    name: Linux single binary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      # Same reason build.yml installs it for the test host: osu!framework's AudioManager requires
+      # BASS to report at least TWO audio devices, and a bare runner has none. ALSA contributes a
+      # "Default" device alongside BASS's built-in "No sound" one, which is exactly enough. Without
+      # it the app dies during startup and the smoke test below fails for a reason that has nothing
+      # to do with packaging.
+      - name: Runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libasound2t64
+
+      - name: Publish
+        run: >
+          dotnet publish JukeBox.Desktop/JukeBox.Desktop.csproj
+          -c Release
+          -r linux-x64
+          --self-contained true
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:DebugType=none
+          -o publish/linux
+
+      - name: Name it for humans
+        run: |
+          mkdir -p artifact
+          cp publish/linux/JukeBox artifact/osu-JukeBox
+          chmod +x artifact/osu-JukeBox
+          ls -l artifact/osu-JukeBox
+
+      - name: Smoke test the binary
+        run: ./scripts/smoke-run.sh artifact/osu-JukeBox "$HOME/.local/share/JukeBox" 75
+
+      # Tarred deliberately. actions/upload-artifact zips its input and the zip format as GitHub
+      # writes it does NOT carry the executable bit, so a raw upload would hand the user a file
+      # they have to chmod before it runs. Inside a tar the mode survives the round trip.
+      - name: Preserve the executable bit
+        run: tar -C artifact -czf osu-JukeBox-linux-x64.tar.gz osu-JukeBox
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: osu-JukeBox-linux-x64-binary
+          path: osu-JukeBox-linux-x64.tar.gz
+          if-no-files-found: error
+
+  macos:
+    name: macOS .dmg
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Publish
+        run: >
+          dotnet publish JukeBox.Desktop/JukeBox.Desktop.csproj
+          -c Release
+          -r osx-arm64
+          --self-contained true
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:DebugType=none
+          -o publish/osx
+
+      # Run the bare executable BEFORE bundling. If this fails the problem is single-file
+      # extraction; if only the post-bundle check fails, the problem is the bundle. Splitting them
+      # is what turns "the mac build is broken" into a one-line diagnosis.
+      - name: Smoke test the published binary
+        run: |
+          chmod +x publish/osx/JukeBox
+          ./scripts/smoke-run.sh publish/osx/JukeBox "$HOME/Library/Application Support/JukeBox" 75
+
+      - name: Build the .app and .dmg
+        run: |
+          mkdir -p artifact
+          ./scripts/package-macos.sh publish/osx artifact "0.0.${{ github.run_number }}"
+
+      # And again from INSIDE the mounted image, which is the copy the user actually gets: this is
+      # what catches an Info.plist that names the wrong executable, a missing chmod, or an ad-hoc
+      # signature that stops the binary running at all on arm64.
+      - name: Smoke test the app from the mounted .dmg
+        run: |
+          rm -rf "$HOME/Library/Application Support/JukeBox"
+          hdiutil attach artifact/osu-JukeBox-macos-arm64.dmg -nobrowse -mountpoint /tmp/dmg
+          ls -l /tmp/dmg
+          test -L /tmp/dmg/Applications || { echo "::error::no /Applications symlink — nothing to drag onto"; exit 1; }
+          cp -R /tmp/dmg/osu-JukeBox.app /tmp/osu-JukeBox.app
+          hdiutil detach /tmp/dmg
+          ./scripts/smoke-run.sh /tmp/osu-JukeBox.app/Contents/MacOS/JukeBox "$HOME/Library/Application Support/JukeBox" 75
+
+      - name: Ship the first-launch note beside it
+        run: |
+          cp docs/macos-first-launch.md artifact/README-FIRST.md
+          du -h artifact/osu-JukeBox-macos-arm64.dmg
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: osu-JukeBox-macos-arm64-dmg
+          path: |
+            artifact/osu-JukeBox-macos-arm64.dmg
+            artifact/README-FIRST.md
+          if-no-files-found: error
