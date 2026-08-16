@@ -16,16 +16,28 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '10.0.x'
+
+      # osu!framework's AudioManager asserts that BASS reports at least TWO audio
+      # devices (see its syncAudioDevices: "Bass did not provide any audio devices").
+      # A bare runner has none, so BASS enumerates only its built-in "No sound" device,
+      # the assertion fires while the first test's game host is booting, and the whole
+      # test host dies — which is why ~153 non-visual tests passed and everything after
+      # them was lost. libasound2 alone is enough: it adds ALSA's "Default" device,
+      # taking the count to the required 2. No PulseAudio or sound hardware needed.
+      - name: Install audio device for the test host
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libasound2t64
 
       - name: Restore
         run: dotnet restore JukeBox.sln
 
-      # osu!framework opens a headless GL context; xvfb provides the display.
+      # xvfb provides the display osu!framework's game host expects.
       - name: Test
         run: xvfb-run -a dotnet test JukeBox.sln --no-restore --verbosity minimal
 
@@ -46,9 +58,9 @@ jobs:
             os: windows-latest
             rid: win-x64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '10.0.x'
 
@@ -61,7 +73,7 @@ jobs:
           -p:PublishSingleFile=false
           -o publish/${{ matrix.name }}
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: osu-JukeBox-${{ matrix.name }}
           path: publish/${{ matrix.name }}
