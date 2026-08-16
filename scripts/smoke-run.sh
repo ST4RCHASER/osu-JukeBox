@@ -32,27 +32,37 @@ echo "running '$EXE' for ${SECONDS_TO_RUN}s"
 MARKER=/tmp/smoke-marker
 : > "$MARKER"
 
-# xvfb where there is no display (Linux CI); harmless to skip on macOS, which always has one.
+# Backgrounded and killed by hand rather than run under `timeout`, which macOS does not ship —
+# a GNU-coreutils-only tool here cost a CI round trip, failing with status 127 ("command not
+# found") that read like the app itself refusing to start.
+#
+# xvfb where there is no display (Linux CI); macOS always has one.
 if [[ "$(uname)" == "Linux" ]] && command -v xvfb-run >/dev/null; then
-    timeout "${SECONDS_TO_RUN}s" xvfb-run -a "$EXE" >/tmp/smoke-stdout.txt 2>&1
+    xvfb-run -a "$EXE" >/tmp/smoke-stdout.txt 2>&1 &
 else
-    timeout "${SECONDS_TO_RUN}s" "$EXE" >/tmp/smoke-stdout.txt 2>&1
+    "$EXE" >/tmp/smoke-stdout.txt 2>&1 &
 fi
-RUN_STATUS=$?
+
+APP_PID=$!
+sleep "$SECONDS_TO_RUN"
 
 fail=0
 
-# The strongest signal available, and the reason it is checked FIRST: 124 means `timeout` had to
-# kill the app, i.e. it was still alive when we were done watching. Any other status means it quit
-# on its own, which for a GUI app with no exit path means it crashed.
+# The strongest signal available, and the reason it is checked FIRST: the app is a GUI with no exit
+# path, so it should still be running when the watch window ends. Having quit on its own means it
+# crashed.
 #
 # This check exists because marker-scraping alone is not enough. A build published with
 # -p:EnableCompressionInSingleFile=true logged all three markers below and THEN died with an
 # AccessViolationException inside the crypto native library while hashing a font — the log looked
-# perfect and the app was unusable. Startup markers prove the native libraries loaded; only this
-# proves they kept working.
-if [[ $RUN_STATUS -ne 124 ]]; then
-    echo "::error::the app exited on its own with status $RUN_STATUS — it should still have been running"
+# perfect and the app was unusable.
+if kill -0 "$APP_PID" 2>/dev/null; then
+    echo "ok: still running after ${SECONDS_TO_RUN}s"
+    kill "$APP_PID" 2>/dev/null || true
+    wait "$APP_PID" 2>/dev/null || true
+else
+    wait "$APP_PID" 2>/dev/null
+    echo "::error::the app exited on its own with status $? — it should still have been running"
     fail=1
 fi
 
