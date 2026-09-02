@@ -109,6 +109,13 @@ public partial class BeatmapSearchEngine : Component
     public readonly BindableDouble MinStars = new BindableDouble { MinValue = 0, MaxValue = 10, Precision = 0.1 };
     public readonly BindableDouble MaxStars = new BindableDouble(10) { MinValue = 0, MaxValue = 10, Precision = 0.1 };
 
+    /// <summary>
+    /// osu-web's "Featured Artists" toggle. Unlike genre and language there is no client-side
+    /// stand-in for it on the mirror path — the mirrors don't serve the field it filters on — so it
+    /// is a server-side parameter or nothing at all (see <see cref="SearchFilters.FeaturedArtists"/>).
+    /// </summary>
+    public readonly BindableBool FeaturedArtists = new BindableBool();
+
     // ---- Genre/language: server-side on the official path, client-side on the mirror path -------
 
     public readonly Bindable<int?> GenreId = new Bindable<int?>();
@@ -274,6 +281,7 @@ public partial class BeatmapSearchEngine : Component
         SortDescending.BindValueChanged(_ => ScheduleSearch());
         MinStars.BindValueChanged(_ => ScheduleSearch());
         MaxStars.BindValueChanged(_ => ScheduleSearch());
+        FeaturedArtists.BindValueChanged(_ => ScheduleSearch());
 
         // Genre/language: a real search parameter on the official backend, a filter over loaded
         // results on the mirror one (which can't express it) — see the class summary.
@@ -367,6 +375,7 @@ public partial class BeatmapSearchEngine : Component
             MaxStars = can(SearchFilters.Stars) ? max : null,
             GenreId = can(SearchFilters.Genre) ? GenreId.Value : null,
             LanguageId = can(SearchFilters.Language) ? LanguageId.Value : null,
+            FeaturedArtistsOnly = can(SearchFilters.FeaturedArtists) && FeaturedArtists.Value,
             Cursor = can(SearchFilters.Paging) ? cursor : null,
             // Matching the mirrors, which apply no explicit-content filter of their own: the
             // official default for a user-less token would otherwise silently hide sets the mirror
@@ -385,10 +394,9 @@ public partial class BeatmapSearchEngine : Component
     {
         var previous = AvailableFilters.Value;
 
-        AvailableFilters.Value = Api.Value == SearchApi.Official
-            // osu!'s own API expresses the entire filter block.
-            ? SearchFilters.All
-            : mirror.SupportedFilters;
+        // Shared with the radio, which applies the same filter vocabulary against the same two
+        // backends and must reach the same answer — see SearchCapability.
+        AvailableFilters.Value = SearchCapability.For(Api.Value, mirror);
 
         if (AvailableFilters.Value == previous)
             return;

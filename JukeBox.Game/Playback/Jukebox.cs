@@ -247,13 +247,57 @@ public partial class Jukebox : Component
     }
 
     /// <summary>
+    /// Whether an empty queue falls back to the radio. Off makes the queue authoritative: the last
+    /// queued song ends and playback simply stops, with no lookup and therefore nothing to fail or
+    /// report. Bound to <see cref="Configuration.JukeBoxSetting.RadioOnEmptyQueue"/> by the owner
+    /// (see JukeBoxGameBase); defaults to on, which is what this class has always done.
+    /// </summary>
+    public readonly BindableBool RadioOnEmptyQueue = new BindableBool(true);
+
+    /// <summary>
+    /// Whether <see cref="Start"/> reaches for the radio when the queue is empty at launch.
+    /// Defaults to on, matching what this class has always done: <see cref="Start"/> advanced
+    /// unconditionally, and with nothing queued that advance was always a radio pick.
+    ///
+    /// <para>
+    /// Deliberately NOT gated by <see cref="RadioOnEmptyQueue"/>: the two answer different
+    /// questions ("greet me with music" versus "keep music coming once my queue runs dry"), and a
+    /// user who wants one radio song at launch and silence afterwards can only say so if this fires
+    /// on its own. So it grants the launch round one radio pick regardless — see
+    /// <see cref="radioAllowedOnce"/>.
+    /// </para>
+    /// </summary>
+    public readonly BindableBool RadioOnStart = new BindableBool(true);
+
+    /// <summary>
+    /// A one-shot permit for the radio, spent by the next round that finds the queue empty. Exists
+    /// so <see cref="RadioOnStart"/> can fire a single pick without <see cref="RadioOnEmptyQueue"/>
+    /// being on — and, being one-shot, without that launch pick turning into an endless station the
+    /// user switched off. Update thread only, like the rest of the round's bookkeeping.
+    /// </summary>
+    private bool radioAllowedOnce;
+
+    /// <summary>
     /// Kicks off playback if nothing has played yet (queue if non-empty, radio otherwise).
     /// A no-op once something is already playing.
     /// </summary>
     public void Start()
     {
-        if (playback.Current.Value == null)
-            AdvanceAsync();
+        if (playback.Current.Value != null)
+            return;
+
+        // With something queued this is an ordinary advance and neither radio setting applies.
+        // With nothing queued, only RadioOnStart can justify a lookup — and it justifies exactly
+        // one, whatever RadioOnEmptyQueue says.
+        if (queue.Items.Count == 0)
+        {
+            if (!RadioOnStart.Value)
+                return;
+
+            radioAllowedOnce = true;
+        }
+
+        AdvanceAsync();
     }
 
     /// <summary>
@@ -610,6 +654,26 @@ public partial class Jukebox : Component
 
             if (next == null)
             {
+                // Spend the launch permit (see radioAllowedOnce) before consulting the setting, so
+                // it is consumed by the round it was granted for whether or not it was needed —
+                // otherwise a permit issued at launch could survive to justify a lookup hours later.
+                bool permitted = await onUpdateThread(() =>
+                {
+                    bool once = radioAllowedOnce;
+                    radioAllowedOnce = false;
+                    return once || RadioOnEmptyQueue.Value;
+                }).ConfigureAwait(false);
+
+                if (!permitted)
+                {
+                    // The radio is switched off and the queue is empty, so there is nothing to
+                    // play and nothing has gone wrong. Deliberately silent: no status line, no
+                    // error, and no retry timer — reporting "couldn't find a song" for a search
+                    // that was never made is the exact opposite of what the setting asked for.
+                    // The caller's finally releases the status line and the lookup flag.
+                    return;
+                }
+
                 // The phase the user actually complained about: searching a mirror for a random
                 // song takes seconds (longer still when mirrors are failing and RadioService works
                 // through its retries), and it used to show nothing whatsoever — no line, no
@@ -650,7 +714,14 @@ public partial class Jukebox : Component
                 // collapses the repeats) because a radio that has quietly stopped reaching for new
                 // music, with no explanation, reads as broken rather than as degraded.
                 if (pick.FromCache)
-                    announceFailure("Can't reach any beatmap source — playing from your cache.");
+                {
+                    // Two different degradations, and the second is worth its own wording: the
+                    // song is not merely older than the radio would have found, it is the wrong
+                    // MODE, which silently looks like the mode filter having no effect at all.
+                    announceFailure(pick.CacheFilterRelaxed
+                        ? "Can't reach any beatmap source — playing from your cache, ignoring the radio's mode filter."
+                        : "Can't reach any beatmap source — playing from your cache.");
+                }
                 else
                     clearOngoingFailure();
             }

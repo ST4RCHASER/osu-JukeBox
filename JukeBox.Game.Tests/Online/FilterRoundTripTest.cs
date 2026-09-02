@@ -24,7 +24,8 @@ namespace JukeBox.Game.Tests.Online
         private static SearchRequest requestFrom(string? mode = null, string category = "ranked",
                                                  bool video = false, bool storyboard = false,
                                                  string sortKey = "ranked", bool descending = true,
-                                                 double minStars = 0, double maxStars = 10, int page = 0)
+                                                 double minStars = 0, double maxStars = 10, int page = 0,
+                                                 bool featuredArtists = false)
         {
             var engine = new BeatmapSearchEngine();
 
@@ -37,6 +38,7 @@ namespace JukeBox.Game.Tests.Online
             engine.SortDescending.Value = descending;
             engine.MinStars.Value = minStars;
             engine.MaxStars.Value = maxStars;
+            engine.FeaturedArtists.Value = featuredArtists;
 
             return engine.BuildRequest(page);
         }
@@ -181,6 +183,63 @@ namespace JukeBox.Game.Tests.Online
             Assert.That(url, Does.Contain("sort=plays_desc"));
             Assert.That(url, Does.Contain("nsfw="));
             Assert.That(System.Uri.UnescapeDataString(url), Does.Contain("stars>=4.5 stars<=6"));
+        }
+
+        /// <summary>
+        /// The Featured Artists filter rides osu-web's <c>c</c> parameter. Pinned at the URL
+        /// because the obvious spelling is WRONG in a way nothing reports: verified live against
+        /// osu.ppy.sh, <c>general=featured_artists</c> (and <c>general[]=</c>, and a dot-joined list
+        /// under that name) returns byte-for-byte the same unfiltered page an unrecognised value
+        /// returns — 1,247,030 results with 11 of the first 50 carrying a track_id — while
+        /// <c>c=featured_artists</c> gives 99,171 with all 50 carrying one. A test asserting only
+        /// that the bindable reached the request would have passed against the broken spelling.
+        /// </summary>
+        [Test]
+        public void FeaturedArtistsReachesTheOfficialUrlAsTheCParameter()
+        {
+            string on = OfficialBeatmapSearch.BuildSearchUrl(requestFrom(featuredArtists: true));
+
+            Assert.That(on, Does.Contain("c=featured_artists"));
+            Assert.That(on, Does.Not.Contain("general="));
+
+            // Off is the ABSENCE of the parameter, not `c=` with an empty value: osu-web splits
+            // whatever it finds on dots, so an empty one would still be a (meaningless) list.
+            Assert.That(OfficialBeatmapSearch.BuildSearchUrl(requestFrom()), Does.Not.Contain("c="));
+        }
+
+        [Test]
+        public void FeaturedArtistsIsAnOfficialOnlyFilter()
+        {
+            Assert.That(SearchFilters.All.HasFlag(SearchFilters.FeaturedArtists), Is.True);
+            Assert.That(SearchFilters.AllMirror.HasFlag(SearchFilters.FeaturedArtists), Is.False);
+
+            // A request that asks for it is unservable by even the most capable mirror, rather than
+            // being quietly answered unfiltered — no mirror serves the field it filters on, so
+            // there is no client-side stand-in the way there is for genre and language.
+            IBeatmapMirror nerinyan = new NerinyanMirror(new System.Net.Http.HttpClient());
+
+            Assert.That(requestFrom(featuredArtists: true).RequiredFilters.HasFlag(SearchFilters.FeaturedArtists), Is.True);
+            Assert.That(nerinyan.CanApplyFilters(requestFrom(featuredArtists: true)), Is.False);
+        }
+
+        /// <summary>
+        /// The engine must not SEND a filter the active backend can't express — the row being
+        /// hidden is only half of it. Without this the mirror path would build a request no mirror
+        /// could serve out of a value the user can no longer even see.
+        /// </summary>
+        [Test]
+        public void FeaturedArtistsIsLeftOutOfTheRequestOnTheMirrorBackend()
+        {
+            var engine = new BeatmapSearchEngine();
+
+            engine.FeaturedArtists.Value = true;
+            engine.AvailableFilters.Value = SearchFilters.AllMirror;
+
+            Assert.That(engine.BuildRequest(0).FeaturedArtistsOnly, Is.False);
+
+            engine.AvailableFilters.Value = SearchFilters.All;
+
+            Assert.That(engine.BuildRequest(0).FeaturedArtistsOnly, Is.True);
         }
 
         // ---- The chain: a limited mirror must never quietly answer a filtered search ------------

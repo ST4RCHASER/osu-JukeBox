@@ -95,6 +95,44 @@ namespace JukeBox.Game.Tests.Visual
         }
 
         /// <summary>
+        /// The radio's settings are deliberately NOT mirrored, and this pins that decision so a
+        /// later "some settings are missing from the registry" tidy-up can't quietly undo it.
+        ///
+        /// <para>
+        /// This registry carries what changes RENDERING. Choosing songs is the main process's job
+        /// alone — the viewer's jukebox never starts, since only MainScreen starts one and there is
+        /// no MainScreen there — so mirroring these would hand the viewer values it must never act
+        /// on. Asserted key by key rather than as a count, because the mistake being guarded
+        /// against is one setting drifting in on its own.
+        /// </para>
+        /// </summary>
+        [Test]
+        public void TheRadioSettingsAreDeliberatelyNotMirrored()
+        {
+            AddUntilStep("registry populated", () => mirror.Keys.Any());
+
+            AddAssert("no radio setting is registered", () => new[]
+            {
+                "jukebox:RadioOnEmptyQueue",
+                "jukebox:RadioOnStart",
+                "jukebox:RadioMode",
+                "jukebox:RadioCategory",
+                "jukebox:RadioGenre",
+                "jukebox:RadioLanguage",
+                "jukebox:RadioHasVideo",
+                "jukebox:RadioHasStoryboard",
+                "jukebox:RadioMinStars",
+                "jukebox:RadioMaxStars",
+                "jukebox:RadioFeaturedArtists",
+            }.All(key => !mirror.Keys.Contains(key)));
+
+            // ...while the rendering settings around them still are, so this can't pass merely by
+            // the registry being empty or the key prefix having changed.
+            AddAssert("the rendering settings are still covered", () => mirror.Keys.Contains("jukebox:BackgroundDim")
+                                                                        && mirror.Keys.Contains("jukebox:ChartMods"));
+        }
+
+        /// <summary>
         /// Capture reads the LIVE value, not one sampled when the registry was built. The GC is
         /// forced deliberately: <c>ConfigManager.GetBindable</c> hands back a bound copy the manager
         /// holds only WEAKLY, so a registry that didn't keep its own reference would pass this test

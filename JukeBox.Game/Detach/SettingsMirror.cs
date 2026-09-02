@@ -100,6 +100,12 @@ public partial class SettingsMirror : Component
         // per song, and two independent rolls would show two different skins), so it travels as its
         // own snapshot field. CustomSkinPath likewise — it names a folder under the MAIN process's
         // storage, which does not exist under the viewer's.
+        //
+        // The radio's toggles and filters are absent for the general reason this registry exists at
+        // all: it carries settings that change what the player RENDERS. Picking songs is the main
+        // process's job alone — the viewer's jukebox never starts (only MainScreen starts one, and
+        // there is no MainScreen there) — so mirroring them would hand the viewer values it must
+        // never act on. Same rule DiscordRichPresence follows, and for the same reason.
         add<bool>(JukeBoxSetting.RenderChart);
         add<bool>(JukeBoxSetting.PlayHitSounds);
         add<double>(JukeBoxSetting.ChartOpacity);

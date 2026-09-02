@@ -49,6 +49,14 @@ public class BeatmapCache
     public bool IsCached(int setId) => hasOsuFiles(Path.Combine(root, setId.ToString()));
 
     /// <summary>
+    /// Reads an already-cached set's metadata straight off disk, with no download path involved —
+    /// unlike <see cref="GetAsync"/>, which would fetch a set that isn't there. For asking
+    /// questions ABOUT what is cached (the radio's fallback checks each candidate's ruleset this
+    /// way); throws if <paramref name="setId"/> is not actually cached.
+    /// </summary>
+    public CachedBeatmapSet LoadCached(int setId) => LoadFromDirectory(setId, Path.Combine(root, setId.ToString()));
+
+    /// <summary>
     /// Every set id currently sitting on disk and playable. Enumerated fresh on each call (it walks
     /// the cache root) rather than kept as an index — the only caller is the radio's last-resort
     /// pick, which runs at most once per failed lookup.

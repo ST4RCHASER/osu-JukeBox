@@ -210,6 +210,83 @@ public enum JukeBoxSetting
     /// hidden one does.
     /// </summary>
     ChartOpacity,
+
+    /// <summary>
+    /// Whether running out of queue starts the radio (a random song) instead of simply stopping.
+    /// On by default, which is what the app has always done. Off makes the queue authoritative: the
+    /// last queued song ends and nothing follows it — no lookup, and no failure to report, since
+    /// not searching cannot fail. See <see cref="Playback.Jukebox"/>.
+    /// </summary>
+    RadioOnEmptyQueue,
+
+    /// <summary>
+    /// Whether launching with an empty queue starts the radio straight away, rather than waiting
+    /// for the user to press play or next. On by default — this is not a new behaviour but a switch
+    /// over an existing one, since the app has always started a random song at launch (MainScreen
+    /// starts the jukebox unconditionally, and the queue is never restored across launches).
+    ///
+    /// <para>
+    /// Independent of <see cref="RadioOnEmptyQueue"/> rather than gated by it: they answer
+    /// different questions ("should the app greet me with music?" versus "should music keep coming
+    /// after my queue runs dry?"), and a user who wants exactly one radio song at launch and
+    /// silence thereafter has no way to say so if one implies the other. So this fires one radio
+    /// pick even with <see cref="RadioOnEmptyQueue"/> off.
+    /// </para>
+    /// </summary>
+    RadioOnStart,
+
+    /// <summary>Ruleset the radio's picks must be playable in; <see cref="RadioRuleset.Any"/> = no
+    /// mode filter. See <see cref="Playback.RadioFilters"/> for the set as a whole.</summary>
+    RadioMode,
+
+    /// <summary>Ranked status the radio picks from, as lazer's own Categories value.</summary>
+    RadioCategory,
+
+    /// <summary>Genre the radio picks from, as lazer's <c>SearchGenre</c> (whose values ARE
+    /// osu-web's genre ids). Official backend only — no mirror search can express it.</summary>
+    RadioGenre,
+
+    /// <summary>Language the radio picks from, as lazer's <c>SearchLanguage</c>. Official backend
+    /// only, for the same reason as <see cref="RadioGenre"/>.</summary>
+    RadioLanguage,
+
+    /// <summary>Restricts the radio to sets with a video ("Extra" row).</summary>
+    RadioHasVideo,
+
+    /// <summary>Restricts the radio to sets with a storyboard ("Extra" row).</summary>
+    RadioHasStoryboard,
+
+    /// <summary>Lower bound of the radio's star-rating band; 0 = no lower bound.</summary>
+    RadioMinStars,
+
+    /// <summary>Upper bound of the radio's star-rating band; 10 = no upper bound.</summary>
+    RadioMaxStars,
+
+    /// <summary>Restricts the radio to osu!'s Featured Artist library. Official backend only (see
+    /// <see cref="Online.SearchFilters.FeaturedArtists"/>).</summary>
+    RadioFeaturedArtists,
+}
+
+/// <summary>
+/// The radio's "Mode" filter. Our own enum rather than lazer's <c>RulesetInfo</c> (a realm model,
+/// with no "any" member) or a bare ruleset int, so the persisted value is a readable name that
+/// can't be confused with "osu!std" the way a defaulted 0 would be.
+/// </summary>
+public enum RadioRuleset
+{
+    Any = -1,
+
+    [System.ComponentModel.Description("osu!")]
+    Osu = 0,
+
+    [System.ComponentModel.Description("osu!taiko")]
+    Taiko = 1,
+
+    [System.ComponentModel.Description("osu!catch")]
+    Catch = 2,
+
+    [System.ComponentModel.Description("osu!mania")]
+    Mania = 3,
 }
 
 /// <summary>
@@ -364,5 +441,25 @@ public class JukeBoxConfigManager : IniConfigManager<JukeBoxSetting>
         SetDefault(JukeBoxSetting.HiddenPlayfieldElements, string.Empty);
         SetDefault(JukeBoxSetting.ConvertToRuleset, LazerPlayer.ChartConversionTarget.Off);
         SetDefault(JukeBoxSetting.DiscordRichPresence, true);
+
+        // Both on, because both describe what the app ALREADY does: it fills an empty queue from
+        // the radio, and — since MainScreen starts the jukebox unconditionally and the queue is
+        // never restored across launches — it has always greeted the user with a random song too.
+        // Defaulting either to off would turn existing behaviour into an opt-in, which reads as
+        // the upgrade having broken playback rather than as a new setting to reach for.
+        SetDefault(JukeBoxSetting.RadioOnEmptyQueue, true);
+        SetDefault(JukeBoxSetting.RadioOnStart, true);
+
+        // Every filter defaults to its neutral value, so a fresh install's radio asks exactly the
+        // broad question it asked before there were filters at all.
+        SetDefault(JukeBoxSetting.RadioMode, RadioRuleset.Any);
+        SetDefault(JukeBoxSetting.RadioCategory, osu.Game.Overlays.BeatmapListing.SearchCategory.Ranked);
+        SetDefault(JukeBoxSetting.RadioGenre, osu.Game.Overlays.BeatmapListing.SearchGenre.Any);
+        SetDefault(JukeBoxSetting.RadioLanguage, osu.Game.Overlays.BeatmapListing.SearchLanguage.Any);
+        SetDefault(JukeBoxSetting.RadioHasVideo, false);
+        SetDefault(JukeBoxSetting.RadioHasStoryboard, false);
+        SetDefault(JukeBoxSetting.RadioMinStars, 0.0, 0.0, 10.0);
+        SetDefault(JukeBoxSetting.RadioMaxStars, 10.0, 0.0, 10.0);
+        SetDefault(JukeBoxSetting.RadioFeaturedArtists, false);
     }
 }

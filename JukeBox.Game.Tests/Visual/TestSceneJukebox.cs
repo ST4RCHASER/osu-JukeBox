@@ -743,6 +743,126 @@ namespace JukeBox.Game.Tests.Visual
 
         #endregion
 
+        #region Radio toggles
+
+        /// <summary>
+        /// With the empty-queue radio switched off, running dry must be SILENT — and silent in the
+        /// strong sense: no search, no status line, no error, no retry timer. Asserting on the
+        /// search count rather than only on playback is what separates "looked and found nothing"
+        /// (which still costs a network round trip and an error toast) from "didn't look".
+        /// </summary>
+        [Test]
+        public void AnEmptyQueueIdlesQuietlyWhenTheRadioIsOff()
+        {
+            AddStep("the radio would have something to offer", () => mirror.SetSearchResults(new List<BeatmapSetInfo> { set1 }));
+            AddStep("switch the empty-queue radio off", () => jukebox.RadioOnEmptyQueue.Value = false);
+
+            AddStep("next, with an empty queue", () => jukebox.SkipCurrent());
+            AddWaitStep("let the round finish", 10);
+
+            AddAssert("nothing was searched for", () => mirror.Searches == 0);
+            AddAssert("nothing is playing", () => playback.Current.Value == null);
+            AddAssert("no status line", () => jukebox.Status.Value == null);
+            AddAssert("and no error — not searching cannot fail", () => jukebox.LastError.Value == null);
+        }
+
+        [Test]
+        public void AnEmptyQueueStillReachesForTheRadioWhenItIsOn()
+        {
+            AddStep("radio has a candidate", () => mirror.SetSearchResults(new List<BeatmapSetInfo> { set1 }));
+            AddAssert("the empty-queue radio is on by default", () => jukebox.RadioOnEmptyQueue.Value);
+
+            AddStep("next, with an empty queue", () => jukebox.SkipCurrent());
+            AddUntilStep("set1 plays", () => playback.Current.Value?.SetId == set1.Id);
+        }
+
+        /// <summary>
+        /// The queue still wins over the toggle: switching the radio off says "don't invent songs",
+        /// not "don't play the ones I asked for".
+        /// </summary>
+        [Test]
+        public void TheQueueStillPlaysWithTheRadioOff()
+        {
+            AddStep("switch the empty-queue radio off", () => jukebox.RadioOnEmptyQueue.Value = false);
+            AddStep("enqueue set1", () => jukebox.EnqueueAndMaybePlayAsync(set1));
+
+            AddUntilStep("set1 plays", () => playback.Current.Value?.SetId == set1.Id);
+        }
+
+        /// <summary>
+        /// The default, and the behaviour every existing install already has: launching with an
+        /// empty queue greets the user with a radio pick rather than sitting silent.
+        /// </summary>
+        [Test]
+        public void StartGreetsWithARadioPickByDefault()
+        {
+            AddStep("radio has a candidate", () => mirror.SetSearchResults(new List<BeatmapSetInfo> { set1 }));
+            AddAssert("on-start is on by default", () => jukebox.RadioOnStart.Value);
+
+            AddStep("start", () => jukebox.Start());
+            AddUntilStep("the launch pick plays", () => playback.Current.Value?.SetId == set1.Id);
+        }
+
+        [Test]
+        public void StartDoesNothingWithAnEmptyQueueAndOnStartOff()
+        {
+            AddStep("radio would have a candidate, but on-start is off", () =>
+            {
+                mirror.SetSearchResults(new List<BeatmapSetInfo> { set1 });
+                jukebox.RadioOnStart.Value = false;
+            });
+
+            AddStep("start", () => jukebox.Start());
+            AddWaitStep("let a few frames pass", 10);
+
+            AddAssert("nothing was searched for", () => mirror.Searches == 0);
+            AddAssert("nothing is playing", () => playback.Current.Value == null);
+        }
+
+        /// <summary>
+        /// The rule worth pinning: on-start is INDEPENDENT of the empty-queue toggle, so it plays
+        /// exactly one radio pick even with the other switched off. And exactly one — the permit is
+        /// spent by the round it was granted for, so the song ending must NOT start another, or the
+        /// user who wanted a single greeting song has an endless station instead.
+        /// </summary>
+        [Test]
+        public void OnStartFiresExactlyOnceEvenWithTheEmptyQueueRadioOff()
+        {
+            AddStep("radio has a candidate; on-start on, on-empty-queue off", () =>
+            {
+                mirror.SetSearchResults(new List<BeatmapSetInfo> { set1 });
+                jukebox.RadioOnStart.Value = true;
+                jukebox.RadioOnEmptyQueue.Value = false;
+            });
+
+            AddStep("start", () => jukebox.Start());
+            AddUntilStep("the launch pick plays", () => playback.Current.Value?.SetId == set1.Id);
+            AddAssert("exactly one search", () => mirror.Searches == 1);
+
+            // The permit is one-shot: the next empty-queue round falls back to the (off) setting.
+            AddStep("that song ends", () => jukebox.SkipCurrent());
+            AddWaitStep("let the round finish", 10);
+
+            AddAssert("no second lookup — the permit was spent", () => mirror.Searches == 1);
+        }
+
+        [Test]
+        public void OnStartPrefersTheQueueWhenThereIsOne()
+        {
+            AddStep("on-start on, and set2 already queued", () =>
+            {
+                mirror.SetSearchResults(new List<BeatmapSetInfo> { set1 });
+                jukebox.RadioOnStart.Value = true;
+                queue.Enqueue(set2);
+            });
+
+            AddStep("start", () => jukebox.Start());
+            AddUntilStep("the QUEUED set plays, not a radio pick", () => playback.Current.Value?.SetId == set2.Id);
+            AddAssert("the radio was never asked", () => mirror.Searches == 0);
+        }
+
+        #endregion
+
         // Regression test for the "queued song doesn't play until radio song ends" UX complaint:
         // a set the user explicitly enqueued should interrupt radio filler immediately (SkipCurrent
         // semantics), rather than wait for the radio-picked track to finish on its own.
@@ -978,8 +1098,15 @@ namespace JukeBox.Game.Tests.Visual
 
             public void ReleaseSearch() => searchGate?.TrySetResult(true);
 
+            /// <summary>How many searches were STARTED — what distinguishes "the radio looked and
+            /// found nothing" from "the radio never looked", which is exactly the difference the
+            /// empty-queue toggle makes.</summary>
+            public int Searches;
+
             public async Task<List<BeatmapSetInfo>> SearchAsync(SearchRequest r, CancellationToken ct = default)
             {
+                Interlocked.Increment(ref Searches);
+
                 if (searchGate != null)
                 {
                     try

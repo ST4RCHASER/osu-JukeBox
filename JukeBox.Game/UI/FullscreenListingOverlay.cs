@@ -122,6 +122,7 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
     private BeatmapSearchFilterRow<SearchGenre> genreRow = null!;
     private BeatmapSearchFilterRow<SearchLanguage> languageRow = null!;
     private BeatmapSearchMultipleSelectionFilterRow<SearchExtra> extraRow = null!;
+    private BeatmapSearchMultipleSelectionFilterRow<SearchGeneral> generalRow = null!;
     private BeatmapListingSortTabControl sortControl = null!;
     private RoundedSliderBar<double> minStarsSlider = null!;
     private RoundedSliderBar<double> maxStarsSlider = null!;
@@ -191,6 +192,7 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
     internal BeatmapSearchFilterRow<SearchGenre> GenreRow => genreRow;
     internal BeatmapSearchFilterRow<SearchLanguage> LanguageRow => languageRow;
     internal BeatmapSearchMultipleSelectionFilterRow<SearchExtra> ExtraRow => extraRow;
+    internal BeatmapSearchMultipleSelectionFilterRow<SearchGeneral> GeneralRow => generalRow;
     internal BeatmapListingSortTabControl SortControl => sortControl;
     internal RoundedSliderBar<double> MinStarsSlider => minStarsSlider;
 
@@ -386,6 +388,13 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
         engine.HasVideo.BindValueChanged(e => setExtra(SearchExtra.Video, e.NewValue), true);
         engine.HasStoryboard.BindValueChanged(e => setExtra(SearchExtra.Storyboard, e.NewValue), true);
 
+        // General row — one item, same multi-select <-> bool shape as Extra above.
+        generalRow.Current.BindCollectionChanged((_, _) =>
+        {
+            engine.FeaturedArtists.Value = generalRow.Current.Contains(SearchGeneral.FeaturedArtists);
+        });
+        engine.FeaturedArtists.BindValueChanged(e => setGeneral(SearchGeneral.FeaturedArtists, e.NewValue), true);
+
         // Sort control: the available criteria depend on the backend (see updateSortAvailability).
         // Seeded here with the mirror's fixed set so the engine's persisted key survives load, then
         // maintained by updateSortAvailability from the bindings below.
@@ -553,6 +562,7 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
             genreRow = new BeatmapSearchFilterRow<SearchGenre>(BeatmapsStrings.ListingSearchFiltersGenre),
             languageRow = new BeatmapSearchFilterRow<SearchLanguage>(BeatmapsStrings.ListingSearchFiltersLanguage),
             extraRow = new BeatmapSearchMultipleSelectionFilterRow<SearchExtra>(BeatmapsStrings.ListingSearchFiltersExtra),
+            generalRow = new FeaturedArtistsOnlyGeneralRow(),
             starsRow = createStarsRow(),
             keywordOnlyHint = new SpriteText
             {
@@ -676,6 +686,34 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
         }
     }
 
+    /// <summary>
+    /// Lazer's General row carrying only "Featured Artists" — the one item of the five this app can
+    /// back. Recommended difficulty, Subscribed mappers and Spotlights all read a signed-in user
+    /// (an app-only token returns nothing for them), and Include-converts describes a difficulty
+    /// listing this app doesn't render; the same "omit rather than show dead" rule as
+    /// <see cref="SupportedCategoryFilterRow"/> and the auth-only rows.
+    ///
+    /// <para>
+    /// Built as a one-item list rather than as a checkbox so it IS osu-web's General row, in the
+    /// same shape as the Extra row beside it — and so a second general filter would be a line in
+    /// <c>GetValues</c> rather than a new control.
+    /// </para>
+    /// </summary>
+    private partial class FeaturedArtistsOnlyGeneralRow : BeatmapSearchMultipleSelectionFilterRow<SearchGeneral>
+    {
+        public FeaturedArtistsOnlyGeneralRow()
+            : base(BeatmapsStrings.ListingSearchFiltersGeneral)
+        {
+        }
+
+        protected override MultipleSelectionFilter CreateMultipleSelectionFilter() => new FeaturedArtistsOnlyFilter();
+
+        private partial class FeaturedArtistsOnlyFilter : MultipleSelectionFilter
+        {
+            protected override IEnumerable<SearchGeneral> GetValues() => new[] { SearchGeneral.FeaturedArtists };
+        }
+    }
+
     // ---- Per-backend filter availability -----------------------------------------------------
 
     /// <summary>
@@ -684,10 +722,11 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
     /// (Rank Achieved, Played, Favourites, Mine) off this panel entirely: none of them work with an
     /// app-only token, so neither backend can back them.
     ///
-    /// <see cref="SearchApi.Official"/> answers everything the panel offers server-side, Genre and
-    /// Language included. The mirrors cannot express those two at all — they used to be applied as
-    /// a client-side sieve over loaded results, which is a filter that quietly means something
-    /// different from what its label says, so on that backend the rows are simply absent.
+    /// <see cref="SearchApi.Official"/> answers everything the panel offers server-side, Genre,
+    /// Language and Featured Artists included. The mirrors cannot express any of those three — the
+    /// first two used to be applied as a client-side sieve over loaded results, which is a filter
+    /// that quietly means something different from what its label says, and the third can't even be
+    /// that (no mirror serves the field it filters on) — so on that backend the rows are absent.
     /// </summary>
     private void updateFilterAvailability()
     {
@@ -705,6 +744,7 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
         genreRow.Alpha = can(SearchFilters.Genre) ? 1 : 0;
         languageRow.Alpha = can(SearchFilters.Language) ? 1 : 0;
         extraRow.Alpha = can(SearchFilters.Extra) ? 1 : 0;
+        generalRow.Alpha = can(SearchFilters.FeaturedArtists) ? 1 : 0;
         starsRow.Alpha = can(SearchFilters.Stars) ? 1 : 0;
         sortStrip.Alpha = can(SearchFilters.Sort) ? 1 : 0;
 
@@ -758,6 +798,14 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
             extraRow.Current.Remove(extra);
     }
 
+    private void setGeneral(SearchGeneral general, bool present)
+    {
+        if (present && !generalRow.Current.Contains(general))
+            generalRow.Current.Add(general);
+        else if (!present)
+            generalRow.Current.Remove(general);
+    }
+
     private RulesetInfo rulesetInfoForMode(string? mode) => mode switch
     {
         "o" => rulesetStore.GetRuleset(0) ?? new RulesetInfo(),
@@ -769,32 +817,11 @@ public partial class FullscreenListingOverlay : FocusedOverlayContainer
         _ => new RulesetInfo(),
     };
 
-    internal static string? ModeForRuleset(RulesetInfo ruleset) => ruleset.OnlineID switch
-    {
-        0 => "o",
-        1 => "t",
-        2 => "c",
-        3 => "m",
-        _ => null,
-    };
+    internal static string? ModeForRuleset(RulesetInfo ruleset) => SearchVocabulary.ModeLetter(ruleset.OnlineID);
 
-    internal static string CategoryToEngine(SearchCategory category) => category switch
-    {
-        SearchCategory.Any => "all",
-        _ => category.ToString().ToLowerInvariant(),
-    };
+    internal static string CategoryToEngine(SearchCategory category) => SearchVocabulary.CategoryToEngine(category);
 
-    internal static SearchCategory CategoryFromEngine(string category) => category switch
-    {
-        "all" => SearchCategory.Any,
-        "leaderboard" => SearchCategory.Leaderboard,
-        "qualified" => SearchCategory.Qualified,
-        "loved" => SearchCategory.Loved,
-        "pending" => SearchCategory.Pending,
-        "wip" => SearchCategory.Wip,
-        "graveyard" => SearchCategory.Graveyard,
-        _ => SearchCategory.Ranked,
-    };
+    internal static SearchCategory CategoryFromEngine(string category) => SearchVocabulary.CategoryFromEngine(category);
 
     internal static SearchGenre GenreFromEngine(int? id)
         => id is int value && Enum.IsDefined(typeof(SearchGenre), value) ? (SearchGenre)value : SearchGenre.Any;

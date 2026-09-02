@@ -52,6 +52,10 @@ namespace JukeBox.Game.Online
         /// </summary>
         public const int PAGE_SIZE = 50;
 
+        /// <summary>The <c>c</c> value selecting osu-web's "Featured Artists" general filter — see
+        /// where it is written in <see cref="BuildSearchUrl"/> for why it is not <c>general</c>.</summary>
+        public const string FEATURED_ARTISTS_GENERAL = "featured_artists";
+
         private readonly HttpClient http;
         private readonly IBindable<string> clientId;
         private readonly IBindable<string> clientSecret;
@@ -206,6 +210,16 @@ namespace JukeBox.Game.Online
 
             if (extra.Length > 0)
                 query.Add($"e={extra}");
+
+            // osu-web's "General" row, whose parameter is `c` — NOT `general`, despite that being
+            // the name the row carries everywhere else in the API surface. Verified live against
+            // osu.ppy.sh: `general=featured_artists` (and `general[]=`, and a dot-joined list under
+            // that name) is accepted and then ignored, returning byte-for-byte the unfiltered
+            // result an unrecognised value returns, while `c=featured_artists` takes the total from
+            // 1,247,030 to 99,171 with every returned set carrying a track_id. osu-web reads it as
+            // `explode('.', $params['c'])`, so further generals would join onto this with dots.
+            if (r.FeaturedArtistsOnly)
+                query.Add($"c={FEATURED_ARTISTS_GENERAL}");
 
             query.Add($"sort={r.Sort}");
 

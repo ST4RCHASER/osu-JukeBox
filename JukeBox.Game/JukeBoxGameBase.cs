@@ -47,6 +47,8 @@ namespace JukeBox.Game
         private Bindable<FpsDisplayMode> fpsDisplay = null!;
         private Bindable<double> uiScale = null!;
         private Bindable<double> volumeInactive = null!;
+        private Bindable<bool> radioOnEmptyQueue = null!;
+        private Bindable<bool> radioOnStart = null!;
 
         // Lazer's own compact FPS/frame-time readout (osu.Game.Graphics.UserInterface.FPSCounter):
         // reused as-is rather than hand-rolled — its DI needs (OsuColour, OsuConfigManager,
@@ -300,8 +302,13 @@ namespace JukeBox.Game
             // writing every mirror SEARCH was down while osu!'s API answered fine AND NeriNyan
             // still served downloads), so a radio wired to the mirrors alone reported "nothing
             // available" on a machine that could still find and play music.
+            // The user's station conditions, cached so the settings panel binds the very bindables
+            // the radio reads (rather than a parallel copy that would have to be kept in step).
+            var radioFilters = new RadioFilters(config);
+            dependencies.Cache(radioFilters);
+
             var radio = new RadioService(mirror, null, officialSearch,
-                config.GetBindable<SearchApi>(JukeBoxSetting.SearchApi), cache);
+                config.GetBindable<SearchApi>(JukeBoxSetting.SearchApi), cache, radioFilters);
             dependencies.Cache(radio);
 
             // Game.AddInternal is sealed to throw ("Use Add or Content instead") — Add routes
@@ -404,6 +411,16 @@ namespace JukeBox.Game
             // CacheSizeGb -> bytes: startup value only (eviction runs once per advance round, so
             // a live-updating bindable isn't worth the extra wiring here).
             jukebox.CacheLimitBytes = (long)(config.Get<double>(JukeBoxSetting.CacheSizeGb) * 1024 * 1024 * 1024);
+
+            // The two radio behaviour toggles. Bound here rather than resolved inside Jukebox,
+            // which deliberately has no config dependency of its own (see CacheLimitBytes above).
+            // Each config copy is kept in a field: ConfigManager references what GetBindable hands
+            // back only weakly, so a copy nobody holds is collected and the setting silently stops
+            // propagating mid-session.
+            radioOnEmptyQueue = config.GetBindable<bool>(JukeBoxSetting.RadioOnEmptyQueue);
+            radioOnStart = config.GetBindable<bool>(JukeBoxSetting.RadioOnStart);
+            jukebox.RadioOnEmptyQueue.BindTo(radioOnEmptyQueue);
+            jukebox.RadioOnStart.BindTo(radioOnStart);
 
             // This framework version has no FrameworkSetting for the built-in FPS/frame-statistics
             // overlay — instead osu.Framework.Game itself exposes a protected FrameStatistics

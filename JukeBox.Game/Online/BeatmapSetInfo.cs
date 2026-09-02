@@ -52,6 +52,14 @@ public class BeatmapSetInfo
     /// <summary>Whether the set is flagged explicit. Only the official API reports this.</summary>
     public bool Nsfw { get; set; }
 
+    /// <summary>
+    /// osu-web's link to the Featured Artist track this set uses, or null for community uploads.
+    /// The very field <see cref="SearchFilters.FeaturedArtists"/> filters on, which is what makes it
+    /// the only way to CHECK that filter was honoured rather than ignored. Official API only — no
+    /// mirror serves it, which is also why that filter can have no client-side stand-in.
+    /// </summary>
+    public int? TrackId { get; set; }
+
     public AvailabilityInfo? Availability { get; set; }
     public List<BeatmapInfo> Beatmaps { get; set; } = new();
 

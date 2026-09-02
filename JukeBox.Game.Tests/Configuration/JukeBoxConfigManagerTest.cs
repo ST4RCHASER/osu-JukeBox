@@ -9,6 +9,79 @@ namespace JukeBox.Game.Tests.Configuration
     [TestFixture]
     public class JukeBoxConfigManagerTest
     {
+        /// <summary>
+        /// The radio's defaults are load-bearing on upgrade rather than cosmetic. Every one of them
+        /// describes what an existing install ALREADY does: it fills an empty queue from the radio,
+        /// it greets the user with a random song at launch (MainScreen starts the jukebox
+        /// unconditionally and the queue never survives a restart), and its picks are unfiltered.
+        /// A wrong default here silences or narrows a working install on its next launch — which
+        /// reads as the upgrade having broken playback, not as a new setting.
+        /// </summary>
+        [Test]
+        public void RadioDefaultsPreserveTheExistingBehaviour()
+        {
+            var config = new JukeBoxConfigManager(new TemporaryNativeStorage(Path.Combine("jukebox-config-test", Path.GetRandomFileName())));
+
+            Assert.That(config.Get<bool>(JukeBoxSetting.RadioOnEmptyQueue), Is.True);
+            Assert.That(config.Get<bool>(JukeBoxSetting.RadioOnStart), Is.True);
+
+            Assert.That(config.Get<RadioRuleset>(JukeBoxSetting.RadioMode), Is.EqualTo(RadioRuleset.Any));
+            Assert.That(config.Get<osu.Game.Overlays.BeatmapListing.SearchCategory>(JukeBoxSetting.RadioCategory),
+                Is.EqualTo(osu.Game.Overlays.BeatmapListing.SearchCategory.Ranked));
+            Assert.That(config.Get<osu.Game.Overlays.BeatmapListing.SearchGenre>(JukeBoxSetting.RadioGenre),
+                Is.EqualTo(osu.Game.Overlays.BeatmapListing.SearchGenre.Any));
+            Assert.That(config.Get<osu.Game.Overlays.BeatmapListing.SearchLanguage>(JukeBoxSetting.RadioLanguage),
+                Is.EqualTo(osu.Game.Overlays.BeatmapListing.SearchLanguage.Any));
+            Assert.That(config.Get<bool>(JukeBoxSetting.RadioHasVideo), Is.False);
+            Assert.That(config.Get<bool>(JukeBoxSetting.RadioHasStoryboard), Is.False);
+            Assert.That(config.Get<double>(JukeBoxSetting.RadioMinStars), Is.EqualTo(0.0));
+            Assert.That(config.Get<double>(JukeBoxSetting.RadioMaxStars), Is.EqualTo(10.0));
+            Assert.That(config.Get<bool>(JukeBoxSetting.RadioFeaturedArtists), Is.False);
+        }
+
+        [Test]
+        public void RadioStarBoundsClampToTheSupportedRange()
+        {
+            var config = new JukeBoxConfigManager(new TemporaryNativeStorage(Path.Combine("jukebox-config-test", Path.GetRandomFileName())));
+
+            config.SetValue(JukeBoxSetting.RadioMinStars, 42.0);
+            Assert.That(config.Get<double>(JukeBoxSetting.RadioMinStars), Is.EqualTo(10.0));
+
+            config.SetValue(JukeBoxSetting.RadioMaxStars, -3.0);
+            Assert.That(config.Get<double>(JukeBoxSetting.RadioMaxStars), Is.EqualTo(0.0));
+        }
+
+        /// <summary>
+        /// The station has to come back as the user left it — a filter set that silently resets on
+        /// restart is one nobody can rely on.
+        /// </summary>
+        [Test]
+        public void RadioFiltersRoundTripThroughTheIni()
+        {
+            string directory = Path.Combine("jukebox-config-test", Path.GetRandomFileName());
+            var storage = new TemporaryNativeStorage(directory);
+
+            using (var config = new JukeBoxConfigManager(storage))
+            {
+                // Away from the default in every case, or a "round trip" that never wrote anything
+                // would pass just as happily.
+                config.SetValue(JukeBoxSetting.RadioOnStart, false);
+                config.SetValue(JukeBoxSetting.RadioMode, RadioRuleset.Mania);
+                config.SetValue(JukeBoxSetting.RadioGenre, osu.Game.Overlays.BeatmapListing.SearchGenre.Anime);
+                config.SetValue(JukeBoxSetting.RadioMinStars, 4.5);
+                config.SetValue(JukeBoxSetting.RadioFeaturedArtists, true);
+            }
+
+            var reloaded = new JukeBoxConfigManager(storage);
+
+            Assert.That(reloaded.Get<bool>(JukeBoxSetting.RadioOnStart), Is.False);
+            Assert.That(reloaded.Get<RadioRuleset>(JukeBoxSetting.RadioMode), Is.EqualTo(RadioRuleset.Mania));
+            Assert.That(reloaded.Get<osu.Game.Overlays.BeatmapListing.SearchGenre>(JukeBoxSetting.RadioGenre),
+                Is.EqualTo(osu.Game.Overlays.BeatmapListing.SearchGenre.Anime));
+            Assert.That(reloaded.Get<double>(JukeBoxSetting.RadioMinStars), Is.EqualTo(4.5));
+            Assert.That(reloaded.Get<bool>(JukeBoxSetting.RadioFeaturedArtists), Is.True);
+        }
+
         // ShowFps is deprecated (superseded by FpsDisplay — see that setting's remarks) but the
         // key must keep parsing, and defaulting false, so an old ini value still migrates safely.
         [Test]

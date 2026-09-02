@@ -22,7 +22,11 @@ namespace JukeBox.Game.Playback
     /// <param name="FromCache">Whether this came from the local cache because no source was
     /// reachable — the caller says so once, since silently playing only cached music would look
     /// like the radio had mysteriously narrowed.</param>
-    public record RadioPick(BeatmapSetInfo? Set, string? Failure = null, bool FromCache = false);
+    /// <param name="CacheFilterRelaxed">Whether that cached pick had to ignore the user's mode
+    /// filter because nothing on disk matched it. Distinct from <paramref name="FromCache"/>: the
+    /// results are not merely older than asked for, they are the wrong MODE, which without saying
+    /// so reads as the filter having no effect.</param>
+    public record RadioPick(BeatmapSetInfo? Set, string? Failure = null, bool FromCache = false, bool CacheFilterRelaxed = false);
 
     /// <summary>
     /// Picks a random beatmap set for the jukebox to play when the queue is empty.
@@ -64,12 +68,21 @@ namespace JukeBox.Game.Playback
         private static readonly string[] keywords =
             "a b c d e f g h i j k l m n o p q r s t u v w x y z".Split(' ');
 
+        /// <summary>
+        /// How many cached sets the fallback will open to find one matching the mode filter before
+        /// giving up and playing an unfiltered one. Bounded because the check is a disk read per
+        /// set and this path only runs when the network is already failing — spending seconds
+        /// stat-ing a full cache to honour a filter would turn a degraded radio into a hung one.
+        /// </summary>
+        private const int max_cache_probes = 40;
+
         private readonly IBeatmapMirror mirror;
         private readonly Func<int, int, int> rng;
 
         private readonly OfficialBeatmapSearch? official;
         private readonly IBindable<SearchApi>? searchApi;
         private readonly BeatmapCache? cache;
+        private readonly RadioFilters filters;
 
         /// <param name="mirror">The mirror chain, used for search when the official API is not in
         /// play and as the fallback when it fails.</param>
@@ -80,19 +93,32 @@ namespace JukeBox.Game.Playback
         /// <param name="searchApi">The user's backend preference, shared with the listing.</param>
         /// <param name="cache">Last resort: when nothing is reachable, the sets already on disk are
         /// still playable, and playing one beats reporting an error the user can do nothing about.</param>
+        /// <param name="filters">The user's station conditions (see <see cref="RadioFilters"/>).
+        /// Defaulted to a free-standing neutral set, which asks exactly what the radio asked before
+        /// there were filters.</param>
         public RadioService(IBeatmapMirror mirror, Func<int, int, int>? rng = null,
                             OfficialBeatmapSearch? official = null, IBindable<SearchApi>? searchApi = null,
-                            BeatmapCache? cache = null)
+                            BeatmapCache? cache = null, RadioFilters? filters = null)
         {
             this.mirror = mirror;
             this.rng = rng ?? Random.Shared.Next;
             this.official = official;
             this.searchApi = searchApi;
             this.cache = cache;
+            this.filters = filters ?? new RadioFilters();
         }
 
         /// <summary>Whether osu!'s own search should answer this pick.</summary>
         private bool useOfficial => searchApi?.Value == SearchApi.Official && official?.HasCredentials == true;
+
+        /// <summary>
+        /// Which of the user's filters the backend about to answer can actually express. The same
+        /// question the listing asks of the same two backends, answered by the same code
+        /// (<see cref="SearchCapability"/>) — so a row the listing hides is a filter the radio
+        /// doesn't send, and both move together as mirror health does.
+        /// </summary>
+        internal SearchFilters AvailableFilters
+            => SearchCapability.For(searchApi?.Value ?? SearchApi.Mirror, mirror);
 
         public async Task<RadioPick> PickRandomAsync(CancellationToken ct = default)
         {
@@ -105,9 +131,13 @@ namespace JukeBox.Game.Playback
                     Query = keywords[rng(0, keywords.Length)],
                     Page = rng(0, 200),
                     PageSize = 50,
-                    Status = "ranked",
                     Sort = sorts[rng(0, sorts.Length)]
                 };
+
+                // Re-read per attempt rather than once per call: the mirror chain's capability
+                // moves with mirror health, and a failed attempt is exactly the event that moves
+                // it — so the retry asks what the backend can serve NOW.
+                filters.Apply(request, AvailableFilters);
 
                 try
                 {
@@ -167,6 +197,16 @@ namespace JukeBox.Game.Playback
         /// Nothing answered. Rather than reporting a dead end, play something already downloaded —
         /// the cache is the one beatmap source that cannot go offline, and a user with sets on disk
         /// would rather hear one of them than read a retry notice.
+        ///
+        /// <para>
+        /// The user's filters are honoured as far as the disk can answer them, which is the mode
+        /// and nothing else (see <see cref="RadioFilters.CanNarrowCache"/>). Deliberately a
+        /// PREFERENCE rather than a requirement: a cache with no mania sets in it must still play
+        /// something for a station set to mania, because the alternative is silence during an
+        /// outage — filtering to zero here would trade the whole point of this fallback for a
+        /// filter the user can loosen once they can see anything at all. The relaxation is reported
+        /// rather than hidden.
+        /// </para>
         /// </summary>
         private RadioPick fallBackToCache(IReadOnlyList<string> failures)
         {
@@ -174,12 +214,13 @@ namespace JukeBox.Game.Playback
 
             if (cached is { Count: > 0 })
             {
-                int id = cached[rng(0, cached.Count)];
+                bool relaxed = false;
+                int id = pickCachedId(cached, ref relaxed);
 
                 // Title/artist are unknown here — the cache stores files, not metadata. Playback
                 // fills the real metadata in from the beatmap itself once it loads; this id is
                 // enough for the round to find and play it.
-                return new RadioPick(new BeatmapSetInfo { Id = id }, FromCache: true);
+                return new RadioPick(new BeatmapSetInfo { Id = id }, FromCache: true, CacheFilterRelaxed: relaxed);
             }
 
             // Distinguishes the two ways to arrive here, because the user's next move differs: a
@@ -189,6 +230,51 @@ namespace JukeBox.Game.Playback
                 : "The beatmap search came back empty.";
 
             return new RadioPick(null, reason);
+        }
+
+        /// <summary>
+        /// Chooses one of <paramref name="cached"/>, preferring one that matches the mode filter.
+        ///
+        /// <para>
+        /// Implemented as random PROBES rather than "filter the list, then pick" on purpose: each
+        /// check opens the set's <c>.osu</c> headers off disk, so filtering first would read every
+        /// cached set (hundreds, on a full cache) to make one choice, every time the network
+        /// hiccups. Probing random candidates finds a match in a handful of reads whenever matches
+        /// are common, and gives up after <see cref="max_cache_probes"/> when they are not — at
+        /// which point an unfiltered pick is the honest answer anyway.
+        /// </para>
+        /// </summary>
+        /// <param name="cached">The set ids currently on disk.</param>
+        /// <param name="relaxed">Set to true when no probe matched and the returned id therefore
+        /// ignores the mode filter.</param>
+        private int pickCachedId(IReadOnlyList<int> cached, ref bool relaxed)
+        {
+            int fallback = cached[rng(0, cached.Count)];
+
+            if (!filters.CanNarrowCache || cache == null)
+                return fallback;
+
+            for (int probe = 0; probe < max_cache_probes; probe++)
+            {
+                int id = cached[rng(0, cached.Count)];
+
+                try
+                {
+                    if (filters.MatchesCachedSet(cache.LoadCached(id)))
+                        return id;
+                }
+                catch (Exception e)
+                {
+                    // A cached set that won't scan (a half-extracted folder, a file the OS won't
+                    // hand over) is not worth failing the whole fallback for — it just isn't a
+                    // candidate. The unfiltered pick below still covers us.
+                    Logger.Log($"Radio: couldn't inspect cached set {id} for the mode filter ({e.GetBaseException().Message})",
+                        level: LogLevel.Debug);
+                }
+            }
+
+            relaxed = true;
+            return fallback;
         }
     }
 }

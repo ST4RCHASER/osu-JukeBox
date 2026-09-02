@@ -6,6 +6,7 @@ using System.Linq;
 using JukeBox.Game.Configuration;
 using JukeBox.Game.LazerPlayer;
 using JukeBox.Game.Online;
+using osu.Game.Overlays.BeatmapListing;
 using JukeBox.Game.UI;
 using NUnit.Framework;
 using osu.Framework.Allocation;
@@ -72,6 +73,127 @@ namespace JukeBox.Game.Tests.Visual
         {
             AddAssert("overlay starts hidden", () => overlay.State.Value == Visibility.Hidden);
         }
+
+        #region Radio section
+
+        [Test]
+        public void RadioTogglesRoundTripThroughConfig()
+        {
+            AddStep("show overlay", () => overlay.Show());
+
+            // Both start on: each describes behaviour the app already had before it was a setting.
+            AddAssert("empty-queue radio starts on", () => overlay.RadioOnEmptyQueueCheckbox.Current.Value);
+            AddAssert("on-start starts on", () => overlay.RadioOnStartCheckbox.Current.Value);
+
+            AddStep("switch the empty-queue radio off", () => overlay.RadioOnEmptyQueueCheckbox.Current.Value = false);
+            AddAssert("config followed", () => !config.Get<bool>(JukeBoxSetting.RadioOnEmptyQueue));
+
+            AddStep("switch on-start off", () => overlay.RadioOnStartCheckbox.Current.Value = false);
+            AddAssert("config followed", () => !config.Get<bool>(JukeBoxSetting.RadioOnStart));
+        }
+
+        [Test]
+        public void RadioFiltersRoundTripThroughConfig()
+        {
+            AddStep("show overlay", () => overlay.Show());
+
+            AddStep("set a mania, loved, 4-6 star, featured-artists station", () =>
+            {
+                overlay.RadioModeDropdown.Current.Value = RadioRuleset.Mania;
+                overlay.RadioCategoryDropdown.Current.Value = SearchCategory.Loved;
+                overlay.RadioGenreDropdown.Current.Value = SearchGenre.Anime;
+                overlay.RadioLanguageDropdown.Current.Value = SearchLanguage.Japanese;
+                overlay.RadioHasStoryboardCheckbox.Current.Value = true;
+                overlay.RadioFeaturedArtistsCheckbox.Current.Value = true;
+                overlay.RadioMinStarsSlider.Current.Value = 4;
+                overlay.RadioMaxStarsSlider.Current.Value = 6;
+            });
+
+            AddAssert("every dimension reached config", () =>
+                config.Get<RadioRuleset>(JukeBoxSetting.RadioMode) == RadioRuleset.Mania
+                && config.Get<SearchCategory>(JukeBoxSetting.RadioCategory) == SearchCategory.Loved
+                && config.Get<SearchGenre>(JukeBoxSetting.RadioGenre) == SearchGenre.Anime
+                && config.Get<SearchLanguage>(JukeBoxSetting.RadioLanguage) == SearchLanguage.Japanese
+                && config.Get<bool>(JukeBoxSetting.RadioHasStoryboard)
+                && config.Get<bool>(JukeBoxSetting.RadioFeaturedArtists)
+                && config.Get<double>(JukeBoxSetting.RadioMinStars) == 4
+                && config.Get<double>(JukeBoxSetting.RadioMaxStars) == 6);
+        }
+
+        /// <summary>
+        /// The Categories dropdown drops the two entries that need a signed-in account, exactly as
+        /// the listing's own Categories row does — offering "Favourites" to a station that can
+        /// never match one would be a filter guaranteed to return nothing.
+        /// </summary>
+        [Test]
+        public void TheRadioCategoryDropdownOmitsTheAuthOnlyEntries()
+        {
+            AddStep("show overlay", () => overlay.Show());
+
+            AddAssert("no Favourites or Mine", () =>
+                !overlay.RadioCategoryDropdown.Items.Contains(SearchCategory.Favourites)
+                && !overlay.RadioCategoryDropdown.Items.Contains(SearchCategory.Mine));
+
+            AddAssert("but the rest are there", () =>
+                overlay.RadioCategoryDropdown.Items.Contains(SearchCategory.Any)
+                && overlay.RadioCategoryDropdown.Items.Contains(SearchCategory.Ranked)
+                && overlay.RadioCategoryDropdown.Items.Contains(SearchCategory.Loved));
+        }
+
+        /// <summary>
+        /// The radio's rows follow the SAME per-backend capability signal the listing's filter block
+        /// does. Offering the radio a filter the backend will ignore is worse than doing so in the
+        /// listing: the listing at least shows the broader results it got back, while the radio
+        /// silently picks one of them and plays it.
+        /// </summary>
+        [Test]
+        public void RadioFilterRowsFollowWhatTheBackendCanExpress()
+        {
+            BeatmapSearchEngine engine = null!;
+
+            AddStep("rebuild the panel over a search engine", () =>
+            {
+                // Never added to the tree: only its AvailableFilters bindable is wanted here, and
+                // loading the engine would drag in a mirror this scene doesn't cache.
+                engine = new BeatmapSearchEngine();
+                Child = overlay = new SettingsOverlay(searchEngine: engine);
+            });
+
+            AddStep("show overlay", () => overlay.Show());
+
+            AddStep("official backend: everything is expressible", () => engine.AvailableFilters.Value = SearchFilters.All);
+            AddAssert("every row shows", () =>
+                overlay.RadioModeDropdown.Alpha == 1 && overlay.RadioCategoryDropdown.Alpha == 1
+                && overlay.RadioGenreDropdown.Alpha == 1 && overlay.RadioLanguageDropdown.Alpha == 1
+                && overlay.RadioHasVideoCheckbox.Alpha == 1 && overlay.RadioFeaturedArtistsCheckbox.Alpha == 1
+                && overlay.RadioMinStarsSlider.Alpha == 1);
+            AddAssert("and the empty-block hint is away", () => overlay.RadioNoFiltersHint.Alpha == 0);
+
+            AddStep("drop to a mirror's capability", () => engine.AvailableFilters.Value = SearchFilters.AllMirror);
+            AddAssert("genre, language and featured artists are gone", () =>
+                overlay.RadioGenreDropdown.Alpha == 0 && overlay.RadioLanguageDropdown.Alpha == 0
+                && overlay.RadioFeaturedArtistsCheckbox.Alpha == 0);
+            AddAssert("the rows a mirror CAN serve stayed", () =>
+                overlay.RadioModeDropdown.Alpha == 1 && overlay.RadioCategoryDropdown.Alpha == 1
+                && overlay.RadioHasVideoCheckbox.Alpha == 1 && overlay.RadioMinStarsSlider.Alpha == 1);
+
+            // A hidden row is not merely invisible — it must take no space, or the section keeps a
+            // gap where the control was.
+            AddAssert("hidden rows take no space", () => !overlay.RadioGenreDropdown.IsPresent);
+
+            AddStep("down to a keyword-only source", () => engine.AvailableFilters.Value = SearchFilters.Keyword);
+            AddAssert("no filter row is left", () =>
+                overlay.RadioModeDropdown.Alpha == 0 && overlay.RadioCategoryDropdown.Alpha == 0
+                && overlay.RadioMinStarsSlider.Alpha == 0);
+            AddAssert("so the section says why rather than looking empty", () => overlay.RadioNoFiltersHint.Alpha == 1);
+
+            // The two behaviour toggles are properties of THIS app, not of any backend — they must
+            // never disappear with the filters.
+            AddAssert("the behaviour toggles are untouched throughout", () =>
+                overlay.RadioOnEmptyQueueCheckbox.Alpha == 1 && overlay.RadioOnStartCheckbox.Alpha == 1);
+        }
+
+        #endregion
 
         [Test]
         public void ToggleVisibilityShowsAndEscapeHides()

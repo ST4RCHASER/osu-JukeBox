@@ -5,6 +5,7 @@ using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using JukeBox.Game.Beatmaps;
+using JukeBox.Game.Configuration;
 using JukeBox.Game.Online;
 using JukeBox.Game.Playback;
 using NUnit.Framework;
@@ -19,11 +20,16 @@ namespace JukeBox.Game.Tests.Playback
         public bool Fail;
         public int SearchCalls;
 
+        /// <summary>Every request this mirror was handed, so a test can assert what the radio
+        /// actually ASKED rather than only what came back.</summary>
+        public readonly List<SearchRequest> Requests = new List<SearchRequest>();
+
         public ListMirror(List<BeatmapSetInfo> items) => this.items = items;
 
         public Task<List<BeatmapSetInfo>> SearchAsync(SearchRequest r, CancellationToken ct = default)
         {
             SearchCalls++;
+            Requests.Add(r);
             if (Fail) throw new IOException("down");
             return Task.FromResult(items);
         }
@@ -43,6 +49,9 @@ namespace JukeBox.Game.Tests.Playback
         public string Name => "keyword-only";
         public readonly List<string> Queries = new List<string>();
 
+        /// <summary>The requests themselves, for asserting what was left OUT of them.</summary>
+        public readonly List<SearchRequest> SeenRequests = new List<SearchRequest>();
+
         public KeywordOnlyMirror(List<BeatmapSetInfo> items) => this.items = items;
 
         public SearchFilters SupportedFilters => SearchFilters.Keyword;
@@ -50,6 +59,7 @@ namespace JukeBox.Game.Tests.Playback
         public Task<List<BeatmapSetInfo>> SearchAsync(SearchRequest r, CancellationToken ct = default)
         {
             Queries.Add(r.Query);
+            SeenRequests.Add(r);
             return Task.FromResult(string.IsNullOrEmpty(r.Query) ? new List<BeatmapSetInfo>() : items);
         }
 
@@ -238,6 +248,173 @@ namespace JukeBox.Game.Tests.Playback
             Assert.That(pick.Set, Is.Null);
             Assert.That(pick.Failure, Is.Not.Null);
             Assert.That(mirror.SearchCalls, Is.EqualTo(3));
+        }
+
+        // ---- Station filters -------------------------------------------------------------------
+
+        /// <summary>Writes a cached set on disk whose only difficulty declares
+        /// <paramref name="mode"/> — enough for the fallback's ruleset check to read.</summary>
+        private static void writeCachedSet(string root, int setId, int mode)
+        {
+            string dir = Path.Combine(root, setId.ToString());
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(Path.Combine(dir, "map.osu"),
+                $"osu file format v14\n\n[General]\nAudioFilename: audio.mp3\nMode: {mode}\n\n[Metadata]\nVersion: Test\n");
+        }
+
+        /// <summary>
+        /// The whole point of the feature: a station's conditions have to reach the SEARCH, not
+        /// just sit in config. Asserted on the request the mirror was handed, because a radio whose
+        /// filters were merely stored would behave identically to one with no filters at all.
+        /// </summary>
+        [Test]
+        public async Task TheStationsFiltersReachTheSearchRequest()
+        {
+            var mirror = new ListMirror(new List<BeatmapSetInfo> { new BeatmapSetInfo { Id = 5 } });
+            var filters = new RadioFilters();
+
+            filters.Mode.Value = RadioRuleset.Mania;
+            filters.Category.Value = osu.Game.Overlays.BeatmapListing.SearchCategory.Loved;
+            filters.MinStars.Value = 4;
+            filters.MaxStars.Value = 6;
+
+            var radio = new RadioService(mirror, (min, max) => min, filters: filters);
+
+            await radio.PickRandomAsync();
+
+            var request = mirror.Requests[0];
+
+            Assert.That(request.Mode, Is.EqualTo("m"));
+            Assert.That(request.Status, Is.EqualTo("loved"));
+            Assert.That(request.MinStars, Is.EqualTo(4));
+            Assert.That(request.MaxStars, Is.EqualTo(6));
+
+            // The keyword is still what carries the randomness — filters narrow the pool, they
+            // don't replace the mechanism that makes consecutive picks differ.
+            Assert.That(request.Query, Is.Not.Empty);
+        }
+
+        /// <summary>
+        /// A backend that can't express a filter must be sent a request WITHOUT it. Sending it
+        /// anyway doesn't merely get it ignored — it makes the request unservable
+        /// (<see cref="SearchRequest.RequiredFilters"/>), so the chain skips every mirror and the
+        /// radio drops to its cache for a filter that was never going to work.
+        /// </summary>
+        [Test]
+        public async Task FiltersAKeywordOnlyBackendCannotExpressAreNotSent()
+        {
+            var mirror = new KeywordOnlyMirror(new List<BeatmapSetInfo> { new BeatmapSetInfo { Id = 7 } });
+            var filters = new RadioFilters();
+
+            filters.Mode.Value = RadioRuleset.Mania;
+            filters.Category.Value = osu.Game.Overlays.BeatmapListing.SearchCategory.Loved;
+            filters.MinStars.Value = 4;
+
+            var radio = new RadioService(mirror, (min, max) => min, filters: filters);
+
+            var pick = await radio.PickRandomAsync();
+
+            Assert.That(pick.Set?.Id, Is.EqualTo(7));
+
+            var request = mirror.SeenRequests[0];
+
+            Assert.That(request.Mode, Is.Null);
+            Assert.That(request.MinStars, Is.Null);
+            Assert.That(request.Status, Is.EqualTo(SearchRequest.ANY_STATUS));
+            Assert.That(request.RequiredFilters, Is.EqualTo(SearchFilters.Keyword));
+        }
+
+        /// <summary>
+        /// Nothing is reachable, so the pick comes off disk — and the mode filter is still
+        /// honoured, because a set's ruleset is one of the few things a cached folder can actually
+        /// answer (its .osu headers carry it).
+        /// </summary>
+        [Test]
+        public async Task TheCachedFallbackHonoursTheModeFilterWhenItCan()
+        {
+            string dir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+
+            writeCachedSet(dir, 100, mode: 0); // osu!
+            writeCachedSet(dir, 200, mode: 3); // mania
+
+            var mirror = new ListMirror(new List<BeatmapSetInfo>()) { Fail = true };
+            var cache = new BeatmapCache(dir, mirror);
+            var filters = new RadioFilters();
+            filters.Mode.Value = RadioRuleset.Mania;
+
+            // The candidate ORDER is the filesystem's, not ours, so the rng is pinned by looking the
+            // indices up rather than by assuming them. Cache draws are told apart from the search's
+            // own keyword/page/sort draws by their RANGE — only the cache asks for one of
+            // ids.Count — because those run first and would otherwise eat the sequence.
+            //
+            // The first cache draw is the unfiltered fallback, aimed squarely at the osu! set: an
+            // implementation that skipped the mode check therefore returns 100 every time, rather
+            // than only when the directory happened to enumerate that way. Later draws are probes,
+            // aimed at the mania set.
+            var ids = cache.CachedSetIds().ToList();
+            int osuIndex = ids.IndexOf(100);
+            int maniaIndex = ids.IndexOf(200);
+
+            int cacheDraws = 0;
+            var radio = new RadioService(mirror,
+                (min, max) => max != ids.Count ? min : (cacheDraws++ == 0 ? osuIndex : maniaIndex),
+                cache: cache, filters: filters);
+
+            var pick = await radio.PickRandomAsync();
+
+            Assert.That(pick.FromCache, Is.True);
+            Assert.That(pick.Set?.Id, Is.EqualTo(200), "the cached fallback ignored the mode filter");
+            Assert.That(pick.CacheFilterRelaxed, Is.False);
+        }
+
+        /// <summary>
+        /// ...but a filter that matches NOTHING on disk must not turn the fallback into silence.
+        /// The fallback exists precisely for the case where the user can do nothing about the
+        /// network; refusing to play the sets they already have because none is the right ruleset
+        /// would trade its entire purpose for a filter they can loosen once they can hear anything.
+        /// The relaxation is reported rather than hidden.
+        /// </summary>
+        [Test]
+        public async Task TheCachedFallbackRelaxesTheModeFilterRatherThanPlayingNothing()
+        {
+            string dir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+
+            writeCachedSet(dir, 100, mode: 0);
+            writeCachedSet(dir, 101, mode: 0);
+
+            var mirror = new ListMirror(new List<BeatmapSetInfo>()) { Fail = true };
+            var filters = new RadioFilters();
+            filters.Mode.Value = RadioRuleset.Mania;
+
+            var radio = new RadioService(mirror, (min, max) => min,
+                cache: new BeatmapCache(dir, mirror), filters: filters);
+
+            var pick = await radio.PickRandomAsync();
+
+            Assert.That(pick.Set, Is.Not.Null, "an unmatchable filter silenced the cache fallback");
+            Assert.That(pick.FromCache, Is.True);
+            Assert.That(pick.CacheFilterRelaxed, Is.True, "the relaxation has to be reportable, or the filter looks broken");
+        }
+
+        /// <summary>
+        /// A neutral station takes whatever the cache offers and, crucially, does NOT report the
+        /// relaxation — "we ignored your mode filter" would be a lie when there was no filter, and
+        /// it reaches the user as a toast.
+        /// </summary>
+        [Test]
+        public async Task ANeutralStationTakesTheCachedPickWithoutClaimingARelaxation()
+        {
+            string dir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+
+            writeCachedSet(dir, 100, mode: 0);
+
+            var mirror = new ListMirror(new List<BeatmapSetInfo>()) { Fail = true };
+            var radio = new RadioService(mirror, (min, max) => min, cache: new BeatmapCache(dir, mirror));
+
+            var pick = await radio.PickRandomAsync();
+
+            Assert.That(pick.Set?.Id, Is.EqualTo(100));
+            Assert.That(pick.CacheFilterRelaxed, Is.False);
         }
     }
 }

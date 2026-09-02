@@ -6,6 +6,8 @@ using System.Linq;
 using JukeBox.Game.Configuration;
 using JukeBox.Game.LazerPlayer;
 using JukeBox.Game.Online;
+using JukeBox.Game.Playback;
+using osu.Game.Overlays.BeatmapListing;
 using osu.Framework.Allocation;
 using osu.Framework.Extensions;
 using osu.Framework.Audio;
@@ -144,6 +146,28 @@ public partial class SettingsOverlay : FocusedOverlayContainer
     private SettingsCheckbox playOnMainCheckbox = null!;
     private SettingsCheckbox discordPresenceCheckbox = null!;
 
+    // ---- Radio ----
+    private SettingsCheckbox radioOnEmptyQueueCheckbox = null!;
+    private SettingsCheckbox radioOnStartCheckbox = null!;
+    private SettingsEnumDropdown<RadioRuleset> radioModeDropdown = null!;
+    private SettingsDropdown<SearchCategory> radioCategoryDropdown = null!;
+    private SettingsEnumDropdown<SearchGenre> radioGenreDropdown = null!;
+    private SettingsEnumDropdown<SearchLanguage> radioLanguageDropdown = null!;
+    private SettingsCheckbox radioHasVideoCheckbox = null!;
+    private SettingsCheckbox radioHasStoryboardCheckbox = null!;
+    private SettingsCheckbox radioFeaturedArtistsCheckbox = null!;
+    private SettingsSlider<double> radioMinStarsRow = null!;
+    private SettingsSlider<double> radioMaxStarsRow = null!;
+
+    /// <summary>The radio filter rows paired with the capability each needs, so the whole block's
+    /// visibility is one loop over the active backend's answer — see
+    /// <see cref="updateRadioFilterAvailability"/>.</summary>
+    private (Drawable Row, SearchFilters Needs)[] radioFilterRows = System.Array.Empty<(Drawable, SearchFilters)>();
+
+    /// <summary>Shown in place of the filter rows when the reachable source can express none of
+    /// them, so an empty Radio section reads as deliberate rather than broken.</summary>
+    private OsuTextFlowContainer radioNoFiltersHint = null!;
+
     // Checkbox-facing adapter for playOnMainCheckbox (same shape as hardwareAccelerationEnabled
     // below): the dependent-row grey-out lives on THIS bindable's Disabled, never on the config
     // bindable itself — a disabled config bindable would make any programmatic SetValue throw.
@@ -225,6 +249,21 @@ public partial class SettingsOverlay : FocusedOverlayContainer
     internal SettingsCheckbox PlayOnMainCheckbox => playOnMainCheckbox;
     internal SettingsCheckbox DiscordPresenceCheckbox => discordPresenceCheckbox;
 
+    // Test-only access to the Radio section, to drive the toggles and assert per-backend row
+    // visibility without depending on this panel's layout.
+    internal SettingsCheckbox RadioOnEmptyQueueCheckbox => radioOnEmptyQueueCheckbox;
+    internal SettingsCheckbox RadioOnStartCheckbox => radioOnStartCheckbox;
+    internal SettingsDropdown<RadioRuleset> RadioModeDropdown => radioModeDropdown;
+    internal SettingsDropdown<SearchCategory> RadioCategoryDropdown => radioCategoryDropdown;
+    internal SettingsDropdown<SearchGenre> RadioGenreDropdown => radioGenreDropdown;
+    internal SettingsDropdown<SearchLanguage> RadioLanguageDropdown => radioLanguageDropdown;
+    internal SettingsCheckbox RadioHasVideoCheckbox => radioHasVideoCheckbox;
+    internal SettingsCheckbox RadioHasStoryboardCheckbox => radioHasStoryboardCheckbox;
+    internal SettingsCheckbox RadioFeaturedArtistsCheckbox => radioFeaturedArtistsCheckbox;
+    internal SettingsSlider<double> RadioMinStarsSlider => radioMinStarsRow;
+    internal SettingsSlider<double> RadioMaxStarsSlider => radioMaxStarsRow;
+    internal Drawable RadioNoFiltersHint => radioNoFiltersHint;
+
     /// <summary>Test-only: the panel's own background surface — non-null only for the floating
     /// card, which is a card in its own right over a scrim. The docked presentation paints none, so
     /// its sections sit on the hosting column's single surface (see load()).</summary>
@@ -234,10 +273,29 @@ public partial class SettingsOverlay : FocusedOverlayContainer
     /// mouse coordinates are already final) so real mouse input can reach it.</summary>
     internal void ScrollControlIntoView(Drawable control) => scroll.ScrollIntoView(control, animated: false);
 
-    public SettingsOverlay(bool docked = false)
+    /// <param name="docked">See the class summary.</param>
+    /// <param name="searchEngine">The app's one search engine, purely so the Radio section's filter
+    /// rows can follow <see cref="BeatmapSearchEngine.AvailableFilters"/> — the SAME capability
+    /// signal the beatmap listing's own rows follow, so a filter dimension appears and disappears
+    /// in both places together. Passed in rather than resolved because the engine is created and
+    /// owned by <see cref="Screens.MainScreen"/> and never cached in DI; null in bare test scenes
+    /// and in the floating presentation, where the rows then simply all show.</param>
+    public SettingsOverlay(bool docked = false, BeatmapSearchEngine? searchEngine = null)
     {
         this.docked = docked;
+        this.searchEngine = searchEngine;
     }
+
+    private readonly BeatmapSearchEngine? searchEngine;
+
+    /// <summary>
+    /// This panel's view of the radio's station. A SECOND <see cref="RadioFilters"/> over the same
+    /// config manager rather than the one cached in DI, which is fine and deliberate: both are made
+    /// of <c>ConfigManager.GetBindable</c> copies of the same keys, and those stay in sync with each
+    /// other automatically — so editing a control here moves the radio's own value with it. Held in
+    /// a field because those copies are referenced only weakly by the manager.
+    /// </summary>
+    private RadioFilters radioFilters = null!;
 
     [BackgroundDependencyLoader]
     private void load()
@@ -431,6 +489,8 @@ public partial class SettingsOverlay : FocusedOverlayContainer
         });
         sections.Add(new LazerSection("Graphics", FontAwesome.Solid.Laptop) { Children = graphicsRows });
 
+        sections.Add(createRadioSection());
+
         sections.Add(new LazerSection("Online", FontAwesome.Solid.GlobeAsia)
         {
             Children = new Drawable[]
@@ -564,6 +624,105 @@ public partial class SettingsOverlay : FocusedOverlayContainer
         });
     }
 
+    /// <summary>
+    /// The radio: whether it plays at all, and what it picks from.
+    ///
+    /// <para>
+    /// The filter rows are the beatmap listing's filter block said in lazer's SETTINGS idiom rather
+    /// than osu-web's. The listing renders each dimension as a row of horizontal text tab items,
+    /// which needs the width of a fullscreen page; this column is 340px, so each dimension becomes
+    /// one labelled dropdown (or checkbox, or slider) instead — the same seven dimensions, in the
+    /// same order as the screenshot, expressed in the controls the rest of this panel already uses.
+    /// </para>
+    ///
+    /// <para>
+    /// Which rows exist follows the ACTIVE BACKEND, exactly as the listing's do and from the same
+    /// signal — see <see cref="updateRadioFilterAvailability"/>. Offering the radio a filter the
+    /// backend will ignore would be worse here than in the listing: the listing at least shows the
+    /// broader results it got, while a radio silently picks one of them and plays it.
+    /// </para>
+    /// </summary>
+    private Drawable createRadioSection()
+    {
+        var rows = new List<Drawable>();
+
+        rows.Add(radioOnEmptyQueueCheckbox = new SettingsCheckbox { LabelText = "Auto-play random song on empty queue" });
+        rows.Add(radioOnStartCheckbox = new SettingsCheckbox { LabelText = "Auto-play random song on start" });
+        rows.Add(new LazerSubsection("Random conditions")
+        {
+            Children = new Drawable[]
+            {
+                radioModeDropdown = new SettingsEnumDropdown<RadioRuleset> { LabelText = "Mode" },
+                radioCategoryDropdown = new SettingsDropdown<SearchCategory>
+                {
+                    LabelText = "Categories",
+                    // Favourites and Mine need a signed-in account this app doesn't have —
+                    // omitted rather than shown dead, matching the listing's own Categories row.
+                    Items = Enum.GetValues<SearchCategory>()
+                                .Where(c => c != SearchCategory.Favourites && c != SearchCategory.Mine),
+                },
+                radioGenreDropdown = new SettingsEnumDropdown<SearchGenre> { LabelText = "Genre" },
+                radioLanguageDropdown = new SettingsEnumDropdown<SearchLanguage> { LabelText = "Language" },
+                radioHasVideoCheckbox = new SettingsCheckbox { LabelText = "Has video" },
+                radioHasStoryboardCheckbox = new SettingsCheckbox { LabelText = "Has storyboard" },
+                radioFeaturedArtistsCheckbox = new SettingsCheckbox { LabelText = "Featured Artists" },
+                radioMinStarsRow = new SettingsSlider<double> { LabelText = "Minimum stars", KeyboardStep = 0.1f },
+                radioMaxStarsRow = new SettingsSlider<double> { LabelText = "Maximum stars", KeyboardStep = 0.1f },
+                radioNoFiltersHint = new OsuTextFlowContainer(t => t.Font = OsuFont.GetFont(size: 12))
+                {
+                    RelativeSizeAxes = Axes.X,
+                    AutoSizeAxes = Axes.Y,
+                    Padding = new MarginPadding
+                    {
+                        Left = SettingsPanel.CONTENT_PADDING.Left,
+                        Right = SettingsPanel.CONTENT_PADDING.Right,
+                        Top = 8,
+                        Bottom = 8,
+                    },
+                    Colour = Theme.TextTertiary,
+                    Alpha = 0,
+                Text = "The beatmap source that can be reached right now can't narrow a random "
+                       + "pick at all, so there is nothing to set here.",
+                },
+            },
+        });
+
+        // Each row's own capability, so hiding is one table rather than a wall of assignments that
+        // has to be kept in step with the rows above by eye.
+        radioFilterRows = new[]
+        {
+            ((Drawable)radioModeDropdown, SearchFilters.Mode),
+            (radioCategoryDropdown, SearchFilters.Status),
+            (radioGenreDropdown, SearchFilters.Genre),
+            (radioLanguageDropdown, SearchFilters.Language),
+            (radioHasVideoCheckbox, SearchFilters.Extra),
+            (radioHasStoryboardCheckbox, SearchFilters.Extra),
+            (radioFeaturedArtistsCheckbox, SearchFilters.FeaturedArtists),
+            (radioMinStarsRow, SearchFilters.Stars),
+            (radioMaxStarsRow, SearchFilters.Stars),
+        };
+
+        return new LazerSection("Radio", FontAwesome.Solid.BroadcastTower) { Children = rows };
+    }
+
+    /// <summary>
+    /// Shows exactly the radio filter rows the active backend can answer, hiding the rest — the
+    /// same rule, from the same <see cref="BeatmapSearchEngine.AvailableFilters"/> signal, that the
+    /// listing's own filter block follows. Alpha rather than removal, because each row carries a
+    /// live config binding whose VALUE has to survive a backend going away and coming back; a
+    /// zero-Alpha child is not IsPresent, so the section's flow closes over it.
+    /// </summary>
+    private void updateRadioFilterAvailability(SearchFilters available)
+    {
+        foreach ((var row, var needs) in radioFilterRows)
+            row.Alpha = (available & needs) != 0 ? 1 : 0;
+
+        // Every dimension gone leaves the subsection as a bare header, which reads as a bug.
+        bool none = radioFilterRows.All(r => (available & r.Needs) == 0);
+
+        radioNoFiltersHint.Alpha = none ? 1 : 0;
+    }
+
     protected override void LoadComplete()
     {
         base.LoadComplete();
@@ -589,6 +748,31 @@ public partial class SettingsOverlay : FocusedOverlayContainer
         // Credentials only mean anything to the official backend — with the mirrors selected the
         // block is gone rather than greyed, since there is nothing about it to explain in that mode.
         searchApiDropdown.Current.BindValueChanged(e => officialCredentials.Alpha = e.NewValue == SearchApi.Official ? 1 : 0, true);
+
+        // ---- Radio ----
+        radioOnEmptyQueueCheckbox.Current = config.GetBindable<bool>(JukeBoxSetting.RadioOnEmptyQueue);
+        radioOnStartCheckbox.Current = config.GetBindable<bool>(JukeBoxSetting.RadioOnStart);
+
+        // See the field: these are config-bindable copies, so they and the radio's own copies of
+        // the same keys move together without either side subscribing to the other.
+        radioFilters = new RadioFilters(config);
+
+        radioModeDropdown.Current = radioFilters.Mode;
+        radioCategoryDropdown.Current = radioFilters.Category;
+        radioGenreDropdown.Current = radioFilters.Genre;
+        radioLanguageDropdown.Current = radioFilters.Language;
+        radioHasVideoCheckbox.Current = radioFilters.HasVideo;
+        radioHasStoryboardCheckbox.Current = radioFilters.HasStoryboard;
+        radioFeaturedArtistsCheckbox.Current = radioFilters.FeaturedArtists;
+        radioMinStarsRow.Current = radioFilters.MinStars;
+        radioMaxStarsRow.Current = radioFilters.MaxStars;
+
+        // With no engine to ask (bare scenes, the floating presentation) every row shows: an
+        // unknown capability is not a reason to hide a setting the user may have deliberately set.
+        if (searchEngine != null)
+            searchEngine.AvailableFilters.BindValueChanged(e => updateRadioFilterAvailability(e.NewValue), true);
+        else
+            updateRadioFilterAvailability(SearchFilters.All);
 
         detachPlayerCheckbox.Current = config.GetBindable<bool>(JukeBoxSetting.DetachPlayer);
 

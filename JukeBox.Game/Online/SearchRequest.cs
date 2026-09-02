@@ -86,6 +86,14 @@ public class SearchRequest
     public bool IncludeNsfw;
 
     /// <summary>
+    /// Restricts results to sets whose track is from osu!'s Featured Artist library. Official-only
+    /// (see <see cref="SearchFilters.FeaturedArtists"/>); it rides osu-web's <c>c</c> parameter,
+    /// NOT the <c>general</c> one the endpoint's documentation implies — verified live, where
+    /// <c>general=featured_artists</c> is accepted and then ignored exactly like a nonsense value.
+    /// </summary>
+    public bool FeaturedArtistsOnly;
+
+    /// <summary>
     /// Which filters this request actually EXERCISES — a filter left at its neutral value asks
     /// nothing of the backend, so a request with only a keyword can be served by any of them. This
     /// is what turns a backend's <see cref="IBeatmapMirror.SupportedFilters"/> into a yes/no answer
@@ -120,6 +128,9 @@ public class SearchRequest
 
             if (LanguageId != null)
                 required |= SearchFilters.Language;
+
+            if (FeaturedArtistsOnly)
+                required |= SearchFilters.FeaturedArtists;
 
             if (Page > 0 || Cursor != null)
                 required |= SearchFilters.Paging;

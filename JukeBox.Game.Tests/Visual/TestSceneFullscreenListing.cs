@@ -88,6 +88,10 @@ namespace JukeBox.Game.Tests.Visual
                 previewHandles.Clear();
                 mirror.Sets.Clear();
                 mirror.Gate = null;
+
+                // Fixture-scoped mirror: a test that degraded its capability must not leave the
+                // next one's filter rows hidden.
+                mirror.Supported = SearchFilters.All;
                 mirror.Sets.AddRange(defaultSets());
 
                 if (playback.IsPlaying)
@@ -185,6 +189,68 @@ namespace JukeBox.Game.Tests.Visual
 
             AddStep("raise min stars through the slider's bindable", () => fullscreen.MinStarsSlider.Current.Value = 3);
             AddAssert("engine min stars follows", () => Math.Abs(docked.Engine.MinStars.Value - 3) < 0.001);
+        }
+
+        /// <summary>
+        /// osu-web's General row, carrying the one item this app can back. The other four
+        /// (Recommended difficulty, Include converts, Subscribed mappers, Spotlights) each need
+        /// something an app-only token or this app's feature set can't provide, so they are absent
+        /// rather than dead — the same rule the Categories row already follows.
+        /// </summary>
+        [Test]
+        public void TheGeneralRowOffersFeaturedArtistsAndNothingElse()
+        {
+            AddStep("open", () => fullscreen.ShowSearch());
+            AddUntilStep("entrance settled", () => fullscreen.SlidePanel.Y == 0);
+
+            AddAssert("exactly one item, Featured Artists", () =>
+                fullscreen.GeneralRow.ChildrenOfType<FilterTabItem<SearchGeneral>>()
+                          .Select(i => i.Value).SequenceEqual(new[] { SearchGeneral.FeaturedArtists }));
+
+            AddStep("toggle Featured Artists on", () => fullscreen.GeneralRow.Current.Add(SearchGeneral.FeaturedArtists));
+            AddAssert("engine follows", () => docked.Engine.FeaturedArtists.Value);
+
+            AddStep("cleared on the engine instead", () => docked.Engine.FeaturedArtists.Value = false);
+            AddUntilStep("the row follows back", () => !fullscreen.GeneralRow.Current.Contains(SearchGeneral.FeaturedArtists));
+        }
+
+        /// <summary>
+        /// Featured Artists is official-only, so its row must vanish on the mirror backend exactly
+        /// as genre and language do — a control the backend will ignore is a control that lies. The
+        /// VALUE survives the row going away, so a user who set it before switching backends gets
+        /// it back rather than silently losing it.
+        /// </summary>
+        [Test]
+        public void TheFeaturedArtistsRowFollowsWhatTheBackendCanExpress()
+        {
+            AddStep("open", () => fullscreen.ShowSearch());
+            AddUntilStep("entrance settled", () => fullscreen.SlidePanel.Y == 0);
+
+            AddStep("set it, then let the source degrade to a mirror's vocabulary", () =>
+            {
+                docked.Engine.FeaturedArtists.Value = true;
+
+                // Through the mirror's own capability, so the engine recomputes its offer the way
+                // it does in the app — writing AvailableFilters directly would be undone by the
+                // next search, which recomputes it before building every request.
+                mirror.Supported = SearchFilters.AllMirror;
+                docked.Engine.ScheduleSearch();
+            });
+
+            AddUntilStep("the row is gone", () => fullscreen.GeneralRow.Alpha == 0 && !fullscreen.GeneralRow.IsPresent);
+            AddUntilStep("genre and language went with it", () => fullscreen.GenreRow.Alpha == 0 && fullscreen.LanguageRow.Alpha == 0);
+            AddAssert("the rows a mirror CAN serve stayed", () => fullscreen.RulesetRow.Alpha == 1 && fullscreen.StarsRow.Alpha == 1);
+            AddAssert("but the value is kept, not cleared", () => docked.Engine.FeaturedArtists.Value);
+
+            AddStep("the official backend's vocabulary is back", () =>
+            {
+                mirror.Supported = SearchFilters.All;
+                docked.Engine.ScheduleSearch();
+            });
+
+            AddUntilStep("the row returns", () => fullscreen.GeneralRow.Alpha == 1);
+            AddAssert("still set, exactly as it was left", () =>
+                fullscreen.GeneralRow.Current.Contains(SearchGeneral.FeaturedArtists));
         }
 
         // The lazer-style hover icon rail: sliding in on card hover with a plus button (existing
@@ -528,6 +594,16 @@ namespace JukeBox.Game.Tests.Visual
         private class StubMirror : IBeatmapMirror
         {
             public string Name => "stub";
+
+            /// <summary>
+            /// What this stub claims it can filter on. Settable so a test can stand in for a
+            /// degraded mirror chain and drive the listing's row visibility through the REAL path
+            /// (the engine recomputing its offer from the mirror), rather than by writing the
+            /// engine's published answer directly — which the next search would overwrite.
+            /// </summary>
+            public SearchFilters Supported = SearchFilters.All;
+
+            public SearchFilters SupportedFilters => Supported;
 
             public List<BeatmapSetInfo> Sets { get; } = new();
 

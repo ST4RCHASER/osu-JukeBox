@@ -300,7 +300,9 @@ public partial class MainScreen : Screen
         fullscreenListing = new FullscreenListingOverlay(searchEngine) { RelativeSizeAxes = Axes.Both };
         playbackPanel = new PlaybackPanel();
         chartPanel = new ChartPanel();
-        settingsBody = new SettingsOverlay(docked: true) { RelativeSizeAxes = Axes.Both };
+        // The engine goes in so the Radio section's filter rows follow the same per-backend
+        // capability signal the listing's own rows do (see SettingsOverlay's constructor).
+        settingsBody = new SettingsOverlay(docked: true, searchEngine: searchEngine) { RelativeSizeAxes = Axes.Both };
         mapIdOverlay = new MapIdOverlay();
         fileImportOverlay = new FileImportOverlay();
 

@@ -47,11 +47,20 @@ namespace JukeBox.Game.Online
         /// never loads more.</summary>
         Paging = 1 << 8,
 
-        /// <summary>What osu!'s own API can do: all of it.</summary>
-        All = Keyword | Mode | Status | Extra | Stars | Sort | Genre | Language | Paging,
+        /// <summary>
+        /// Restricting to sets whose track comes from osu!'s Featured Artist library (osu-web's
+        /// "Featured Artists" item in the General row). Answerable only by osu!'s own API, whose
+        /// <c>c=featured_artists</c> filters on the set having a <c>track_id</c> — a relationship
+        /// that lives in osu-web's own tables, so no mirror search can express it and none of them
+        /// serve the field to filter on locally either.
+        /// </summary>
+        FeaturedArtists = 1 << 9,
 
-        /// <summary>What the mirrors can do at best (NeriNyan) — genre and language are osu-web
-        /// concepts no mirror search exposes.</summary>
+        /// <summary>What osu!'s own API can do: all of it.</summary>
+        All = Keyword | Mode | Status | Extra | Stars | Sort | Genre | Language | Paging | FeaturedArtists,
+
+        /// <summary>What the mirrors can do at best (NeriNyan) — genre, language and featured
+        /// artists are osu-web concepts no mirror search exposes.</summary>
         AllMirror = Keyword | Mode | Status | Extra | Stars | Sort | Paging,
     }
 }
