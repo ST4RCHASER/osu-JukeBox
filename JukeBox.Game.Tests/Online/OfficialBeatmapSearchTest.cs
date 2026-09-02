@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Threading;
@@ -25,6 +26,7 @@ namespace JukeBox.Game.Tests.Online
     {
         private const string token_endpoint = "https://stub.invalid/oauth/token";
         private const string search_endpoint = "https://stub.invalid/api/v2/beatmapsets/search";
+        private const string beatmap_endpoint = "https://stub.invalid/api/v2/beatmaps/";
 
         /// <summary>
         /// Records every request and replies from a queue of canned responses (the last one repeats),
@@ -69,7 +71,100 @@ namespace JukeBox.Game.Tests.Online
         private static OfficialBeatmapSearch create(RecordingHandler handler, string id = "1234", string secret = "s3cret")
             => new OfficialBeatmapSearch(new HttpClient(handler),
                 new Bindable<string>(id), new Bindable<string>(secret),
-                token_endpoint, search_endpoint);
+                token_endpoint, search_endpoint, beatmap_endpoint);
+
+        // ---- Beatmap id -> set id --------------------------------------------------------------
+        //
+        // The ONLY route from a difficulty to the set it belongs to anywhere in this app: no mirror
+        // offers a beatmap-id endpoint, which is why a /b/ link used to be refused outright.
+
+        [Test]
+        public async Task ABeatmapIdResolvesToItsSet()
+        {
+            var handler = new RecordingHandler();
+            handler.Enqueue(HttpStatusCode.OK, token_response);
+            handler.Enqueue(HttpStatusCode.OK, "{\"id\":67890,\"beatmapset_id\":12345,\"version\":\"Insane\"}");
+
+            int? setId = await create(handler).ResolveBeatmapSetIdAsync(67890);
+
+            Assert.That(setId, Is.EqualTo(12345));
+            Assert.That(handler.Requests[1].RequestUri!.ToString(), Is.EqualTo(beatmap_endpoint + "67890"));
+            Assert.That(handler.Requests[1].Headers.GetValues("Authorization").Single(), Is.EqualTo("Bearer tok-123"));
+            Assert.That(handler.Requests[1].Headers.GetValues("x-api-version").Single(), Is.EqualTo(OfficialBeatmapSearch.API_VERSION));
+        }
+
+        // osu! simply not having the beatmap is an ordinary answer, not a failure to shout about —
+        // the caller words it.
+        [Test]
+        public async Task AnUnknownBeatmapResolvesToNothingRatherThanThrowing()
+        {
+            var handler = new RecordingHandler();
+            handler.Enqueue(HttpStatusCode.OK, token_response);
+            handler.Enqueue(HttpStatusCode.NotFound, "{}");
+
+            Assert.That(await create(handler).ResolveBeatmapSetIdAsync(1), Is.Null);
+        }
+
+        [Test]
+        public async Task AResponseWithoutASetIdResolvesToNothing()
+        {
+            var handler = new RecordingHandler();
+            handler.Enqueue(HttpStatusCode.OK, token_response);
+            handler.Enqueue(HttpStatusCode.OK, "{\"id\":67890}");
+
+            Assert.That(await create(handler).ResolveBeatmapSetIdAsync(67890), Is.Null);
+        }
+
+        // Without credentials the request cannot succeed, so it is never sent — and the message
+        // says the credentials are missing rather than implying the beatmap is.
+        [Test]
+        public void ResolvingWithoutCredentialsSaysSoAndSendsNothing()
+        {
+            var handler = new RecordingHandler();
+
+            Assert.That(async () => await create(handler, id: string.Empty, secret: string.Empty).ResolveBeatmapSetIdAsync(1),
+                Throws.InstanceOf<OfficialSearchException>().With.Message.Contains("client id/secret"));
+
+            Assert.That(handler.Requests, Is.Empty);
+        }
+
+        // Same one-shot retry the search path gets: a token can be revoked between minting and use.
+        [Test]
+        public async Task ARevokedTokenIsRemintedOnceForTheBeatmapLookup()
+        {
+            var handler = new RecordingHandler();
+            handler.Enqueue(HttpStatusCode.OK, token_response);
+            handler.Enqueue(HttpStatusCode.Unauthorized, "{}");
+            handler.Enqueue(HttpStatusCode.OK, token_response);
+            handler.Enqueue(HttpStatusCode.OK, "{\"beatmapset_id\":999}");
+
+            Assert.That(await create(handler).ResolveBeatmapSetIdAsync(5), Is.EqualTo(999));
+            Assert.That(handler.Requests.Count, Is.EqualTo(4), "token, rejected lookup, fresh token, lookup");
+        }
+
+        [Test]
+        public void ACredentialRejectionAfterTheRetryIsReported()
+        {
+            var handler = new RecordingHandler();
+            handler.Enqueue(HttpStatusCode.OK, token_response);
+            handler.Enqueue(HttpStatusCode.Unauthorized, "{}");
+            handler.Enqueue(HttpStatusCode.OK, token_response);
+            handler.Enqueue(HttpStatusCode.Unauthorized, "{}");
+
+            Assert.That(async () => await create(handler).ResolveBeatmapSetIdAsync(5),
+                Throws.InstanceOf<OfficialSearchException>().With.Message.Contains("rejected the credentials"));
+        }
+
+        [Test]
+        public void ARateLimitedBeatmapLookupSaysToTryAgain()
+        {
+            var handler = new RecordingHandler();
+            handler.Enqueue(HttpStatusCode.OK, token_response);
+            handler.Enqueue(HttpStatusCode.TooManyRequests, "{}");
+
+            Assert.That(async () => await create(handler).ResolveBeatmapSetIdAsync(5),
+                Throws.InstanceOf<OfficialSearchException>().With.Message.Contains("rate limit"));
+        }
 
         // ---- Token ---------------------------------------------------------------------------
 

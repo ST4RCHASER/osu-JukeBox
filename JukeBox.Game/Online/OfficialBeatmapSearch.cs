@@ -39,6 +39,14 @@ namespace JukeBox.Game.Online
         public const string SEARCH_ENDPOINT = "https://osu.ppy.sh/api/v2/beatmapsets/search";
 
         /// <summary>
+        /// Looks up ONE difficulty by its beatmap id, which is the only way in this app to learn
+        /// which set a difficulty belongs to: no mirror offers a beatmap-id endpoint (see
+        /// <see cref="BeatmapLinkKind.Beatmap"/>), so a <c>/b/</c> link or a bare id that is not a
+        /// set can only be resolved here. The id is appended to this base.
+        /// </summary>
+        public const string BEATMAP_ENDPOINT = "https://osu.ppy.sh/api/v2/beatmaps/";
+
+        /// <summary>
         /// Pinned rather than derived from today's date (which is what lazer does for local builds):
         /// osu-web's <c>x-api-version</c> selects a response shape, so a moving value would let an
         /// upstream shape change reach us unannounced. Bump deliberately, with the parsing checked.
@@ -61,6 +69,7 @@ namespace JukeBox.Game.Online
         private readonly IBindable<string> clientSecret;
         private readonly string tokenEndpoint;
         private readonly string searchEndpoint;
+        private readonly string beatmapEndpoint;
 
         // Guards the cached token against a herd of concurrent searches each minting their own.
         private readonly SemaphoreSlim tokenLock = new SemaphoreSlim(1, 1);
@@ -74,13 +83,15 @@ namespace JukeBox.Game.Online
         private string cachedTokenCredentials = string.Empty;
 
         public OfficialBeatmapSearch(HttpClient http, IBindable<string> clientId, IBindable<string> clientSecret,
-                                     string tokenEndpoint = TOKEN_ENDPOINT, string searchEndpoint = SEARCH_ENDPOINT)
+                                     string tokenEndpoint = TOKEN_ENDPOINT, string searchEndpoint = SEARCH_ENDPOINT,
+                                     string beatmapEndpoint = BEATMAP_ENDPOINT)
         {
             this.http = http;
             this.clientId = clientId;
             this.clientSecret = clientSecret;
             this.tokenEndpoint = tokenEndpoint;
             this.searchEndpoint = searchEndpoint;
+            this.beatmapEndpoint = beatmapEndpoint;
         }
 
         /// <summary>Whether both credentials are present — searching without them can only fail.</summary>
@@ -118,6 +129,90 @@ namespace JukeBox.Game.Online
             }
 
             return await readResultAsync(response, ct).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// The beatmapset a single difficulty belongs to, or null when osu! does not know that
+        /// beatmap. This is the ONLY route from a beatmap id to its set anywhere in the app — the
+        /// mirrors expose a set filter and nothing else — so a <c>/b/</c> link or a bare id that
+        /// turned out not to be a set is resolvable only when the user has configured credentials.
+        ///
+        /// <para>
+        /// Throws <see cref="OfficialSearchException"/> with a user-facing message on the same
+        /// foreseeable failures <see cref="SearchAsync"/> does, and for the same reason: the caller
+        /// shows it. "No credentials" is one of those, deliberately — a user whose beatmap link did
+        /// not resolve needs to be told the app cannot look one up rather than that their map does
+        /// not exist.
+        /// </para>
+        /// </summary>
+        public async Task<int?> ResolveBeatmapSetIdAsync(int beatmapId, CancellationToken ct = default)
+        {
+            if (!HasCredentials)
+                throw new OfficialSearchException("osu! API client id/secret not set (Settings → Online)");
+
+            string token = await getTokenAsync(ct).ConfigureAwait(false);
+
+            using var response = await sendBeatmapAsync(beatmapId, token, ct).ConfigureAwait(false);
+
+            // Same one-shot retry as the search path: a token can be revoked or expire early
+            // between minting and use.
+            if (response.StatusCode == HttpStatusCode.Unauthorized)
+            {
+                await invalidateTokenAsync(ct).ConfigureAwait(false);
+                string retryToken = await getTokenAsync(ct).ConfigureAwait(false);
+
+                using var retry = await sendBeatmapAsync(beatmapId, retryToken, ct).ConfigureAwait(false);
+
+                if (retry.StatusCode == HttpStatusCode.Unauthorized)
+                    throw new OfficialSearchException("osu! API rejected the credentials (check the client id/secret)");
+
+                return await readBeatmapSetIdAsync(retry, ct).ConfigureAwait(false);
+            }
+
+            return await readBeatmapSetIdAsync(response, ct).ConfigureAwait(false);
+        }
+
+        private async Task<HttpResponseMessage> sendBeatmapAsync(int beatmapId, string token, CancellationToken ct)
+        {
+            using var message = new HttpRequestMessage(HttpMethod.Get, beatmapEndpoint + beatmapId.ToString(CultureInfo.InvariantCulture));
+            message.Headers.TryAddWithoutValidation("Authorization", $"Bearer {token}");
+            message.Headers.TryAddWithoutValidation("Accept", "application/json");
+            message.Headers.TryAddWithoutValidation("x-api-version", API_VERSION);
+
+            return await http.SendAsync(message, ct).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Pulls <c>beatmapset_id</c> out of a single-beatmap response. A 404 is not an error worth
+        /// throwing over — "osu! has no such beatmap" is an ordinary answer, and the caller words it
+        /// for the user.
+        /// </summary>
+        private static async Task<int?> readBeatmapSetIdAsync(HttpResponseMessage response, CancellationToken ct)
+        {
+            if (response.StatusCode == HttpStatusCode.NotFound)
+                return null;
+
+            if (response.StatusCode == HttpStatusCode.TooManyRequests)
+                throw new OfficialSearchException("osu! API rate limit reached — try again in a moment");
+
+            if (!response.IsSuccessStatusCode)
+                throw new OfficialSearchException($"osu! API beatmap lookup failed ({(int)response.StatusCode})");
+
+            string json = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+
+            try
+            {
+                using var document = JsonDocument.Parse(json);
+
+                if (document.RootElement.TryGetProperty("beatmapset_id", out var element) && element.TryGetInt32(out int setId) && setId > 0)
+                    return setId;
+            }
+            catch (JsonException e)
+            {
+                throw new OfficialSearchException($"osu! API returned something unreadable ({e.Message})");
+            }
+
+            return null;
         }
 
         private async Task<HttpResponseMessage> sendSearchAsync(SearchRequest request, string token, CancellationToken ct)

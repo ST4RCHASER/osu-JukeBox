@@ -4,6 +4,9 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
+using System.Net.Http;
+using System.Net;
+using System.Globalization;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -13,6 +16,7 @@ using JukeBox.Game.Online;
 using JukeBox.Game.Playback;
 using NUnit.Framework;
 using osu.Framework.Allocation;
+using osu.Framework.Bindables;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Testing;
@@ -34,6 +38,7 @@ namespace JukeBox.Game.Tests.Visual
         private Jukebox jukebox = null!;
         private GatedMirror mirror = null!;
         private DroppedFileImporter files = null!;
+        private OfficialStub officialStub = null!;
         private LaunchArgumentImporter arguments = null!;
 
         protected override IReadOnlyDependencyContainer CreateChildDependencies(IReadOnlyDependencyContainer parent)
@@ -55,7 +60,13 @@ namespace JukeBox.Game.Tests.Visual
             // cache and jukebox, so every import would land in a queue no assertion here can see.
             files = new DroppedFileImporter();
 
+            // The runner caches an OfficialBeatmapSearch with no credentials, which is right for
+            // most tests but leaves the credentialed path untestable. Override it with one whose
+            // credentials and responses this fixture controls.
+            officialStub = new OfficialStub();
+
             var dependencies = new DependencyContainer(base.CreateChildDependencies(parent));
+            dependencies.CacheAs(officialStub.Search);
             dependencies.CacheAs(files);
             dependencies.CacheAs(queue);
             dependencies.CacheAs(cache);
@@ -87,6 +98,7 @@ namespace JukeBox.Game.Tests.Visual
                 jukebox.NowPlaying.Value = null;
                 queue.Items.Clear();
                 mirror.Reset();
+                officialStub.Reset();
 
                 // Occupy the playback slot with a stand-in rather than actually playing something.
                 // The jukebox plays the first thing handed to an IDLE queue (EnqueueAndMaybePlayAsync
@@ -209,18 +221,21 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("nothing queued", () => queuedIds.Count == 0);
         }
 
-        // A difficulty link names a beatmap, and no mirror can turn one into its set. Saying so is
-        // the whole behaviour — firing a lookup that can only come back empty is not.
+        // Credentialed, but osu! has no such beatmap. Distinct from the no-credentials case: the
+        // lookup really ran and really came back empty, so the answer is about the beatmap, not
+        // about configuration.
         [Test]
-        public void ADifficultyLinkSaysWhatToPasteInsteadWithoutQueryingTheMirror()
+        public void ADifficultyLinkOsuDoesNotKnowIsReportedAsSuch()
         {
             Task batch = null!;
 
+            AddStep("credentials, but osu! knows nothing", () => officialStub.SetCredentials(true));
             AddStep("hand over a /b/ link", () => batch = arguments.HandleAsync(new[] { "https://osu.ppy.sh/b/67890" }));
 
             AddUntilStep("batch finished", () => batch.IsCompleted);
-            AddUntilStep("explained", () => lastMessage.Contains("one difficulty") && lastMessage.Contains("beatmapset link"));
-            AddAssert("the mirror was never asked", () => mirror.Searches == 0);
+            AddUntilStep("reported as an unknown beatmap", () => messages.Any(m => m.Contains("osu! has no beatmap 67890")));
+            AddAssert("it did ask osu!", () => officialStub.Requested.SequenceEqual(new[] { 67890 }));
+            AddAssert("and never asked the mirror for a set", () => mirror.Searches == 0);
         }
 
         // A set link and a bare id are the same instruction written two ways.
@@ -261,6 +276,84 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("nothing reported", () => messages.Count == 0);
         }
 
+        // ---- beatmap id -> set (osu! API) -----------------------------------------------------
+
+        // Without credentials the app CANNOT resolve a difficulty link — no mirror offers a
+        // beatmap-id endpoint. The message must say that, not imply the map does not exist.
+        [Test]
+        public void ADifficultyLinkWithoutCredentialsSaysCredentialsAreWhatIsMissing()
+        {
+            Task batch = null!;
+
+            AddStep("no credentials", () => officialStub.SetCredentials(false));
+            AddStep("hand over a /b/ link", () => batch = arguments.HandleAsync(new[] { "https://osu.ppy.sh/b/67890" }));
+
+            AddUntilStep("batch finished", () => batch.IsCompleted);
+            AddUntilStep("credentials named as the gap", () => messages.Any(m => m.Contains("osu! API credentials")));
+            AddAssert("the mirror was never asked", () => mirror.Searches == 0);
+            AddAssert("nothing queued", () => queuedIds.Count == 0);
+        }
+
+        // With credentials it resolves the difficulty to its set and queues that.
+        [Test]
+        public void ADifficultyLinkResolvesThroughTheOfficialApiAndQueuesItsSet()
+        {
+            Task batch = null!;
+
+            AddStep("credentials, and osu! knows the beatmap", () =>
+            {
+                officialStub.SetCredentials(true);
+                officialStub.Resolve(67890, 100);
+                mirror.Publish(new BeatmapSetInfo { Id = 100, Title = "From A Difficulty Link" }, makeOsz(100, "FromDiff"));
+            });
+
+            AddStep("hand over a /b/ link", () => batch = arguments.HandleAsync(new[] { "https://osu.ppy.sh/b/67890" }));
+
+            AddUntilStep("the set it belongs to is queued", () => batch.IsCompleted && queuedIds.SequenceEqual(new[] { 100 }));
+            AddAssert("looked up the beatmap that was named", () => officialStub.Requested.SequenceEqual(new[] { 67890 }));
+        }
+
+        // A bare number is read as a SET id first, because that is what it usually is. Only when
+        // that misses is it retried as a beatmap id — the two are indistinguishable as text.
+        [Test]
+        public void ABareIdThatIsNotASetIsRetriedAsABeatmapId()
+        {
+            Task batch = null!;
+
+            AddStep("mirror has no such set, but osu! knows the beatmap", () =>
+            {
+                officialStub.SetCredentials(true);
+                officialStub.Resolve(67890, 100);
+                mirror.SetSearchResults(new List<BeatmapSetInfo>());
+            });
+
+            AddStep("hand over the bare id", () => batch = arguments.HandleAsync(new[] { "67890" }));
+
+            AddUntilStep("batch finished", () => batch.IsCompleted);
+            AddAssert("it was tried as a set first", () => mirror.Searches > 0);
+            AddAssert("then as a beatmap", () => officialStub.Requested.SequenceEqual(new[] { 67890 }));
+        }
+
+        // ...and a bare id that is neither still reports the SET miss, which is the likelier
+        // explanation, rather than a confusing note about credentials.
+        [Test]
+        public void ABareIdThatIsNeitherReportsTheSetMiss()
+        {
+            Task batch = null!;
+
+            AddStep("nothing knows it", () =>
+            {
+                officialStub.SetCredentials(false);
+                mirror.SetSearchResults(new List<BeatmapSetInfo>());
+            });
+
+            AddStep("hand over the bare id", () => batch = arguments.HandleAsync(new[] { "424242" }));
+
+            AddUntilStep("batch finished", () => batch.IsCompleted);
+            AddUntilStep("reported as a missing set", () => messages.Any(m => m.Contains("No beatmapset 424242")));
+            AddAssert("and not as a credentials problem", () => messages.All(m => !m.Contains("credentials")));
+        }
+
         /// <summary>An .osz carrying one difficulty, declaring <paramref name="setId"/>.</summary>
         private string makeOsz(int setId, string title)
         {
@@ -277,6 +370,79 @@ namespace JukeBox.Game.Tests.Visual
             string osz = Path.Combine(tmp, $"{title}-{setId}-{Path.GetRandomFileName()}.osz");
             ZipFile.CreateFromDirectory(build, osz);
             return osz;
+        }
+
+        /// <summary>
+        /// A real <see cref="OfficialBeatmapSearch"/> over a canned HTTP handler, so the fixture
+        /// controls both whether credentials exist and what osu! answers — without ever reaching
+        /// the network or needing anyone's actual OAuth application.
+        /// </summary>
+        private class OfficialStub
+        {
+            private readonly Bindable<string> id = new Bindable<string>(string.Empty);
+            private readonly Bindable<string> secret = new Bindable<string>(string.Empty);
+            private readonly Handler handler = new Handler();
+
+            public OfficialStub()
+            {
+                Search = new OfficialBeatmapSearch(new HttpClient(handler), id, secret,
+                    "https://stub.invalid/oauth/token", "https://stub.invalid/search", "https://stub.invalid/beatmaps/");
+            }
+
+            public OfficialBeatmapSearch Search { get; }
+
+            /// <summary>Beatmap ids this stub was actually asked about.</summary>
+            public List<int> Requested => handler.Requested;
+
+            public void Reset()
+            {
+                SetCredentials(false);
+                handler.Reset();
+            }
+
+            public void SetCredentials(bool present)
+            {
+                id.Value = present ? "client" : string.Empty;
+                secret.Value = present ? "secret" : string.Empty;
+            }
+
+            public void Resolve(int beatmapId, int setId) => handler.Sets[beatmapId] = setId;
+
+            private class Handler : HttpMessageHandler
+            {
+                public readonly Dictionary<int, int> Sets = new Dictionary<int, int>();
+                public readonly List<int> Requested = new List<int>();
+
+                public void Reset()
+                {
+                    Sets.Clear();
+                    Requested.Clear();
+                }
+
+                protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+                {
+                    string url = request.RequestUri!.ToString();
+
+                    if (url.Contains("/oauth/token"))
+                    {
+                        return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                        {
+                            Content = new StringContent("{\"access_token\":\"t\",\"expires_in\":86400,\"token_type\":\"Bearer\"}"),
+                        });
+                    }
+
+                    int beatmapId = int.Parse(url[(url.LastIndexOf('/') + 1)..], CultureInfo.InvariantCulture);
+                    Requested.Add(beatmapId);
+
+                    if (!Sets.TryGetValue(beatmapId, out int setId))
+                        return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound) { Content = new StringContent("{}") });
+
+                    return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new StringContent($"{{\"id\":{beatmapId},\"beatmapset_id\":{setId}}}"),
+                    });
+                }
+            }
         }
 
         private class EmptyMirror : IBeatmapMirror

@@ -10,6 +10,7 @@ using System.Threading.Tasks;
 using JukeBox.Game.Beatmaps;
 using JukeBox.Game.Online;
 using JukeBox.Game.Playback;
+using JukeBox.Game.Replays;
 using osu.Framework.Allocation;
 using osu.Framework.Bindables;
 using osu.Framework.Graphics;
@@ -54,6 +55,15 @@ public partial class LaunchArgumentImporter : Component
 
     [Resolved]
     private IBeatmapMirror mirror { get; set; } = null!;
+
+    /// <summary>
+    /// osu!'s own API, and the only thing here that can turn a beatmap id into its set. Its
+    /// credentials are the user's own and empty by default, so every path through it checks
+    /// <see cref="OfficialBeatmapSearch.HasCredentials"/> first rather than firing a request that
+    /// can only come back as an authentication failure.
+    /// </summary>
+    [Resolved]
+    private OfficialBeatmapSearch official { get; set; } = null!;
 
     [Resolved]
     private Jukebox jukebox { get; set; } = null!;
@@ -100,11 +110,7 @@ public partial class LaunchArgumentImporter : Component
                 return queueSetAsync(argument);
 
             case LaunchArgumentKind.Beatmap:
-                // No mirror can turn a beatmap id into its set — the only field-restricted option
-                // any of them offers is a SET filter (see BeatmapSetLookup.SET_ID_OPTION). Saying
-                // so is better than a lookup that can only ever come back empty.
-                notify($"{argument.Raw} points to one difficulty — paste the beatmapset link instead", isError: true);
-                return Task.CompletedTask;
+                return queueBeatmapAsync(argument);
 
             case LaunchArgumentKind.LocalFile:
                 return importLocalAsync(argument);
@@ -124,6 +130,12 @@ public partial class LaunchArgumentImporter : Component
 
         if (found == null)
         {
+            // A bare number is READ as a set id, but it may well have been a difficulty id — the
+            // two are indistinguishable as text. Before reporting a miss, try resolving it as a
+            // beatmap; that is the whole reason this second attempt exists.
+            if (await resolveViaOfficialAsync(argument, quietWhenUnavailable: true).ConfigureAwait(false))
+                return;
+
             notify($"No beatmapset {argument.Id} on this mirror", isError: true);
             return;
         }
@@ -136,6 +148,88 @@ public partial class LaunchArgumentImporter : Component
         await onUpdateThread(() => jukebox.EnqueueAndMaybePlayAsync(found, announce: false)).ConfigureAwait(false);
 
         notify($"Added: {(found.DisplayTitle.Length > 0 ? found.DisplayTitle : argument.Id.ToString())}", isError: false);
+    }
+
+    /// <summary>
+    /// A <c>/b/</c> or <c>/beatmaps/</c> link — it already says it names a difficulty, so there is
+    /// no set lookup to try first.
+    /// </summary>
+    private async Task queueBeatmapAsync(LaunchArgument argument)
+    {
+        // Reaching here means the lookup actually ran and osu! has no such beatmap — the
+        // no-credentials case reports itself, because that is a different problem with a
+        // different remedy and the two must not be worded alike.
+        if (!await resolveViaOfficialAsync(argument, quietWhenUnavailable: false).ConfigureAwait(false))
+            notify($"osu! has no beatmap {argument.Id}", isError: true);
+    }
+
+    /// <summary>
+    /// Resolves an id as a BEATMAP through osu!'s own API and queues the set it belongs to.
+    /// Returns whether it got there — including whether it already reported why it could not, so
+    /// the caller does not report a second, contradictory reason.
+    ///
+    /// <para>
+    /// This is the only route from a beatmap id to its set: the mirrors expose a set filter and
+    /// nothing else. It therefore needs the user's own osu! API credentials, which are optional and
+    /// empty by default, so most installs will fall through this. That is the honest ceiling of the
+    /// feature rather than a bug — and when the credentials are the missing piece, the message says
+    /// so instead of implying the beatmap does not exist.
+    /// </para>
+    /// </summary>
+    /// <param name="argument">
+    /// The argument being resolved. Its <see cref="LaunchArgument.Id"/> is read as a BEATMAP id
+    /// here regardless of how it was classified, and its <see cref="LaunchArgument.Raw"/> is what
+    /// any message names, so the user sees back what they typed.
+    /// </param>
+    /// <param name="quietWhenUnavailable">
+    /// True when the caller has its own fallback message to show (a bare id that was read as a set
+    /// first). It keeps a missing-credentials note out of the way of "no beatmapset 12345", which
+    /// is the likelier explanation for a number that resolved as neither.
+    /// </param>
+    private async Task<bool> resolveViaOfficialAsync(LaunchArgument argument, bool quietWhenUnavailable)
+    {
+        if (!official.HasCredentials)
+        {
+            if (!quietWhenUnavailable)
+            {
+                notify($"{argument.Raw} names one difficulty — looking up its beatmapset needs osu! API credentials (Settings → Online)",
+                    isError: true);
+                return true;
+            }
+
+            return false;
+        }
+
+        int? setId;
+
+        try
+        {
+            setId = await official.ResolveBeatmapSetIdAsync(argument.Id).ConfigureAwait(false);
+        }
+        catch (OfficialSearchException e)
+        {
+            // Already worded for a user by the API layer.
+            notify($"Couldn't look up {argument.Raw}: {e.Message}", isError: true);
+            return true;
+        }
+
+        if (setId == null)
+            return false;
+
+        var found = await BeatmapSetLookup.ResolveAsync(mirror, setId.Value).ConfigureAwait(false);
+
+        if (found == null)
+        {
+            notify($"{argument.Raw} belongs to beatmapset {setId.Value}, which this mirror doesn't have", isError: true);
+            return true;
+        }
+
+        // The argument named a difficulty, so open on it — the same preference a deep link gets.
+        await preferDifficultyAsync(found, argument.Id).ConfigureAwait(false);
+        await onUpdateThread(() => jukebox.EnqueueAndMaybePlayAsync(found, announce: false)).ConfigureAwait(false);
+
+        notify($"Added: {(found.DisplayTitle.Length > 0 ? found.DisplayTitle : setId.Value.ToString())}", isError: false);
+        return true;
     }
 
     /// <summary>
@@ -234,7 +328,7 @@ public partial class LaunchArgumentImporter : Component
         await using (var stream = File.Create(scratch))
             await response.Content.CopyToAsync(stream).ConfigureAwait(false);
 
-        string extension = extensionFrom(response, argument.Path) ?? sniffExtension(scratch);
+        string extension = extensionFrom(response, argument.Path) ?? SniffExtension(scratch);
 
         if (extension.Length == 0)
         {
@@ -262,10 +356,21 @@ public partial class LaunchArgumentImporter : Component
     }
 
     /// <summary>
-    /// Last resort for a URL that names no file: .osz and .osk are both zips and are told apart by
-    /// what is inside — a skin declares itself with skin.ini, a beatmap with .osu files.
+    /// Last resort for a URL that names no file — and mirror download links routinely name none.
+    /// Decided by CONTENT, in the order that can be told apart cheaply:
+    ///
+    /// <list type="bullet">
+    /// <item>.osz and .osk are both zips, so they are separated by what is inside: a beatmap
+    /// carries .osu difficulties, a skin declares itself with skin.ini.</item>
+    /// <item>.osr is not a zip, and is confirmed by actually parsing its header with the same
+    /// reader the drag-and-drop path uses — a signature check would only guess at the bytes that
+    /// reader already knows how to read.</item>
+    /// </list>
+    ///
+    /// <para>Internal so it can be tested on files directly, without standing up an HTTP stub to
+    /// deliver them.</para>
     /// </summary>
-    private static string sniffExtension(string path)
+    internal static string SniffExtension(string path)
     {
         try
         {
@@ -276,13 +381,24 @@ public partial class LaunchArgumentImporter : Component
 
             if (archive.Entries.Any(e => Path.GetFileName(e.FullName).Equals("skin.ini", StringComparison.OrdinalIgnoreCase)))
                 return ".osk";
+
+            // A zip that is neither: nothing here can import it.
+            return string.Empty;
         }
         catch (Exception)
         {
-            // Not a zip at all — nothing to tell from it.
+            // Not a zip. Fall through to the replay check.
         }
 
-        return string.Empty;
+        try
+        {
+            OsrReader.ReadHeader(path);
+            return ".osr";
+        }
+        catch (Exception)
+        {
+            return string.Empty;
+        }
     }
 
     private Task onUpdateThread(Func<Task> action)
