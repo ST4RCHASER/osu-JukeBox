@@ -56,12 +56,17 @@ namespace JukeBox.Game.Tests.Visual
             Directory.CreateDirectory(dir);
         }
 
+        // The jukebox and the mod selection are the runner's, shared with every other fixture, and a
+        // replay left in the now-playing slot is what makes the selection the source of a replay
+        // layer's mods (see LazerChartLayer.replayMods). Cleared on the way IN as well as out, so
+        // this fixture never depends on which one ran before it.
+        [SetUpSteps]
+        public void SetUpSteps() => clearReplay();
+
         [TearDownSteps]
-        public void TearDownSteps()
-        {
-            // Shared services: leave no replay (and therefore no replay-driven selection) behind.
-            AddStep("no replay playing", () => jukebox.NowPlaying.Value = null);
-        }
+        public void TearDownSteps() => clearReplay();
+
+        private void clearReplay() => AddStep("no replay playing", () => jukebox.NowPlaying.Value = null);
 
         [Test]
         public void OsuLayerRendersGameplay() => runForMode(0, typeof(OsuRuleset));

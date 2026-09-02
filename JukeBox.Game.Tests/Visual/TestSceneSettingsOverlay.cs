@@ -179,7 +179,7 @@ namespace JukeBox.Game.Tests.Visual
                 // Never added to the tree: only its AvailableFilters bindable is wanted here, and
                 // loading the engine would drag in a mirror this scene doesn't cache.
                 engine = new BeatmapSearchEngine();
-                Child = overlay = new SettingsOverlay(searchEngine: engine);
+                overlayHost.Child = overlay = new SettingsOverlay(searchEngine: engine);
             });
 
             AddStep("show overlay", () => overlay.Show());

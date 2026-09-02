@@ -103,6 +103,14 @@ namespace JukeBox.Game.Tests.Visual
             AddUntilStep("panel loaded", () => panel.IsLoaded);
         }
 
+        [TearDownSteps]
+        public void TearDownSteps()
+        {
+            // The jukebox is the runner's, shared with every other fixture, and a replay left in
+            // the now-playing slot changes how a chart layer built elsewhere resolves its mods.
+            AddStep("no replay playing", () => jukebox.NowPlaying.Value = null);
+        }
+
         /// <summary>
         /// Every ruleset's element group is listed at all times, whatever is playing (user request):
         /// the section is a complete inventory of what can be hidden, not a view of the current
