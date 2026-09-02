@@ -177,13 +177,21 @@ internal sealed class DiscordPresenceClient : IPresenceClient
     /// <summary>
     /// The only place our model meets the wire format.
     /// <see cref="PresenceActivity"/> becomes Discord's activity verb: Listening renders as
-    /// "Listening to &lt;app&gt;" (the Spotify shape), both watching variants as "Watching &lt;app&gt;".
+    /// "Listening to &lt;app&gt;" (the Spotify shape) and Watching as "Watching &lt;app&gt;".
     /// Timestamps are sent as a start/end PAIR or not at all — Discord draws its progress bar only
     /// when it has both, and a lone start would read as a stopwatch counting up forever.
     /// </summary>
     internal static RichPresence BuildRichPresence(PresenceState state) => new RichPresence
     {
-        Type = state.Activity == PresenceActivity.Listening ? ActivityType.Listening : ActivityType.Watching,
+        Type = state.Activity switch
+        {
+            PresenceActivity.Listening => ActivityType.Listening,
+            PresenceActivity.Watching => ActivityType.Watching,
+            // Idle keeps the plain app presence — "Playing osu!JukeBox" — which is the shape lazer
+            // shows for a user in no particular activity: it never sets a type at all, so it takes
+            // Discord's default. "Listening to" would be a claim about music that isn't playing.
+            _ => ActivityType.Playing,
+        },
         Details = ClampLength(state.Details),
         State = ClampLength(state.State),
         Timestamps = state.StartUtc is { } start && state.EndUtc is { } end

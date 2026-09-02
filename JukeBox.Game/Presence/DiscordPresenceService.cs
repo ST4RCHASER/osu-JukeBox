@@ -74,6 +74,8 @@ public partial class DiscordPresenceService : Component
 
     private readonly Bindable<bool> enabled = new Bindable<bool>(true);
     private readonly Bindable<bool> renderChart = new Bindable<bool>();
+    private readonly Bindable<bool> showStoryboard = new Bindable<bool>(true);
+    private readonly Bindable<bool> showVideo = new Bindable<bool>(true);
 
     private PresenceState? published;
 
@@ -92,6 +94,12 @@ public partial class DiscordPresenceService : Component
     /// isn't showing.
     /// </summary>
     private bool hasStoryboard;
+
+    /// <summary>
+    /// Whether the current set carries a video whose file is actually present — see
+    /// <see cref="rescanStoryboard"/> for why that "actually present" matters.
+    /// </summary>
+    private bool hasVideo;
 
     /// <summary>
     /// Bumped on every set change so a storyboard scan that finishes after the song already moved on
@@ -141,6 +149,8 @@ public partial class DiscordPresenceService : Component
     {
         config.BindWith(JukeBoxSetting.DiscordRichPresence, enabled);
         config.BindWith(JukeBoxSetting.RenderChart, renderChart);
+        config.BindWith(JukeBoxSetting.ShowStoryboard, showStoryboard);
+        config.BindWith(JukeBoxSetting.ShowVideo, showVideo);
     }
 
     protected override void LoadComplete()
@@ -245,9 +255,18 @@ public partial class DiscordPresenceService : Component
     internal virtual PresenceInputs? ReadInputs()
     {
         var set = jukebox.NowPlaying.Value;
+        var now = DateTime.UtcNow;
+        var notPlayingFor = TrackIdleTime(playback.IsPlaying, now);
 
+        // An empty queue is still worth a presence once it has been empty long enough — that is the
+        // "queue has run dry" half of idle, and Build turns it into the idle state from the timer
+        // alone. Before the threshold there is genuinely nothing to say.
         if (set == null)
-            return null;
+        {
+            return notPlayingFor.TotalMilliseconds >= IDLE_AFTER_MS
+                ? new PresenceInputs(string.Empty, string.Empty, null, false, false, false, 0, 0, 1, now, NotPlayingFor: notPlayingFor)
+                : null;
+        }
 
         return new PresenceInputs(
             Title: set.DisplayTitle,
@@ -262,9 +281,39 @@ public partial class DiscordPresenceService : Component
             // rate mods, so the timestamps scale correctly without this having to know about any
             // of them individually.
             Rate: playback.PlaybackClock.Rate,
-            NowUtc: DateTime.UtcNow,
-            OnlineSetId: set.Id);
+            NowUtc: now,
+            OnlineSetId: set.Id,
+            ShowStoryboard: showStoryboard.Value,
+            HasVideo: hasVideo,
+            ShowVideo: showVideo.Value,
+            NotPlayingFor: notPlayingFor);
     }
+
+    /// <summary>
+    /// How long playback has been stopped, measured off the wall clock rather than the track's own —
+    /// that one does not advance while paused, and does not exist at all with an empty queue, which
+    /// are the two cases this has to measure.
+    ///
+    /// <para>
+    /// Playback RESETS the timer rather than winding it down, which is what makes resuming restore
+    /// the full presence in a single step instead of easing back out of idle.
+    /// </para>
+    /// </summary>
+    /// <param name="isPlaying">Whether a track is currently running.</param>
+    /// <param name="now">The wall-clock instant to measure against.</param>
+    internal TimeSpan TrackIdleTime(bool isPlaying, DateTime now)
+    {
+        if (isPlaying)
+        {
+            notPlayingSince = null;
+            return TimeSpan.Zero;
+        }
+
+        notPlayingSince ??= now;
+        return now - notPlayingSince.Value;
+    }
+
+    private DateTime? notPlayingSince;
 
     private string? currentDifficultyName()
     {
@@ -280,35 +329,47 @@ public partial class DiscordPresenceService : Component
     }
 
     /// <summary>
-    /// What Discord should be showing, given the state of the app. The precedence is the whole point
-    /// of this method:
-    /// <list type="number">
-    /// <item>the rendered chart is on screen → <see cref="PresenceActivity.WatchingChart"/>;</item>
-    /// <item>otherwise the map draws a storyboard → <see cref="PresenceActivity.WatchingStoryboard"/>;</item>
-    /// <item>otherwise it is just music → <see cref="PresenceActivity.Listening"/>.</item>
-    /// </list>
-    /// Chart wins over storyboard because the chart is drawn ON TOP of the storyboard: when both are
-    /// present the chart is what a viewer would actually be looking at.
+    /// What Discord should be showing, given the state of the app.
+    ///
+    /// <para>
+    /// The TEXT is the same in every case — title on the details line, artist and difficulty on the
+    /// state line, the shape Spotify uses. Only the activity verb changes, so the header carries all
+    /// of the "what is happening" and the body stays purely about the music.
+    /// </para>
+    ///
+    /// <para>
+    /// <see cref="PresenceActivity.Watching"/> when something is actually on screen to watch: the
+    /// rendered chart (every map has one, so the toggle alone settles it), or the map's storyboard,
+    /// or its video — each of the latter two only when the map really carries that thing AND the
+    /// setting that draws it is on. Otherwise <see cref="PresenceActivity.Listening"/>. There is no
+    /// precedence to get right any more: all three are the same answer.
+    /// </para>
+    ///
+    /// <para>
+    /// <see cref="PresenceActivity.Idle"/> overrides everything once nothing has been playing for
+    /// <see cref="IDLE_AFTER_MS"/> — see there.
+    /// </para>
     /// </summary>
     /// <returns>The presence to show, or null when there is nothing worth showing.</returns>
     internal static PresenceState? Build(PresenceInputs inputs)
     {
+        if (inputs.NotPlayingFor.TotalMilliseconds >= IDLE_AFTER_MS)
+            return IdleState;
+
         string title = inputs.Title.Trim();
         string artist = inputs.Artist.Trim();
 
         if (title.Length == 0 && artist.Length == 0)
             return null;
 
-        var activity = inputs.RenderChart ? PresenceActivity.WatchingChart
-            : inputs.HasStoryboard ? PresenceActivity.WatchingStoryboard
-            : PresenceActivity.Listening;
+        // "On screen worth watching": the chart, the storyboard, or the video — each gated on the
+        // map actually having it and on the setting that draws it. A storyboard toggle left on for a
+        // map with no storyboard is still just listening, which is the case the old rule got wrong.
+        bool watching = inputs.RenderChart
+                        || (inputs.ShowStoryboard && inputs.HasStoryboard)
+                        || (inputs.ShowVideo && inputs.HasVideo);
 
-        string prefix = activity switch
-        {
-            PresenceActivity.WatchingChart => "chart · ",
-            PresenceActivity.WatchingStoryboard => "storyboard · ",
-            _ => string.Empty,
-        };
+        var activity = watching ? PresenceActivity.Watching : PresenceActivity.Listening;
 
         string state = artist;
 
@@ -335,8 +396,30 @@ public partial class DiscordPresenceService : Component
             end = inputs.NowUtc + TimeSpan.FromMilliseconds((inputs.LengthMs - position) / inputs.Rate);
         }
 
-        return new PresenceState(activity, prefix + title, state, start, end, imageUrl, imageText);
+        return new PresenceState(activity, title, state, start, end, imageUrl, imageText);
     }
+
+    /// <summary>
+    /// How long nothing may be playing before the presence stops describing a track. Covers both
+    /// halves of "not playing": a track left paused, and a queue that has run dry.
+    ///
+    /// <para>
+    /// Five minutes, chosen rather than inherited — lazer has no equivalent, because its idle state
+    /// is driven by where the user IS in the game rather than by a timer. Short enough that a profile
+    /// stops advertising a song nobody is listening to, long enough to sit out a pause for a
+    /// conversation without the presence flickering.
+    /// </para>
+    /// </summary>
+    internal const double IDLE_AFTER_MS = 5 * 60 * 1000;
+
+    /// <summary>
+    /// The idle presence, matching what lazer puts up when the user is in no particular activity:
+    /// the word on the STATE line and an empty details line (osu.Desktop's DiscordRichPresence does
+    /// exactly <c>presence.State = "Idle"; presence.Details = string.Empty;</c>). No track, no cover,
+    /// and no timestamps — an idle progress bar would be counting towards nothing.
+    /// </summary>
+    internal static readonly PresenceState IdleState =
+        new PresenceState(PresenceActivity.Idle, string.Empty, "Idle", null, null);
 
     /// <summary>
     /// osu!'s published cover art for a beatmap set — the map's own background, which is what the
@@ -405,6 +488,14 @@ public partial class DiscordPresenceService : Component
 
         hasStoryboard = false;
 
+        // Straight off the cached set rather than out of the decode, and deliberately: the scanner
+        // records VideoFile only when the Video event's file is actually PRESENT, whereas the
+        // decoded storyboard reports the event whether or not the file came down. Those differ all
+        // the time — a no-video download (the NoVideoDownloads setting, or a mirror that strips it)
+        // leaves the event in the .osu with nothing to play. Trusting the decode would put
+        // "Watching" on a map showing no video at all.
+        hasVideo = set?.VideoFile != null;
+
         if (set == null || (osuFile == null && set.OsbFile == null))
             return;
 
@@ -455,7 +546,9 @@ public partial class DiscordPresenceService : Component
         {
             var storyboard = LazerStoryboardLayer.DecodeStoryboard(osuFile, osbFile);
 
-            return storyboard.HasDrawable || storyboard.PrimaryVideo != null;
+            // Drawables only. The video is a separate question with a separate setting, and is
+            // answered from the cached set's VideoFile instead — see rescanStoryboard.
+            return storyboard.HasDrawable;
         }
         catch (Exception e)
         {
@@ -483,6 +576,11 @@ public partial class DiscordPresenceService : Component
 /// <param name="Artist">Romanized artist, as shown in the app.</param>
 /// <param name="Difficulty">Name of the difficulty on screen, or null when there isn't one.</param>
 /// <param name="HasStoryboard">Whether the difficulty on screen actually draws a storyboard.</param>
+/// <param name="ShowStoryboard">Whether the storyboard setting is on. Paired with
+/// <paramref name="HasStoryboard"/>: a toggle on for a map without one shows nothing.</param>
+/// <param name="HasVideo">Whether the set carries a video whose file is actually present.</param>
+/// <param name="ShowVideo">Whether the video setting is on.</param>
+/// <param name="NotPlayingFor">How long playback has been stopped or paused; zero while playing.</param>
 /// <param name="RenderChart">Whether the chart renderer is switched on.</param>
 /// <param name="IsPlaying">False while paused or stopped.</param>
 /// <param name="PositionMs">Current position within the track.</param>
@@ -502,4 +600,8 @@ public readonly record struct PresenceInputs(
     double LengthMs,
     double Rate,
     DateTime NowUtc,
-    int OnlineSetId = 0);
+    int OnlineSetId = 0,
+    bool ShowStoryboard = true,
+    bool HasVideo = false,
+    bool ShowVideo = true,
+    TimeSpan NotPlayingFor = default);

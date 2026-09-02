@@ -5,19 +5,32 @@ using System;
 namespace JukeBox.Game.Presence;
 
 /// <summary>
-/// What the app is doing with the current track, in Discord's own activity vocabulary. Which one
-/// applies is decided by <see cref="DiscordPresenceService.Build"/> — see there for the precedence.
+/// What the app is doing, in Discord's own activity vocabulary. Which one applies is decided by
+/// <see cref="DiscordPresenceService.Build"/>.
 /// </summary>
 public enum PresenceActivity
 {
     /// <summary>Audio only: Discord shows "Listening to osu!JukeBox", Spotify-style.</summary>
     Listening,
 
-    /// <summary>The map's storyboard is on screen: "Watching osu!JukeBox".</summary>
-    WatchingStoryboard,
+    /// <summary>
+    /// Something worth looking at is on screen — the rendered chart, the map's storyboard, or its
+    /// video: "Watching osu!JukeBox".
+    ///
+    /// <para>
+    /// One value, not one per source. The chart and storyboard cases used to be distinct because the
+    /// details line named which it was; now that every case carries the same Spotify-shaped text they
+    /// produce byte-identical presences, so the question of which one "wins" for a map that has both
+    /// stops existing rather than needing an answer.
+    /// </para>
+    /// </summary>
+    Watching,
 
-    /// <summary>The rendered chart is on screen: "Watching osu!JukeBox".</summary>
-    WatchingChart,
+    /// <summary>
+    /// Nothing has been playing for a while: the app with no track on it at all. See
+    /// <see cref="DiscordPresenceService.IDLE_AFTER_MS"/>.
+    /// </summary>
+    Idle,
 }
 
 /// <summary>

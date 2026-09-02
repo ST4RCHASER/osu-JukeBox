@@ -184,8 +184,9 @@ namespace JukeBox.Game.Tests.Visual
 
             AddStep("render the chart", () => config.SetValue(JukeBoxSetting.RenderChart, true));
 
-            AddUntilStep("watching the chart", () => client.Published?.Activity == PresenceActivity.WatchingChart);
-            AddAssert("and says so", () => client.Published!.Details == "chart · FREEDOM DIVE");
+            AddUntilStep("watching", () => client.Published?.Activity == PresenceActivity.Watching);
+            // Only the header moved — the body is the same Spotify-shaped text it was while listening.
+            AddAssert("track text unchanged", () => client.Published!.Details == "FREEDOM DIVE");
         }
 
         [Test]

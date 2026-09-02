@@ -27,51 +27,249 @@ namespace JukeBox.Game.Tests.Presence
             string title = "FREEDOM DIVE",
             string artist = "xi",
             string? difficulty = null,
-            int onlineSetId = 0)
-            => new PresenceInputs(title, artist, difficulty, hasStoryboard, renderChart, playing, position, length, rate, now, onlineSetId);
+            int onlineSetId = 0,
+            bool showStoryboard = true,
+            bool hasVideo = false,
+            bool showVideo = true,
+            double notPlayingForMs = 0)
+            => new PresenceInputs(title, artist, difficulty, hasStoryboard, renderChart, playing, position, length, rate, now,
+                onlineSetId, showStoryboard, hasVideo, showVideo, TimeSpan.FromMilliseconds(notPlayingForMs));
 
-        // ---- precedence: the activity follows what is actually on screen ----
+        // ---- the activity verb follows what is actually on screen ----
 
+        /// <summary>
+        /// Every map has a chart, so the toggle on its own settles it — there is no "does this map
+        /// have one" question to ask the way there is for a storyboard or a video.
+        /// </summary>
         [Test]
-        public void RenderChartOnIsWatchingTheChart()
+        public void RenderChartOnIsWatching()
         {
-            var state = DiscordPresenceService.Build(inputs(renderChart: true))!;
-
-            Assert.That(state.Activity, Is.EqualTo(PresenceActivity.WatchingChart));
-            Assert.That(state.Details, Is.EqualTo("chart · FREEDOM DIVE"));
+            Assert.That(DiscordPresenceService.Build(inputs(renderChart: true))!.Activity, Is.EqualTo(PresenceActivity.Watching));
         }
 
         [Test]
-        public void StoryboardWithoutTheChartIsWatchingTheStoryboard()
+        public void AStoryboardTheMapHasAndTheSettingDrawsIsWatching()
         {
-            var state = DiscordPresenceService.Build(inputs(hasStoryboard: true))!;
-
-            Assert.That(state.Activity, Is.EqualTo(PresenceActivity.WatchingStoryboard));
-            Assert.That(state.Details, Is.EqualTo("storyboard · FREEDOM DIVE"));
+            Assert.That(DiscordPresenceService.Build(inputs(hasStoryboard: true, showStoryboard: true))!.Activity,
+                Is.EqualTo(PresenceActivity.Watching));
         }
 
         /// <summary>
-        /// The chart is drawn ON TOP of the storyboard, so when a map has both, the chart is what
-        /// someone looking over the user's shoulder would actually see.
+        /// The case the old rule got wrong: the toggle says "draw storyboards", the map has none, so
+        /// nothing is on screen and nothing is being watched.
         /// </summary>
         [Test]
-        public void TheChartWinsWhenTheMapHasBoth()
+        public void TheStoryboardSettingAloneIsNotEnoughWithoutAStoryboard()
         {
-            var state = DiscordPresenceService.Build(inputs(renderChart: true, hasStoryboard: true))!;
+            Assert.That(DiscordPresenceService.Build(inputs(hasStoryboard: false, showStoryboard: true))!.Activity,
+                Is.EqualTo(PresenceActivity.Listening));
+        }
 
-            Assert.That(state.Activity, Is.EqualTo(PresenceActivity.WatchingChart));
-            Assert.That(state.Details, Does.StartWith("chart"));
+        [Test]
+        public void AStoryboardTheSettingIsHidingIsNotWatching()
+        {
+            Assert.That(DiscordPresenceService.Build(inputs(hasStoryboard: true, showStoryboard: false))!.Activity,
+                Is.EqualTo(PresenceActivity.Listening));
+        }
+
+        /// <summary>
+        /// A video filling the screen is every bit as watchable as a storyboard, so it counts the
+        /// same way — present on the map AND switched on.
+        /// </summary>
+        [Test]
+        public void AVideoTheMapHasAndTheSettingDrawsIsWatching()
+        {
+            Assert.That(DiscordPresenceService.Build(inputs(hasVideo: true, showVideo: true))!.Activity,
+                Is.EqualTo(PresenceActivity.Watching));
+        }
+
+        [Test]
+        public void AVideoTheSettingIsHidingIsNotWatching()
+        {
+            Assert.That(DiscordPresenceService.Build(inputs(hasVideo: true, showVideo: false))!.Activity,
+                Is.EqualTo(PresenceActivity.Listening));
+        }
+
+        [Test]
+        public void TheVideoSettingAloneIsNotEnoughWithoutAVideo()
+        {
+            Assert.That(DiscordPresenceService.Build(inputs(hasVideo: false, showVideo: true))!.Activity,
+                Is.EqualTo(PresenceActivity.Listening));
         }
 
         [Test]
         public void PlainAudioIsListening()
         {
-            var state = DiscordPresenceService.Build(inputs())!;
+            Assert.That(DiscordPresenceService.Build(inputs())!.Activity, Is.EqualTo(PresenceActivity.Listening));
+        }
+
+        /// <summary>
+        /// The point of dropping the prefixes: the body of the card is the same Spotify-shaped text
+        /// whatever is on screen, and ONLY the activity verb moves. This is what replaces the old
+        /// chart-versus-storyboard precedence test — with identical text there is no longer a
+        /// question of which one wins.
+        /// </summary>
+        [Test]
+        public void TheTextIsIdenticalAcrossEveryHeader()
+        {
+            var listening = DiscordPresenceService.Build(inputs(difficulty: "Insane"))!;
+            var chart = DiscordPresenceService.Build(inputs(difficulty: "Insane", renderChart: true))!;
+            var storyboard = DiscordPresenceService.Build(inputs(difficulty: "Insane", hasStoryboard: true))!;
+            var video = DiscordPresenceService.Build(inputs(difficulty: "Insane", hasVideo: true))!;
+            var both = DiscordPresenceService.Build(inputs(difficulty: "Insane", renderChart: true, hasStoryboard: true))!;
+
+            foreach (var state in new[] { listening, chart, storyboard, video, both })
+            {
+                Assert.That(state.Details, Is.EqualTo("FREEDOM DIVE"), "details line");
+                Assert.That(state.State, Is.EqualTo("xi · [Insane]"), "state line");
+            }
+
+            Assert.That(listening.Activity, Is.EqualTo(PresenceActivity.Listening));
+            Assert.That(chart.Activity, Is.EqualTo(PresenceActivity.Watching));
+            Assert.That(storyboard.Activity, Is.EqualTo(PresenceActivity.Watching));
+            Assert.That(video.Activity, Is.EqualTo(PresenceActivity.Watching));
+            Assert.That(both.Activity, Is.EqualTo(PresenceActivity.Watching));
+        }
+
+        [Test]
+        public void NoPrefixSurvivesAnywhereInTheText()
+        {
+            foreach (var state in new[]
+                     {
+                         DiscordPresenceService.Build(inputs(renderChart: true))!,
+                         DiscordPresenceService.Build(inputs(hasStoryboard: true))!,
+                         DiscordPresenceService.Build(inputs(hasVideo: true))!,
+                     })
+            {
+                Assert.That(state.Details, Does.Not.Contain("chart"));
+                Assert.That(state.Details, Does.Not.Contain("storyboard"));
+                Assert.That(state.Details, Does.Not.Contain("·"));
+            }
+        }
+
+        // ---- idle ----
+
+        /// <summary>
+        /// Matches lazer exactly, which is not the obvious shape: osu.Desktop's DiscordRichPresence
+        /// puts the word on the STATE line and leaves details EMPTY
+        /// (<c>presence.State = "Idle"; presence.Details = string.Empty;</c>).
+        /// </summary>
+        [Test]
+        public void IdleShowsLazersShapeAndNoTrack()
+        {
+            var state = DiscordPresenceService.Build(inputs(playing: false, notPlayingForMs: DiscordPresenceService.IDLE_AFTER_MS))!;
+
+            Assert.That(state.Activity, Is.EqualTo(PresenceActivity.Idle));
+            Assert.That(state.State, Is.EqualTo("Idle"));
+            Assert.That(state.Details, Is.Empty);
+            Assert.That(state.StartUtc, Is.Null);
+            Assert.That(state.EndUtc, Is.Null);
+            Assert.That(state.ImageUrl, Is.Null, "no cover: idle is not about a track");
+        }
+
+        [Test]
+        public void APauseShorterThanTheThresholdKeepsTheTrackOnScreen()
+        {
+            var state = DiscordPresenceService.Build(inputs(playing: false,
+                notPlayingForMs: DiscordPresenceService.IDLE_AFTER_MS - 1, onlineSetId: 1084287))!;
+
+            Assert.That(state.Activity, Is.Not.EqualTo(PresenceActivity.Idle));
+            Assert.That(state.Details, Is.EqualTo("FREEDOM DIVE"));
+            Assert.That(state.StartUtc, Is.Null, "still no progress bar while paused");
+            Assert.That(state.ImageUrl, Is.Not.Null, "the cover stays up through a short pause");
+        }
+
+        /// <summary>
+        /// An empty queue reaches idle by the same timer, with no track metadata to describe.
+        /// </summary>
+        [Test]
+        public void AnEmptyQueueGoesIdleOnTheSameTimer()
+        {
+            var state = DiscordPresenceService.Build(inputs(title: "", artist: "", playing: false,
+                notPlayingForMs: DiscordPresenceService.IDLE_AFTER_MS))!;
+
+            Assert.That(state.Activity, Is.EqualTo(PresenceActivity.Idle));
+            Assert.That(state.State, Is.EqualTo("Idle"));
+        }
+
+        [Test]
+        public void AnEmptyQueueBelowTheThresholdShowsNothingRatherThanIdle()
+        {
+            Assert.That(DiscordPresenceService.Build(inputs(title: "", artist: "", playing: false,
+                notPlayingForMs: DiscordPresenceService.IDLE_AFTER_MS - 1)), Is.Null);
+        }
+
+        /// <summary>
+        /// Playing again restores the full presence in one step — the timer is reset by playback, not
+        /// wound down, so there is no interval where a resumed track still reads as idle.
+        /// </summary>
+        [Test]
+        public void ResumingRestoresTheTrackImmediately()
+        {
+            var state = DiscordPresenceService.Build(inputs(playing: true, notPlayingForMs: 0, onlineSetId: 1084287))!;
 
             Assert.That(state.Activity, Is.EqualTo(PresenceActivity.Listening));
-            // No prefix: "Listening to osu!JukeBox / FREEDOM DIVE" is the Spotify shape, and a word
-            // in front of the track would only get in the way of it.
             Assert.That(state.Details, Is.EqualTo("FREEDOM DIVE"));
+            Assert.That(state.StartUtc, Is.Not.Null, "and the progress bar is back");
+        }
+
+        [Test]
+        public void GoingIdleAndComingBackAreBothWorthPublishing()
+        {
+            var playing = DiscordPresenceService.Build(inputs())!;
+            var idle = DiscordPresenceService.Build(inputs(playing: false, notPlayingForMs: DiscordPresenceService.IDLE_AFTER_MS))!;
+
+            Assert.That(DiscordPresenceService.NeedsRepublish(playing, idle), Is.True, "going idle");
+            Assert.That(DiscordPresenceService.NeedsRepublish(idle, playing), Is.True, "coming back");
+        }
+
+        // ---- the idle timer itself ----
+
+        [Test]
+        public void TheIdleTimerAccumulatesWhileNothingPlays()
+        {
+            using var service = new DiscordPresenceService(new NullPresenceClient());
+
+            Assert.That(service.TrackIdleTime(false, now), Is.EqualTo(TimeSpan.Zero), "starts at the moment it stops");
+            Assert.That(service.TrackIdleTime(false, now.AddMinutes(3)), Is.EqualTo(TimeSpan.FromMinutes(3)));
+            Assert.That(service.TrackIdleTime(false, now.AddMinutes(9)), Is.EqualTo(TimeSpan.FromMinutes(9)));
+        }
+
+        /// <summary>
+        /// Playing RESETS rather than winds down, which is what makes a resume restore the presence
+        /// in one step: a track that plays for a second after ten idle minutes is not still idle.
+        /// </summary>
+        [Test]
+        public void PlayingResetsTheIdleTimerOutright()
+        {
+            using var service = new DiscordPresenceService(new NullPresenceClient());
+
+            service.TrackIdleTime(false, now);
+            Assert.That(service.TrackIdleTime(false, now.AddMinutes(10)), Is.EqualTo(TimeSpan.FromMinutes(10)));
+
+            Assert.That(service.TrackIdleTime(true, now.AddMinutes(10)), Is.EqualTo(TimeSpan.Zero));
+            Assert.That(service.TrackIdleTime(false, now.AddMinutes(11)), Is.EqualTo(TimeSpan.Zero),
+                "the clock restarts from the pause, not from the original stop");
+        }
+
+        private class NullPresenceClient : IPresenceClient
+        {
+            public void Start() { }
+            public void Publish(PresenceState state) { }
+            public void Clear() { }
+            public void Dispose() { }
+        }
+
+        [Test]
+        public void IdleCrossesAsThePlainAppPresence()
+        {
+            var presence = DiscordPresenceClient.BuildRichPresence(DiscordPresenceService.IdleState);
+
+            // Not Listening: nothing is playing, so claiming to listen would be a lie. lazer sets no
+            // type at all for an idle user, which is Discord's default of Playing.
+            Assert.That(presence.Type, Is.EqualTo(ActivityType.Playing));
+            Assert.That(presence.State, Is.EqualTo("Idle"));
+            Assert.That(presence.Timestamps, Is.Null);
         }
 
         // ---- content ----
@@ -276,7 +474,7 @@ namespace JukeBox.Game.Tests.Presence
             var presence = DiscordPresenceClient.BuildRichPresence(
                 DiscordPresenceService.Build(inputs(hasStoryboard: true, difficulty: "Insane"))!);
 
-            Assert.That(presence.Details, Is.EqualTo("storyboard · FREEDOM DIVE"));
+            Assert.That(presence.Details, Is.EqualTo("FREEDOM DIVE"));
             Assert.That(presence.State, Is.EqualTo("xi · [Insane]"));
         }
 
