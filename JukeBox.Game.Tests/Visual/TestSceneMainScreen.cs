@@ -1222,6 +1222,63 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("left column never left shown", () => screen.LeftColumn.Alpha == 1);
         }
 
+        // The user's actual complaint: with a list of options in front of you, typing means "find
+        // one of these" — not "throw a beatmap listing over the top". Routing follows the tab.
+        [TestCase(RightPanelTabName.Chart)]
+        [TestCase(RightPanelTabName.Settings)]
+        public void TypingInATabWithOptionsSearchesThatTabInsteadOfBeatmaps(RightPanelTabName tab)
+        {
+            AddStep($"open the {tab} tab", () => clickTab(tab));
+
+            AddStep("press 'd'", () => InputManager.Key(Key.D));
+
+            AddUntilStep("the tab's own search took it", () => searchTermOf(tab) == "d");
+            AddAssert("and the beatmap listing stayed shut", () => fullscreenListing().State.Value == Visibility.Hidden);
+
+            AddStep("press 'i' then 'm'", () =>
+            {
+                InputManager.Key(Key.I);
+                InputManager.Key(Key.M);
+            });
+
+            AddUntilStep("the term builds up rather than replacing itself", () => searchTermOf(tab) == "dim");
+        }
+
+        // The Playback tab has no list of options to filter, so it keeps the behaviour it had.
+        [Test]
+        public void TypingOnThePlaybackTabStillOpensTheBeatmapListing()
+        {
+            AddStep("open the Playback tab", () => clickTab(RightPanelTabName.Playback));
+
+            AddStep("press 'a'", () => InputManager.Key(Key.A));
+
+            AddUntilStep("fullscreen listing shown", () => fullscreenListing().State.Value == Visibility.Visible);
+            AddAssert("seeded with what was typed", () => fullscreenListing().SearchBox.Text == "a");
+        }
+
+        // A filter left behind on a tab you cannot see is a trap — you come back later to a panel
+        // missing half its rows for no visible reason.
+        [Test]
+        public void SwitchingAwayFromATabClearsItsFilter()
+        {
+            AddStep("open Settings and filter it", () =>
+            {
+                clickTab(RightPanelTabName.Settings);
+                InputManager.Key(Key.D);
+            });
+
+            AddUntilStep("filtered", () => searchTermOf(RightPanelTabName.Settings) == "d");
+
+            AddStep("switch to Playback", () => clickTab(RightPanelTabName.Playback));
+            AddStep("switch back to Settings", () => clickTab(RightPanelTabName.Settings));
+
+            AddAssert("the filter did not survive", () => searchTermOf(RightPanelTabName.Settings).Length == 0);
+        }
+
+        private string searchTermOf(RightPanelTabName tab) => tab == RightPanelTabName.Chart
+            ? chartPanel().SearchTerm
+            : screen.ChildrenOfType<SettingsOverlay>().Single().SearchTerm;
+
         // Escape's contract: it closes the fullscreen listing back to the player; the permanently
         // docked sidebar is never hidden by it.
         [Test]

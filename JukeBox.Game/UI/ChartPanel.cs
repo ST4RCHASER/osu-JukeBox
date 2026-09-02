@@ -65,7 +65,7 @@ namespace JukeBox.Game.UI;
 /// <see cref="JukeBoxSetting.ChartMods"/> and <see cref="JukeBoxSetting.HiddenPlayfieldElements"/>.
 /// </para>
 /// </summary>
-public partial class ChartPanel : CompositeDrawable
+public partial class ChartPanel : CompositeDrawable, ITabSearch
 {
     /// <summary>The dimming a locked (replay-driven) control gets, matching
     /// <see cref="DifficultySwitcher"/>'s own locked state so the two read as one rule.</summary>
@@ -308,16 +308,23 @@ public partial class ChartPanel : CompositeDrawable
         InternalChild = new OsuTooltipContainer(null!)
         {
             RelativeSizeAxes = Axes.Both,
-            Child = new OsuScrollContainer
-            {
-                RelativeSizeAxes = Axes.Both,
-                ScrollbarVisible = true,
-                Child = createBody(),
-            },
+            Child = body = new TabSearchBody(createSections(), "search chart options"),
         };
     }
 
-    private Drawable createBody()
+    private TabSearchBody body = null!;
+
+    /// <summary>Test seam: this tab's live filter term.</summary>
+    internal string SearchTerm => body.SearchTerm;
+
+    /// <summary>Test seam: whether this tab's search box holds keyboard focus.</summary>
+    internal bool SearchHasFocus => body.SearchHasFocus;
+
+    public void BeginSearch(char first) => body.BeginSearch(first);
+
+    public void ClearSearch() => body.ClearSearch();
+
+    private List<Drawable> createSections()
     {
         var sections = new List<Drawable>
         {
@@ -369,14 +376,7 @@ public partial class ChartPanel : CompositeDrawable
         if (elements != null)
             sections.Add(createElementsSection());
 
-        return new FillFlowContainer
-        {
-            RelativeSizeAxes = Axes.X,
-            AutoSizeAxes = Axes.Y,
-            Padding = new MarginPadding { Bottom = 20 },
-            Direction = FillDirection.Vertical,
-            Children = sections,
-        };
+        return sections;
     }
 
     /// <summary>

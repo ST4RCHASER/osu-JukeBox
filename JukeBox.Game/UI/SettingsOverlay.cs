@@ -61,7 +61,7 @@ namespace JukeBox.Game.UI;
 /// test scenes) rather than rendering dead controls. The per-ruleset config managers are no longer
 /// among them: the sections that bound those moved to <see cref="ChartPanel"/>.
 /// </summary>
-public partial class SettingsOverlay : FocusedOverlayContainer
+public partial class SettingsOverlay : FocusedOverlayContainer, ITabSearch
 {
     private const float panel_width = 360;
 
@@ -116,10 +116,13 @@ public partial class SettingsOverlay : FocusedOverlayContainer
     // load()), so this stays null there.
     private Box? cardBackground;
 
-    private OsuScrollContainer scroll = null!;
 
-    /// <summary>The build stamp at the very bottom of the body — see where it's built in
-    /// <see cref="createBody"/>.</summary>
+    /// <summary>
+    /// The build stamp at the very bottom of the body — see where it's built in
+    /// <see cref="createSections"/>. Deliberately NOT a searchable row: it is a fact about the
+    /// app rather than a setting, so it survives every filter instead of vanishing and leaving
+    /// the panel looking broken mid-search.
+    /// </summary>
     private OsuSpriteText versionText = null!;
 
     /// <summary>Test hook: what the footer is actually displaying.</summary>
@@ -399,7 +402,7 @@ public partial class SettingsOverlay : FocusedOverlayContainer
 
     /// <summary>Test-only: scrolls a control into view (instantly, so the very next test step's
     /// mouse coordinates are already final) so real mouse input can reach it.</summary>
-    internal void ScrollControlIntoView(Drawable control) => scroll.ScrollIntoView(control, animated: false);
+    internal void ScrollControlIntoView(Drawable control) => body.Scroll.ScrollIntoView(control, animated: false);
 
     /// <param name="docked">See the class summary.</param>
     /// <param name="searchEngine">The app's one search engine, purely so the Radio section's filter
@@ -448,12 +451,7 @@ public partial class SettingsOverlay : FocusedOverlayContainer
                     // and header spacing. (The floating presentation below is a real card in its own
                     // right, over a scrim, so it keeps lazer's Background4 ground.) The same
                     // reasoning QueuePanel's docked branch already follows.
-                    scroll = new OsuScrollContainer
-                    {
-                        RelativeSizeAxes = Axes.Both,
-                        ScrollbarVisible = true,
-                        Child = createBody(),
-                    },
+                    body = new TabSearchBody(createSections(), "search settings"),
                 }
                 : new Drawable[]
                 {
@@ -479,17 +477,24 @@ public partial class SettingsOverlay : FocusedOverlayContainer
                                 RelativeSizeAxes = Axes.Both,
                                 Colour = colourProvider.Background4,
                             },
-                            scroll = new OsuScrollContainer
-                            {
-                                RelativeSizeAxes = Axes.Both,
-                                ScrollbarVisible = true,
-                                Child = createBody(),
-                            },
+                            body = new TabSearchBody(createSections(), "search settings"),
                         },
                     },
                 },
         };
     }
+
+    private TabSearchBody body = null!;
+
+    /// <summary>Test seam: this tab's live filter term.</summary>
+    internal string SearchTerm => body.SearchTerm;
+
+    /// <summary>Test seam: whether this tab's search box holds keyboard focus.</summary>
+    internal bool SearchHasFocus => body.SearchHasFocus;
+
+    public void BeginSearch(char first) => body.BeginSearch(first);
+
+    public void ClearSearch() => body.ClearSearch();
 
     /// <summary>
     /// The actual settings content, shared by both presentations (see the class summary). Always
@@ -498,7 +503,7 @@ public partial class SettingsOverlay : FocusedOverlayContainer
     /// big TorusAlternate section headers (via <see cref="SettingsSection"/>), bold subsection
     /// headers (via <see cref="SettingsSubsection"/>), items carrying their own content padding.
     /// </summary>
-    private Drawable createBody()
+    private List<Drawable> createSections()
     {
         var sections = new List<Drawable>
         {
@@ -693,14 +698,7 @@ public partial class SettingsOverlay : FocusedOverlayContainer
             Text = AppVersion.DisplayString,
         });
 
-        return new FillFlowContainer
-        {
-            RelativeSizeAxes = Axes.X,
-            AutoSizeAxes = Axes.Y,
-            Padding = new MarginPadding { Bottom = 20 },
-            Direction = FillDirection.Vertical,
-            Children = sections,
-        };
+        return sections;
     }
 
     /// <summary>
@@ -852,10 +850,34 @@ public partial class SettingsOverlay : FocusedOverlayContainer
     /// live config binding whose VALUE has to survive a backend going away and coming back; a
     /// zero-Alpha child is not IsPresent, so the section's flow closes over it.
     /// </summary>
+    /// <summary>
+    /// Takes a row that is currently hidden out of the search, and puts it back when it returns.
+    ///
+    /// <para>
+    /// Every lazer settings row is an <see cref="IConditionalFilterable"/> whose
+    /// <c>CanBeShown</c> the filter consults before descending — and it hands back the very
+    /// <see cref="BindableBool"/> the row owns, so the cast is how a caller writes it.
+    /// </para>
+    /// </summary>
+    private static void setSearchable(Drawable row, bool searchable)
+    {
+        if (row is IConditionalFilterable { CanBeShown: BindableBool flag })
+            flag.Value = searchable;
+    }
+
     private void updateRadioFilterAvailability(SearchFilters available)
     {
         foreach ((var row, var needs) in radioFilterRows)
-            row.Alpha = (available & needs) != 0 ? 1 : 0;
+        {
+            bool shown = (available & needs) != 0;
+            row.Alpha = shown ? 1 : 0;
+
+            // …and tell the search the row is not on offer. Alpha alone would not: a filter walks
+            // the drawable tree without looking at it, so a hidden row would still MATCH and hold
+            // its whole subsection open around nothing. CanBeShown is lazer's own escape hatch for
+            // exactly this (see IConditionalFilterable).
+            setSearchable(row, shown);
+        }
 
         // Every dimension gone leaves the subsection as a bare header, which reads as a bug.
         bool none = radioFilterRows.All(r => (available & r.Needs) == 0);
@@ -891,7 +913,16 @@ public partial class SettingsOverlay : FocusedOverlayContainer
 
         // Credentials only mean anything to the official backend — with the mirrors selected the
         // block is gone rather than greyed, since there is nothing about it to explain in that mode.
-        searchApiDropdown.Current.BindValueChanged(e => officialCredentials.Alpha = e.NewValue == SearchApi.Official ? 1 : 0, true);
+        searchApiDropdown.Current.BindValueChanged(e =>
+        {
+            bool official = e.NewValue == SearchApi.Official;
+            officialCredentials.Alpha = official ? 1 : 0;
+
+            // Same reason as the radio rows: a search walks the tree without consulting Alpha, so
+            // credentials hidden behind "Mirror" would still answer a query for "client".
+            setSearchable(clientIdTextBox, official);
+            setSearchable(clientSecretTextBox, official);
+        }, true);
 
         // ---- Radio ----
         radioOnEmptyQueueCheckbox.Current = config.GetBindable<bool>(JukeBoxSetting.RadioOnEmptyQueue);

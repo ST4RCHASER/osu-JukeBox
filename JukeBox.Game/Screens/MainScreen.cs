@@ -807,6 +807,17 @@ public partial class MainScreen : Screen
 
             if (c != null)
             {
+                // Typing belongs to whatever the user is LOOKING at. With the Chart or Settings
+                // tab open they are reading a list of options, so a keystroke means "find one of
+                // these" — popping the beatmap listing over the top would be the app answering a
+                // question nobody asked. Only the Playback tab, which has no list to search,
+                // falls through to the beatmap search.
+                if (searchableTab() is { } tab)
+                {
+                    tab.BeginSearch(c.Value);
+                    return true;
+                }
+
                 // One search surface, one entry point. The sidebar shows the same engine's
                 // results, so it follows along without being involved here.
                 fullscreenListing.ShowWithInitialChar(c.Value);
@@ -876,6 +887,17 @@ public partial class MainScreen : Screen
     }
 
     /// <summary>
+    /// The active tab's own search, or null for Playback — which has no list of options to filter
+    /// and so keeps the type-to-open-the-beatmap-listing behaviour it always had.
+    /// </summary>
+    private ITabSearch? searchableTab() => currentTab switch
+    {
+        RightPanelTab.Chart => chartPanel,
+        RightPanelTab.Settings => settingsBody,
+        _ => null,
+    };
+
+    /// <summary>
     /// Switches the right column's active tab body. <paramref name="animate"/> is false only for
     /// the one-time initial call at <see cref="LoadComplete"/> (both bodies must land in their
     /// correct state instantly, not mid-crossfade, before the first frame renders).
@@ -887,6 +909,11 @@ public partial class MainScreen : Screen
         // regardless, since both bodies start at their construction-time default Alpha (1).
         if (animate && tab == currentTab)
             return;
+
+        // A filter you cannot see is a trap: leaving one behind means coming back to this tab later
+        // and finding half its rows missing with the box scrolled out of mind. Cleared on the way
+        // OUT, so the tab is always entered whole.
+        searchableTab()?.ClearSearch();
 
         currentTab = tab;
 
