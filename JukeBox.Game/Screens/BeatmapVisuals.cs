@@ -2,6 +2,7 @@
 
 using System;
 using System.IO;
+using System.Linq;
 using JukeBox.Game.Beatmaps;
 using JukeBox.Game.Configuration;
 using JukeBox.Game.LazerPlayer;
@@ -50,6 +51,12 @@ public partial class BeatmapVisuals : CompositeDrawable
     private Box dimScrim = null!;
     private Container chartContainer = null!;
     private LazerChartLayer? chartLayer;
+
+    /// <summary>
+    /// The side-by-side grid, built instead of <see cref="chartLayer"/> when this difficulty has
+    /// SEVERAL replays. Exactly one of the two is ever non-null.
+    /// </summary>
+    private MultiReplayGrid? multiGrid;
 
     // One clip per layer, each sized to MainScreen's player box (see updateLayerClips) and each
     // masking only while that box has stopped doing it itself. They exist for the two
@@ -286,6 +293,9 @@ public partial class BeatmapVisuals : CompositeDrawable
 
     /// <summary>Test-only: the current lazer gameplay layer, if any.</summary>
     internal LazerChartLayer? ChartRenderer => chartLayer;
+
+    /// <summary>Test-only: the side-by-side grid, non-null only when this difficulty has several replays.</summary>
+    internal MultiReplayGrid? MultiGrid => multiGrid;
 
     /// <summary>Test-only: the container carrying the app Volume setting to lazer-rendered audio.</summary>
     internal AudioContainer AudioAdjustments => audioAdjustments;
@@ -801,27 +811,54 @@ public partial class BeatmapVisuals : CompositeDrawable
             // Only a replay registered against THIS difficulty applies: a dropped .osr identifies
             // one exact .osu by checksum, so switching to any other difficulty of the same set
             // correctly falls back to autoplay (and switching back restores the replay).
-            var replay = replays?.ForOsuFile(osuFile);
+            var forThisDifficulty = replays?.AllForOsuFile(osuFile) ?? Array.Empty<Replays.ReplayAttachment>();
+            var replay = forThisDifficulty.FirstOrDefault();
 
             if (replay?.Score != null)
                 Logger.Log($"Playing back {replay.PlayerName}'s replay on '{Path.GetFileName(osuFile)}' instead of autoplay");
 
-            chartContainer.Add(chartLayer = new LazerChartLayer(chartWorking!, osuFile!, replay?.Score)
+            // Several replays of this exact difficulty are watched side by side rather than one
+            // being picked: the grid renders each under its own mods, on this one clock. One replay
+            // (or none) keeps the single layer it always had.
+            if (forThisDifficulty.Count > 1)
             {
-                // See updateChartVisibility: this is what keeps the layer updating — and therefore
-                // sounding — while it is invisible.
-                AlwaysPresent = true,
-            });
+                Logger.Log($"Playing {forThisDifficulty.Count} replays of '{Path.GetFileName(osuFile)}' side by side"
+                           + $" ({MultiReplayLayout.RenderedCount(forThisDifficulty.Count)} rendered)");
+
+                chartContainer.Add(multiGrid = new MultiReplayGrid(osuFile!, forThisDifficulty) { AlwaysPresent = true });
+            }
+            else
+            {
+                chartContainer.Add(chartLayer = new LazerChartLayer(chartWorking!, osuFile!, replay?.Score)
+                {
+                    // See updateChartVisibility: this is what keeps the layer updating — and
+                    // therefore sounding — while it is invisible.
+                    AlwaysPresent = true,
+                });
+            }
         }
         else if (!wantLayer && chartLayer != null)
         {
             chartContainer.Remove(chartLayer, true);
             chartLayer = null;
         }
+        else if (!wantLayer && multiGrid != null)
+        {
+            chartContainer.Remove(multiGrid, true);
+            multiGrid = null;
+        }
 
         if (chartLayer != null)
         {
             chartLayer.HitSoundsEnabled.Value = hitSounds;
+            updateChartVisibility();
+        }
+
+        if (multiGrid != null)
+        {
+            // The grid decides internally that only ONE of its cells may sound — N layers hitting
+            // the same samples milliseconds apart is a flam, not N times louder.
+            multiGrid.HitSoundsEnabled = hitSounds;
             updateChartVisibility();
         }
     }
@@ -845,10 +882,15 @@ public partial class BeatmapVisuals : CompositeDrawable
     /// </summary>
     private void updateChartVisibility()
     {
-        if (chartLayer == null)
-            return;
+        float alpha = renderChart.Value ? (float)chartOpacity.Value : 0;
 
-        chartLayer.Alpha = renderChart.Value ? (float)chartOpacity.Value : 0;
+        if (chartLayer != null)
+            chartLayer.Alpha = alpha;
+
+        // The grid follows the same rule: it IS the chart when several replays are playing, so
+        // "render chart" and the opacity slider govern it exactly as they govern a single layer.
+        if (multiGrid != null)
+            multiGrid.Alpha = alpha;
     }
 
     protected override void Update()

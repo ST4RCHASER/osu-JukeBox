@@ -37,6 +37,13 @@ namespace JukeBox.Game.Tests.Visual
         [Cached]
         private readonly PlaybackController controller = new PlaybackController();
 
+        /// <summary>
+        /// Empty for every test but the multi-replay ones, where an empty store is indistinguishable
+        /// from no store at all — so caching it costs the rest of this fixture nothing.
+        /// </summary>
+        [Cached]
+        private readonly JukeBox.Game.Replays.ReplayStore replayStore = new JukeBox.Game.Replays.ReplayStore();
+
         private string tmp = null!;
         private CachedBeatmapSet storyboardSet = null!;
         private CachedBeatmapSet plainSet = null!;
@@ -130,6 +137,64 @@ namespace JukeBox.Game.Tests.Visual
                 config.SetValue(JukeBoxSetting.ShowStoryboard, true);
                 config.SetValue(JukeBoxSetting.ShowVideo, true);
             });
+        }
+
+        /// <summary>
+        /// The wiring, not the grid: a difficulty with SEVERAL replays must build the side-by-side
+        /// grid instead of the single chart layer. Everything about how the grid itself behaves is
+        /// TestSceneMultiReplayGrid's job — what this pins is that BeatmapVisuals reaches for it at
+        /// all, which no test of the grid or of the store can see.
+        /// </summary>
+        [Test]
+        public void SeveralReplaysForOneDifficultyBuildTheGridInsteadOfOneLayer()
+        {
+            BeatmapVisuals visuals = null!;
+
+            AddStep("register two replays for the difficulty", () =>
+            {
+                string played = plainSet.PreferredOsuFile!;
+
+                replayStore.Register(new JukeBox.Game.Replays.ReplayAttachment
+                {
+                    PlayerName = "WhiteCat", OsuFile = played, SourcePath = "/a.osr",
+                });
+                replayStore.Register(new JukeBox.Game.Replays.ReplayAttachment
+                {
+                    PlayerName = "Vaxei", OsuFile = played, SourcePath = "/b.osr",
+                });
+            });
+
+            AddStep("create visuals", () => Add(visuals = new BeatmapVisuals(plainSet, idleClock)
+            {
+                RelativeSizeAxes = Axes.Both,
+            }));
+
+            AddUntilStep("the grid was built", () => visuals.IsLoaded && visuals.MultiGrid?.IsLoaded == true);
+            AddAssert("with a cell per replay", () => visuals.MultiGrid!.Cells.Count == 2);
+            AddAssert("and NOT the single-replay layer", () => visuals.ChartRenderer == null);
+        }
+
+        /// <summary>
+        /// And one replay keeps the single layer it always had — the grid is for several, so a lone
+        /// replay must not start rendering through it.
+        /// </summary>
+        [Test]
+        public void OneReplayStillBuildsTheSingleLayer()
+        {
+            BeatmapVisuals visuals = null!;
+
+            AddStep("register one replay", () => replayStore.Register(new JukeBox.Game.Replays.ReplayAttachment
+            {
+                PlayerName = "WhiteCat", OsuFile = plainSet.PreferredOsuFile, SourcePath = "/only.osr",
+            }));
+
+            AddStep("create visuals", () => Add(visuals = new BeatmapVisuals(plainSet, idleClock)
+            {
+                RelativeSizeAxes = Axes.Both,
+            }));
+
+            AddUntilStep("visuals loaded", () => visuals.IsLoaded && visuals.ChartLayerBuilt);
+            AddAssert("no grid", () => visuals.MultiGrid == null);
         }
 
         /// <summary>
