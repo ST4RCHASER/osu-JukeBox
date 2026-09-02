@@ -454,12 +454,20 @@ namespace JukeBox.Game.Tests.Presence
         }
 
         /// <summary>
-        /// Presence is decoration; it must never be able to disturb playback. With no application id
-        /// no socket is opened at all, and with a well-formed one and no Discord listening the
-        /// library's connect simply fails in the background — neither may surface as an exception.
+        /// Presence is decoration; it must never be able to disturb playback. An id that doesn't
+        /// parse opens no socket at all, so every entry point is a no-op that cannot throw.
+        ///
+        /// <para>
+        /// NO TEST HERE MAY OPEN A SOCKET. An earlier version of this one connected with a
+        /// well-formed but unregistered id to exercise the failed-handshake path, which meant the
+        /// suite reached out to whatever Discord was running on the machine — real IPC inside a
+        /// test process, and a second source of exactly the trouble that made main red. The
+        /// connect, reject and reconnect paths were verified live and out of band instead; what
+        /// belongs in the suite is that nothing here touches Discord.
+        /// </para>
         /// </summary>
         [Test]
-        public void EveryClientEntryPointIsTotalWithoutDiscord()
+        public void EveryClientEntryPointIsTotalWithoutAnApplicationId()
         {
             var state = DiscordPresenceService.Build(inputs())!;
 
@@ -469,21 +477,8 @@ namespace JukeBox.Game.Tests.Presence
                 unusable.Start();
                 unusable.Publish(state);
                 unusable.Clear();
-            }, "with an unusable id");
-
-            Assert.DoesNotThrow(() =>
-            {
-                // Well-formed but registered to nothing, so the handshake can only fail.
-                using var unregistered = new DiscordPresenceClient("123456789012345678");
-                unregistered.Start();
-                unregistered.Publish(state);
-                unregistered.Clear();
-            }, "with an id Discord will not accept");
+            });
         }
-
-        // Deliberately NOT DiscordPresenceClient.CLIENT_ID anywhere above: that is the real
-        // application, and connecting with it would flash a genuine "Listening to osu!JukeBox" onto
-        // whoever's Discord happens to be running the suite.
 
         [Test]
         public void PublishingBeforeStartDoesNotThrow()

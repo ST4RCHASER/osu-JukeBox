@@ -18,7 +18,7 @@ namespace JukeBox.Desktop
             bool viewer = args.Contains("--viewer");
 
             using (GameHost host = Host.GetSuitableDesktopHost(JukeBoxHost.HostNameFor(viewer), JukeBoxHost.OptionsFor(viewer)))
-            using (osu.Framework.Game game = viewer ? new JukeBoxViewerGame(Console.In) : new JukeBoxGame())
+            using (osu.Framework.Game game = viewer ? new JukeBoxViewerGame(Console.In) : new JukeBoxDesktopGame())
                 host.Run(game);
         }
     }

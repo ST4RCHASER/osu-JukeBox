@@ -4,59 +4,67 @@ using System.IO;
 using System.Linq;
 using JukeBox.Game.Presence;
 using NUnit.Framework;
-using osu.Framework.Graphics;
-using osu.Framework.Graphics.Containers;
+using osu.Framework.Allocation;
 using osu.Framework.Testing;
 
 namespace JukeBox.Game.Tests.Visual
 {
     /// <summary>
-    /// Rich presence belongs to the MAIN process alone. The detached viewer window is a second
-    /// process of this same binary, and if it published too, the two would fight over the user's
-    /// single Discord activity slot — so the service is added by <see cref="JukeBoxGame"/> and
-    /// nowhere else.
+    /// Nothing reachable from the test project may wire rich presence, because wiring it means
+    /// opening a real Discord IPC connection inside a headless test host — which killed the host
+    /// mid-fixture and failed 30 unrelated tests when presence lived in <see cref="JukeBoxGame"/>.
     ///
     /// <para>
-    /// The scene deliberately adds nothing of its own: it runs on
-    /// <see cref="JukeBoxGameBase"/> — the very class <see cref="JukeBoxViewerGame"/> derives from,
-    /// and the one whose <c>load()</c> a future change would most plausibly move the service into —
-    /// so an empty tree here is the assertion that neither the base nor the viewer wires it up.
+    /// The first version of this fixture asserted only that <see cref="JukeBoxGameBase"/> wired
+    /// nothing, and reasoned from there that every fixture was safe. That reasoning was wrong:
+    /// <see cref="TestSceneJukeBoxGame"/> and <see cref="TestSceneRealVirtualAudioSet"/> both
+    /// <c>AddGame(new JukeBoxGame())</c>. So this now builds the REAL game the way those fixtures
+    /// do, which is the shape that actually broke. Presence lives in JukeBox.Desktop's
+    /// <c>JukeBoxDesktopGame</c>, a project the test assembly cannot reference.
     /// </para>
     /// </summary>
     [TestFixture]
     public partial class TestSceneDiscordPresenceWiring : JukeBoxTestScene
     {
-        [Test]
-        public void TheBaseGameWiresNoPresenceService()
+        private JukeBoxGame game = null!;
+
+        [BackgroundDependencyLoader]
+        private void load()
         {
-            AddAssert("nothing publishes presence on the base game", () =>
-                hostGame()!.ChildrenOfType<DiscordPresenceService>().Any() == false);
+            AddGame(game = new JukeBoxGame());
         }
 
         /// <summary>
-        /// The viewer game's own construction, for the same reason
-        /// <see cref="Detach.ViewerGameConstructionTest"/> exists: it happens before the --viewer
-        /// process has a host, and it must not reach for Discord (or anything else) on the way up.
+        /// The regression pin. A real JukeBoxGame under a headless host — exactly what the two
+        /// fixtures above construct — must contain no presence service anywhere in its tree.
         /// </summary>
+        [Test]
+        public void TheRealGameWiresNoPresenceService()
+        {
+            AddUntilStep("game loaded", () => game.IsLoaded);
+            AddAssert("no presence service in the game's tree",
+                () => !game.ChildrenOfType<DiscordPresenceService>().Any());
+        }
+
+        /// <summary>
+        /// And nothing else the test host builds wires one either — the runner is a
+        /// <see cref="JukeBoxGameBase"/>, the same class <see cref="JukeBoxViewerGame"/> derives
+        /// from, so an empty tree here covers the viewer process too.
+        /// </summary>
+        [Test]
+        public void NothingElseInTheTestHostWiresPresenceEither()
+        {
+            AddAssert("none anywhere under the test scene", () => !this.ChildrenOfType<DiscordPresenceService>().Any());
+        }
+
         [Test]
         public void TheViewerGameConstructsWithoutTouchingPresence()
         {
             AddAssert("viewer game constructs cleanly", () =>
             {
                 using var viewer = new JukeBoxViewerGame(TextReader.Null);
-                return viewer.ChildrenOfType<DiscordPresenceService>().Any() == false;
+                return !viewer.ChildrenOfType<DiscordPresenceService>().Any();
             });
-        }
-
-        private JukeBoxGameBase? hostGame()
-        {
-            for (Drawable? drawable = this; drawable != null; drawable = drawable.Parent)
-            {
-                if (drawable is JukeBoxGameBase game)
-                    return game;
-            }
-
-            return null;
         }
     }
 }
