@@ -171,10 +171,12 @@ namespace JukeBox.Game.Tests.Visual
         }
 
         /// <summary>
-        /// A replay is a record of a play that already happened under mods of its own, so the user's
+        /// A replay is a record of a play that already happened at a rate of its own, so the
         /// selection must not additionally speed the track up while one is watched — the replay's
         /// own rate (ReplayTempo/ReplayFrequency, set by <see cref="Jukebox"/>) is the only one in
-        /// force.
+        /// force. That holds even though the replay's mods are now applied to the toggles and left
+        /// editable: the frames are timed against the rate they were recorded at, so following an
+        /// edited rate mod would desync the play rather than re-render it.
         /// </summary>
         [Test]
         public void AReplayInControlSuspendsTheSelectionsRate()
@@ -194,11 +196,19 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("the replay's mods are what it reports",
                 () => selection.ReplayModAcronyms.Value.SequenceEqual(new[] { "HD", "HR" }));
 
-            AddAssert("the user's own selection was left intact underneath",
-                () => selection.Enabled(ChartMod.DoubleTime).Value);
+            // The replay's mods become the ACTIVE selection and stay editable; the user's own is
+            // parked rather than overwritten, and comes back below.
+            AddAssert("the replay's mods are on the toggles",
+                () => selection.Enabled(ChartMod.Hidden).Value
+                      && selection.Enabled(ChartMod.HardRock).Value
+                      && !selection.Enabled(ChartMod.DoubleTime).Value);
 
             AddStep("replay stops", () => jukebox.NowPlaying.Value = new BeatmapSetInfo { Id = 2 });
 
+            AddAssert("the user's own selection is handed back",
+                () => selection.Enabled(ChartMod.DoubleTime).Value
+                      && !selection.Enabled(ChartMod.Hidden).Value
+                      && !selection.Enabled(ChartMod.HardRock).Value);
             AddAssert("the selection's rate comes back", () => playback.ChartModTempo.Value == 1.5);
         }
 

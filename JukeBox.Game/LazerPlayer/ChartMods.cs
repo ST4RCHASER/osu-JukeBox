@@ -185,6 +185,15 @@ public static class ChartModCatalog
                && !typeof(IApplicableToBeatmap).IsAssignableFrom(type);
     }
 
+    /// <summary>
+    /// Whether the Chart tab has a row for the mod with this acronym at all. A replay can carry
+    /// mods this app doesn't model (NF, SD, PF, and the rest osu! offers), and those stay exactly
+    /// as recorded — there is no toggle for the user to have an opinion with. See
+    /// <c>LazerChartLayer.replayMods</c>.
+    /// </summary>
+    public static bool Models(string acronym)
+        => all_mods.Any(m => string.Equals(m.Acronym(), acronym, StringComparison.OrdinalIgnoreCase));
+
     /// <summary>Which of lazer's own mod categories this row belongs under.</summary>
     public static ModType TypeOf(ChartMod mod) => prototype(mod).Type;
 
@@ -359,8 +368,7 @@ public partial class ChartModSelection : osu.Framework.Graphics.Component
             nowPlaying.BindTo(jukebox.NowPlaying);
             nowPlaying.BindValueChanged(e =>
             {
-                replayActive.Value = e.NewValue?.Replay != null;
-                replayModAcronyms.Value = e.NewValue?.Replay?.ModAcronyms ?? Array.Empty<string>();
+                applyReplayState(e.NewValue?.Replay);
                 updateRate();
             }, true);
         }
@@ -377,13 +385,81 @@ public partial class ChartModSelection : osu.Framework.Graphics.Component
 
         if (!applying)
         {
-            writeToConfig();
+            // A replay's mods are the ACTIVE selection while it plays, and the user may edit them —
+            // but what gets saved is still the selection they chose for themselves (see
+            // applyReplayState). Persisting an edit made on top of a replay would let one play
+            // silently redefine the mods every later song is charted with.
+            if (!replayActive.Value)
+                writeToConfig();
 
             string acronyms = string.Join(" ", Selected.Select(m => m.Acronym()));
-            Logger.Log($"[chart mods] {(acronyms.Length > 0 ? acronyms : "(none)")}");
+            Logger.Log($"[chart mods] {(acronyms.Length > 0 ? acronyms : "(none)")}{(replayActive.Value ? " (replay, not persisted)" : string.Empty)}");
         }
 
         updateRate();
+    }
+
+    /// <summary>The replay whose mods are currently loaded into the selection, so the same one
+    /// arriving again (a re-published now-playing value) doesn't discard the user's edits.</summary>
+    private Replays.ReplayAttachment? appliedReplay;
+
+    /// <summary>
+    /// The user's own selection, parked while a replay's mods are the active one. Null when no
+    /// replay is playing.
+    /// </summary>
+    private string? preReplaySelection;
+
+    /// <summary>
+    /// A replay's mods are AUTO-APPLIED to the selection when it starts playing, and stay fully
+    /// editable from there (user request): the toggles show what the play was recorded under, and
+    /// turning one off re-renders the chart without it. The replay's own frames are unchanged by
+    /// that — a cursor recorded under Hard Rock over objects drawn without it is inherently
+    /// mismatched, and choosing that is the user's business.
+    ///
+    /// <para>
+    /// What the user had selected for themselves is remembered on the way in and handed back on the
+    /// way out, so a replay can never permanently redefine it. Neither direction writes to config —
+    /// see <see cref="onToggled"/> — which leaves the saved selection the pre-replay one throughout.
+    /// </para>
+    ///
+    /// <para>
+    /// The PLAYBACK RATE is deliberately not part of this: it keeps coming from the replay's own
+    /// recorded mods (see <see cref="updateRate"/>, which stands down while a replay plays) because
+    /// the replay's frames are timed against the rate it was played at — following an edited DT
+    /// here would desync the play from the audio rather than re-render it.
+    /// </para>
+    /// </summary>
+    private void applyReplayState(Replays.ReplayAttachment? replay)
+    {
+        bool wasActive = replayActive.Value;
+        bool nowActive = replay != null;
+
+        replayModAcronyms.Value = replay?.ModAcronyms ?? Array.Empty<string>();
+
+        if (nowActive && !wasActive)
+            preReplaySelection = string.Join(',', Selected.Select(m => m.Acronym()));
+
+        replayActive.Value = nowActive;
+
+        if (nowActive)
+        {
+            // Only when the replay itself changed: the now-playing value is re-published for
+            // reasons that have nothing to do with mods, and re-applying then would silently undo
+            // whatever the user had just toggled.
+            if (!ReferenceEquals(appliedReplay, replay))
+            {
+                appliedReplay = replay;
+                applySelection(replay!.ModAcronyms);
+                Logger.Log($"[chart mods] replay mods applied and left editable: {string.Join(" ", replay.ModAcronyms)}");
+            }
+        }
+        else if (wasActive)
+        {
+            appliedReplay = null;
+            applySelection((preReplaySelection ?? string.Empty).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+            preReplaySelection = null;
+            Logger.Log("[chart mods] replay ended — the user's own selection is back");
+        }
     }
 
     /// <summary>
@@ -494,9 +570,25 @@ public partial class ChartModSelection : osu.Framework.Graphics.Component
     /// build (or hand-edited) must not stop the rest of the list from applying.</summary>
     private void applyFromConfig(string value)
     {
+        // A replay's mods are the active selection while one plays; letting the persisted list
+        // reassert itself underneath would fight with them. The saved value is applied on the way
+        // out instead (see applyReplayState).
+        if (replayActive.Value)
+            return;
+
+        applySelection(value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+    }
+
+    /// <summary>
+    /// Makes <paramref name="acronyms"/> the selection, whatever their source — the persisted list,
+    /// a replay's recorded mods, or the user's own parked selection coming back. Marked as an
+    /// APPLY, so nothing here is echoed back out as a user edit.
+    /// </summary>
+    private void applySelection(IEnumerable<string> acronyms)
+    {
         var wanted = new HashSet<ChartMod>();
 
-        foreach (string acronym in value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        foreach (string acronym in acronyms)
         {
             var match = all_mods.Where(m => string.Equals(m.Acronym(), acronym, StringComparison.OrdinalIgnoreCase))
                                 .Select(m => (ChartMod?)m)

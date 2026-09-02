@@ -259,6 +259,14 @@ namespace JukeBox.Game.Tests.Visual
         /// key-count control is live in — the same call BeatmapVisuals makes for what is on screen.</summary>
         private void convertToMania()
         {
+            config.SetValue(JukeBoxSetting.ConvertToRuleset, ChartConversionTarget.Mania);
+            conversion.Publish(convertibleBeatmap());
+        }
+
+        /// <summary>A real osu!std beatmap on disk, decoded the way BeatmapVisuals decodes what is
+        /// on screen — the thing conversion answers questions about.</summary>
+        private static osu.Game.Beatmaps.FlatWorkingBeatmap convertibleBeatmap()
+        {
             string dir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
             Directory.CreateDirectory(dir);
 
@@ -271,23 +279,22 @@ namespace JukeBox.Game.Tests.Visual
                 + "[TimingPoints]\n0,500,4,1,0,100,1,0\n\n"
                 + "[HitObjects]\n64,192,1000,1,0\n192,192,1500,1,0\n");
 
-            config.SetValue(JukeBoxSetting.ConvertToRuleset, ChartConversionTarget.Mania);
-            conversion.Publish(new osu.Game.Beatmaps.FlatWorkingBeatmap(osu));
+            return new osu.Game.Beatmaps.FlatWorkingBeatmap(osu);
         }
 
         private ManiaRulesetConfigManager maniaConfig()
             => (ManiaRulesetConfigManager)rulesetConfigs.GetConfigFor(new ManiaRuleset())!;
 
         /// <summary>
-        /// A replay was played under mods of its own, so the toggles are not the user's to move
-        /// while one drives playback — locked and dimmed like the difficulty switcher's own replay
-        /// state, with the replay's mods named in their place.
+        /// A replay's own mods are AUTO-APPLIED to the toggles when it starts (user request), and
+        /// the toggles stay the user's to move from there. This replaces the old behaviour, where
+        /// the rows locked outright and the replay's mods were only named in a line above them.
         /// </summary>
         [Test]
-        public void AReplayLocksTheModTogglesAndNamesItsOwnMods()
+        public void AReplayAppliesItsOwnModsAndLeavesThemEditable()
         {
-            AddStep("enable HD", () => panel.ModCheckbox(ChartMod.Hidden).Current.Value = true);
-            AddAssert("nothing is locked to begin with", () => !panel.ModsLocked && panel.ReplayModsNote.Length == 0);
+            AddStep("the user picks HD for themselves", () => panel.ModCheckbox(ChartMod.Hidden).Current.Value = true);
+            AddAssert("no replay note to begin with", () => panel.ReplayModsNote.Length == 0);
 
             AddStep("a replay starts playing", () => jukebox.NowPlaying.Value = new BeatmapSetInfo
             {
@@ -295,22 +302,86 @@ namespace JukeBox.Game.Tests.Visual
                 Replay = new ReplayAttachment { PlayerName = "Cookiezi", ModAcronyms = new[] { "HD", "HR", "DT" } },
             });
 
-            AddUntilStep("the mod rows locked and dimmed", () => panel.ModsLocked);
-            AddAssert("and name the replay's own mods", () => panel.ReplayModsNote.Contains("HD HR DT"));
+            AddUntilStep("the replay's mods are on the toggles", () => chartMods.Enabled(ChartMod.Hidden).Value
+                                                                       && chartMods.Enabled(ChartMod.HardRock).Value
+                                                                       && chartMods.Enabled(ChartMod.DoubleTime).Value);
+            AddAssert("and nothing else is", () => !chartMods.Enabled(ChartMod.Flashlight).Value
+                                                   && !chartMods.Enabled(ChartMod.Easy).Value);
+            AddAssert("the rows are still the user's to move", () => panel.ModsEditable);
+            AddAssert("the line says so, and names the recorded play",
+                () => panel.ReplayModsNote.Contains("editable") && panel.ReplayModsNote.Contains("HD HR DT"));
 
-            // Disabled is what stops the user: lazer's checkbox refuses input while its Current is,
-            // and a programmatic write throws outright.
-            AddAssert("every toggle refuses to move",
-                () => Enum.GetValues<ChartMod>().Where(m => ChartModCatalog.KeyCountOf(m) == null)
-                          .All(m => panel.ModCheckbox(m).Current.Disabled)
-                      && panel.KeyOverrideCheckbox.Current.Disabled);
-            AddAssert("nothing new got selected behind the lock", () => !chartMods.Enabled(ChartMod.Flashlight).Value);
+            AddStep("the user turns Hard Rock off", () => panel.ModCheckbox(ChartMod.HardRock).Current.Value = false);
+            AddUntilStep("the selection followed", () => !chartMods.Enabled(ChartMod.HardRock).Value
+                                                         && chartMods.Enabled(ChartMod.Hidden).Value);
+            AddAssert("and the line owns up to the difference",
+                () => panel.ReplayModsNote.Contains("differs from recorded: HD HR DT"));
 
             AddStep("replay stops", () => jukebox.NowPlaying.Value = new BeatmapSetInfo { Id = 8 });
 
-            AddUntilStep("the toggles came back", () => !panel.ModsLocked);
-            AddAssert("with the user's own selection intact", () => panel.ModCheckbox(ChartMod.Hidden).Current.Value);
+            AddUntilStep("the user's own pre-replay selection is back",
+                () => chartMods.Enabled(ChartMod.Hidden).Value
+                      && !chartMods.Enabled(ChartMod.HardRock).Value
+                      && !chartMods.Enabled(ChartMod.DoubleTime).Value);
             AddAssert("and no replay note left", () => panel.ReplayModsNote.Length == 0);
+        }
+
+        /// <summary>
+        /// What a replay puts on the toggles is a view of that play, not a new saved preference:
+        /// the persisted selection stays the one the user chose for themselves, all the way through
+        /// a replay they edited.
+        /// </summary>
+        [Test]
+        public void EditsMadeDuringAReplayAreNotPersisted()
+        {
+            AddStep("the user picks HD", () => panel.ModCheckbox(ChartMod.Hidden).Current.Value = true);
+            AddAssert("saved", () => config.Get<string>(JukeBoxSetting.ChartMods) == "HD");
+
+            AddStep("a replay starts playing", () => jukebox.NowPlaying.Value = new BeatmapSetInfo
+            {
+                Id = 11,
+                Replay = new ReplayAttachment { PlayerName = "Cookiezi", ModAcronyms = new[] { "HR", "DT" } },
+            });
+
+            AddUntilStep("its mods are active", () => chartMods.Enabled(ChartMod.HardRock).Value);
+            AddAssert("but the saved selection is untouched", () => config.Get<string>(JukeBoxSetting.ChartMods) == "HD");
+
+            AddStep("the user edits during the replay", () => panel.ModCheckbox(ChartMod.Flashlight).Current.Value = true);
+            AddUntilStep("the edit took", () => chartMods.Enabled(ChartMod.Flashlight).Value);
+            AddAssert("and STILL nothing was saved", () => config.Get<string>(JukeBoxSetting.ChartMods) == "HD");
+
+            AddStep("replay stops", () => jukebox.NowPlaying.Value = new BeatmapSetInfo { Id = 12 });
+
+            AddUntilStep("the saved selection comes back as the active one",
+                () => chartMods.Enabled(ChartMod.Hidden).Value && !chartMods.Enabled(ChartMod.Flashlight).Value);
+            AddAssert("config never moved", () => config.Get<string>(JukeBoxSetting.ChartMods) == "HD");
+        }
+
+        /// <summary>A replay's ruleset is fixed by its frames, so the conversion control stays
+        /// locked even though the mod toggles no longer are.</summary>
+        [Test]
+        public void ConversionStaysLockedDuringAReplay()
+        {
+            AddStep("a convertible map is on screen", convertToMania);
+            AddUntilStep("conversion is live", () => !panel.ConvertInert);
+
+            // Exactly what BeatmapVisuals publishes once a replay is driving the difficulty: the
+            // same beatmap, with conversion refused because a replay's frames belong to the ruleset
+            // it was played on.
+            AddStep("a replay starts playing", () =>
+            {
+                jukebox.NowPlaying.Value = new BeatmapSetInfo
+                {
+                    Id = 13,
+                    Replay = new ReplayAttachment { PlayerName = "Cookiezi", ModAcronyms = new[] { "HD" } },
+                };
+
+                conversion.Publish(convertibleBeatmap(), allowConversion: false);
+            });
+
+            AddUntilStep("conversion refuses input", () => panel.ConvertInert);
+            AddAssert("while the mod rows do not", () => panel.ModsEditable);
+            AddAssert("and the replay's mod is on the toggles", () => chartMods.Enabled(ChartMod.Hidden).Value);
         }
 
         /// <summary>

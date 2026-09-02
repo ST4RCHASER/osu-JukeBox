@@ -404,13 +404,33 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
     {
         try
         {
-            var kept = Replays.ReplayMods.ForGameplay(replayScore);
+            var recorded = Replays.ReplayMods.ForGameplay(replayScore);
 
-            if (kept.Count > 0)
+            // Only once the selection has actually taken this replay on (ChartModSelection follows
+            // the now-playing item, and a bare test scene has no selection service at all) is it the
+            // thing to ask. Until then the recorded set is the only honest answer — and it is also
+            // exactly what the selection is about to be seeded with, so the two agree.
+            if (chartMods?.ReplayActive.Value != true)
+                return recorded;
+
+            // The Chart tab's selection is seeded from these very mods the moment the replay starts
+            // (see ChartModSelection.applyReplayState), so with nothing edited this IS the recorded
+            // set — and once the user turns a row off, it is what they asked for instead.
+            var selected = chartMods.CreateFor(ruleset);
+
+            // Recorded mods the tab has no row for stay exactly as recorded: there is no toggle the
+            // user could have turned them off with, so dropping them would be this code editing the
+            // play rather than the user doing it.
+            var unmodelled = recorded.Where(m => !ChartModCatalog.Models(m.Acronym));
+
+            var kept = ChartModCatalog.Compatible(selected.Concat(unmodelled), ruleset);
+
+            if (kept.Count > 0 || recorded.Count > 0)
             {
                 osu.Framework.Logging.Logger.Log(
-                    $"[LazerChartLayer] replay mods applied: {string.Join(", ", kept.Select(m => m.Acronym))}"
-                    + $" (playback rate {Replays.ReplayMods.RateFor(kept):0.##}×)");
+                    $"[LazerChartLayer] replay mods: {string.Join(", ", kept.Select(m => m.Acronym))}"
+                    + $" (recorded {string.Join(", ", recorded.Select(m => m.Acronym))};"
+                    + $" playback rate {Replays.ReplayMods.RateFor(recorded):0.##}× stays as recorded)");
             }
 
             return kept;

@@ -223,6 +223,7 @@ public partial class ChartPanel : CompositeDrawable
     private readonly Bindable<CachedBeatmapSet?> currentSet = new Bindable<CachedBeatmapSet?>();
     private readonly Bindable<string?> selectedOsuFile = new Bindable<string?>();
     private readonly IBindable<bool> replayActive = new Bindable<bool>();
+    private readonly IBindable<int> selectionRevision = new Bindable<int>();
     private readonly IBindable<IReadOnlyList<string>> replayModAcronyms = new Bindable<IReadOnlyList<string>>(Array.Empty<string>());
 
     /// <summary>Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the tab's controls,
@@ -281,15 +282,15 @@ public partial class ChartPanel : CompositeDrawable
     internal string ReplayModsNote => replayModsNoteText;
 
     /// <summary>
-    /// Test-only: whether the mod rows are in their locked (replay) presentation — EVERY mod's
-    /// toggle refuses to move, and every row actually on screen is dimmed. The dimming is only
-    /// asserted for offered rows because osu!framework does not update a subtree that isn't present,
-    /// so a row this ruleset doesn't offer never runs its fade — which is invisible either way, and
-    /// self-corrects the moment the row is shown.
+    /// Test-only: whether every mod row the playing ruleset offers is the user's to move — no
+    /// toggle refusing input, no row dimmed. Rows greyed for the converts-only rule are exempt,
+    /// since that rule is about the beatmap rather than about who owns the selection; the dimming
+    /// is only asserted for offered rows because osu!framework does not update a subtree that isn't
+    /// present, so a row this ruleset doesn't offer never runs its fade.
     /// </summary>
-    internal bool ModsLocked
-        => modUi.Values.All(b => b.Disabled)
-           && modCheckboxes.Where(pair => ModOffered(pair.Key)).All(pair => pair.Value.Alpha < 1);
+    internal bool ModsEditable
+        => modUi.Where(pair => !ModInert(pair.Key)).All(pair => !pair.Value.Disabled)
+           && modCheckboxes.Where(pair => ModOffered(pair.Key) && !ModInert(pair.Key)).All(pair => pair.Value.Alpha == 1);
 
     /// <summary>Test-only: whether a row is marked inapplicable (greyed and refusing input) because
     /// its mod can only act on a converted beatmap.</summary>
@@ -845,35 +846,35 @@ public partial class ChartPanel : CompositeDrawable
     }
 
     /// <summary>
-    /// A mod row refuses to move for either of two reasons, and both dim it the same way: a replay
-    /// is driving playback (so the mods are the replay's, not the user's), or the mod can only act
-    /// on a converted beatmap and this app never renders one (see
-    /// <see cref="ChartModCatalog.AppliesOnlyToConverts"/>). Kept in one place so the two can't
-    /// fight over the same bindable.
+    /// A mod row refuses to move for exactly one reason now: the mod can only act on a converted
+    /// beatmap and none is being rendered (see <see cref="ChartModCatalog.AppliesOnlyToConverts"/>).
+    /// A replay used to be a second reason — the rows locked outright — but a replay's mods are now
+    /// auto-applied to the toggles and left editable (user request), so the replay decides what the
+    /// selection IS on the way in and has no say over it afterwards.
     /// </summary>
     private void updateModRowStates()
     {
-        bool replayLocked = replayActive.Value;
-
         foreach (var (mod, ui) in modUi)
         {
             bool inert = !isConverting.Value && ChartModCatalog.AppliesOnlyToConverts(mod);
 
-            ui.Disabled = replayLocked || inert;
-            modCheckboxes[mod].FadeTo(replayLocked || inert ? locked_alpha : 1, Theme.HoverFadeDuration, Easing.OutQuint);
+            ui.Disabled = inert;
+            modCheckboxes[mod].FadeTo(inert ? locked_alpha : 1, Theme.HoverFadeDuration, Easing.OutQuint);
         }
 
-        // Same two reasons for the collapsed key-count control, and the value follows its checkbox:
-        // there is nothing to pick a count FOR while the override is off.
+        // The collapsed key-count control, and the value that follows its checkbox: there is nothing
+        // to pick a count FOR while the override is off.
         // The key counts and Co-op reach the beatmap only through the CONVERTER, so they bite
         // exactly when a conversion is in force — which is now a real, user-reachable state rather
-        // than something that could never happen.
+        // than something that could never happen. A replay pins the conversion (its frames belong
+        // to the ruleset it was played on), so during one these stay inert through that rule rather
+        // than through a rule of their own.
         bool keysInert = !isConverting.Value && ChartModCatalog.KeyCountMods.All(ChartModCatalog.AppliesOnlyToConverts);
 
-        keyOverrideUi.Disabled = replayLocked || keysInert;
-        keyCountUi.Disabled = replayLocked || keysInert || !keyOverrideUi.Value;
+        keyOverrideUi.Disabled = keysInert;
+        keyCountUi.Disabled = keysInert || !keyOverrideUi.Value;
 
-        keyOverrideCheckbox.FadeTo(replayLocked || keysInert ? locked_alpha : 1, Theme.HoverFadeDuration, Easing.OutQuint);
+        keyOverrideCheckbox.FadeTo(keysInert ? locked_alpha : 1, Theme.HoverFadeDuration, Easing.OutQuint);
         keyCountRow.FadeTo(keyCountUi.Disabled ? locked_alpha : 1, Theme.HoverFadeDuration, Easing.OutQuint);
     }
 
@@ -912,6 +913,11 @@ public partial class ChartPanel : CompositeDrawable
 
         replayActive.BindValueChanged(_ => updateReplayLock(), true);
         replayModAcronyms.BindValueChanged(_ => updateReplayLock(), true);
+
+        // The line reports whether the toggles still match the recorded play, so it has to follow
+        // the user's own edits too, not just the replay starting and stopping.
+        selectionRevision.BindTo(selection.Revision);
+        selectionRevision.BindValueChanged(_ => updateReplayLock());
     }
 
     /// <summary>
@@ -1006,27 +1012,46 @@ public partial class ChartPanel : CompositeDrawable
     }
 
     /// <summary>
-    /// A replay carries the mods it was played with, so while one drives playback the selection is
-    /// inert: the rows lock and dim (matching <see cref="DifficultySwitcher"/>'s locked state) and a
-    /// line above them names the mods actually in force. The user's own selection is left untouched
-    /// underneath and comes straight back when the replay stops playing.
+    /// A replay's own mods are applied to the toggles when it starts and stay editable from there,
+    /// so the line above the rows says what was recorded — and, once the user has changed something,
+    /// says so rather than letting the rows quietly disagree with the play they are labelled by.
+    /// The rows themselves are not locked; see <see cref="updateModRowStates"/>.
     /// </summary>
     private void updateReplayLock()
     {
-        bool locked = replayActive.Value;
+        bool active = replayActive.Value;
 
         updateModRowStates();
 
-        var acronyms = replayModAcronyms.Value;
+        var recorded = replayModAcronyms.Value;
 
-        replayModsNoteText = !locked
+        replayModsNoteText = !active
             ? string.Empty
-            : acronyms.Count > 0
-                ? $"Replay is playing — its mods are in force: {string.Join(" ", acronyms)}"
-                : "Replay is playing — it was a no-mod play";
+            : selectionMatchesRecorded(recorded)
+                ? recorded.Count > 0
+                    ? $"Replay mods applied — editable: {string.Join(" ", recorded)}"
+                    : "Replay mods applied — editable: it was a no-mod play"
+                : $"Replay mods applied — editable (differs from recorded: {(recorded.Count > 0 ? string.Join(" ", recorded) : "no mods")})";
 
         replayModsNote.Text = replayModsNoteText;
-        replayModsNote.Alpha = locked ? 1 : 0;
+        replayModsNote.Alpha = active ? 1 : 0;
+    }
+
+    /// <summary>
+    /// Whether the toggles still say exactly what the replay was played under. Compared by the
+    /// acronyms the tab can actually model: a replay may carry mods with no row here (NF, SD and
+    /// the rest), those are kept as recorded whatever the user does, and counting them as a
+    /// difference would leave the line permanently claiming an edit nobody made.
+    /// </summary>
+    private bool selectionMatchesRecorded(IReadOnlyList<string> recorded)
+    {
+        if (chartMods == null)
+            return true;
+
+        var selected = chartMods.Selected.Select(m => m.Acronym()).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var modelled = recorded.Where(ChartModCatalog.Models).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        return selected.SetEquals(modelled);
     }
 
     /// <summary>

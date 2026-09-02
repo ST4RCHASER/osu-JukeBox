@@ -9,6 +9,7 @@ using JukeBox.Game.Replays;
 using NUnit.Framework;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
+using osu.Framework.Testing;
 using osu.Framework.Timing;
 using osu.Game.Beatmaps;
 using osu.Game.Beatmaps.Legacy;
@@ -39,11 +40,27 @@ namespace JukeBox.Game.Tests.Visual
         private Container host = null!;
         private LazerChartLayer layer = null!;
 
+        /// <summary>The runner is a real JukeBoxGameBase, so the mod selection and the jukebox it
+        /// follows are the app's own — which is what lets a replay be started here the way the app
+        /// starts one.</summary>
+        [osu.Framework.Allocation.Resolved]
+        private ChartModSelection chartMods { get; set; } = null!;
+
+        [osu.Framework.Allocation.Resolved]
+        private JukeBox.Game.Playback.Jukebox jukebox { get; set; } = null!;
+
         [SetUp]
         public void SetUp()
         {
             dir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
             Directory.CreateDirectory(dir);
+        }
+
+        [TearDownSteps]
+        public void TearDownSteps()
+        {
+            // Shared services: leave no replay (and therefore no replay-driven selection) behind.
+            AddStep("no replay playing", () => jukebox.NowPlaying.Value = null);
         }
 
         [Test]
@@ -257,6 +274,86 @@ namespace JukeBox.Game.Tests.Visual
                       && layer.PlayableBeatmap!.HitObjects[0].StartTime == 1000);
 
             AddStep("remove layer", () => Remove(host, true));
+        }
+
+        /// <summary>
+        /// A replay's mods are applied to the Chart tab's toggles and stay editable there (user
+        /// request), and what the toggles say is what the ruleset is built with — so turning Hard
+        /// Rock off during a replay really does render the chart without it. The replay's own frames
+        /// are unchanged by that, which is the trade the user is making.
+        /// </summary>
+        [Test]
+        public void EditingModsDuringAReplayReachesTheRuleset()
+        {
+            Score score = null!;
+            string osu = null!;
+
+            AddStep("a replay is driving playback", () =>
+            {
+                manual.CurrentTime = 0;
+                osu = Path.Combine(dir, "editable [0].osu");
+                File.WriteAllText(osu, beatmapForMode(0));
+
+                var ruleset = LazerChartLayer.CreateRuleset(0);
+
+                score = new Score
+                {
+                    Replay = new Replay { Frames = { new OsuReplayFrame(0, new osuTK.Vector2(64, 96)) } },
+                    ScoreInfo = new ScoreInfo
+                    {
+                        Ruleset = ruleset.RulesetInfo,
+                        Mods = ruleset.ConvertFromLegacyMods((LegacyMods)(8 | 16 | 64)).ToArray(),
+                    },
+                };
+
+                // The now-playing item is what makes the selection take the replay on — the same
+                // signal the real app publishes when a dropped .osr starts.
+                jukebox.NowPlaying.Value = new JukeBox.Game.Online.BeatmapSetInfo
+                {
+                    Id = 4242,
+                    Replay = new ReplayAttachment { PlayerName = "Cookiezi", ModAcronyms = new[] { "HD", "HR", "DT" } },
+                };
+            });
+
+            AddUntilStep("the selection took the replay on", () => chartMods.ReplayActive.Value
+                                                                   && chartMods.Enabled(ChartMod.HardRock).Value);
+
+            AddStep("build the layer", () => Add(host = new Container
+            {
+                RelativeSizeAxes = Axes.Both,
+                Clock = new FramedClock(manual),
+                Child = layer = new LazerChartLayer(new FlatWorkingBeatmap(osu), osu, score),
+            }));
+
+            AddUntilStep("layer loaded", () => layer.IsLoaded && layer.DrawableRuleset != null);
+            AddAssert("built with the replay's own mods",
+                () => layer.DrawableRuleset!.Mods.Select(m => m.Acronym).ToHashSet().IsSupersetOf(new[] { "HD", "HR", "DT" }));
+
+            AddStep("the user turns Hard Rock off", () => chartMods.Enabled(ChartMod.HardRock).Value = false);
+            AddStep("rebuild the layer", () =>
+            {
+                Remove(host, true);
+
+                Add(host = new Container
+                {
+                    RelativeSizeAxes = Axes.Both,
+                    Clock = new FramedClock(manual),
+                    Child = layer = new LazerChartLayer(new FlatWorkingBeatmap(osu), osu, score),
+                });
+            });
+
+            AddUntilStep("rebuilt", () => layer.IsLoaded && layer.DrawableRuleset != null);
+            AddAssert("Hard Rock is gone and the rest stayed", () =>
+            {
+                var acronyms = layer.DrawableRuleset!.Mods.Select(m => m.Acronym).ToHashSet();
+                return !acronyms.Contains("HR") && acronyms.IsSupersetOf(new[] { "HD", "DT" });
+            });
+
+            AddStep("clean up", () =>
+            {
+                Remove(host, true);
+                jukebox.NowPlaying.Value = null;
+            });
         }
 
         // Regression guard for a real crash: the chart layer is rebuilt often (difficulty switch,

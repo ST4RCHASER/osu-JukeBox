@@ -17,7 +17,7 @@ namespace JukeBox.Game.LazerPlayer;
 /// a view of what the current map happens to use.
 ///
 /// <para>
-/// <see cref="Video"/> is deliberately absent: the storyboard's video event lives in a layer of its
+/// The video layer is deliberately absent: the storyboard's video event lives in a layer of its
 /// own, and that layer is what <see cref="JukeBoxSetting.ShowVideo"/> switches — see
 /// <see cref="LazerStoryboardLayer"/>. The two settings meet the same mechanism from opposite ends.
 /// </para>
