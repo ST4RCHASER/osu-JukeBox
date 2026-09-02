@@ -588,7 +588,7 @@ namespace JukeBox.Game.Tests.Presence
         [Test]
         public void StringsThatAlreadyFitAreLeftAlone()
         {
-            Assert.That(DiscordPresenceClient.ClampLength("storyboard · FREEDOM DIVE"), Is.EqualTo("storyboard · FREEDOM DIVE"));
+            Assert.That(DiscordPresenceClient.ClampLength("Stardust (by ginkiha)"), Is.EqualTo("Stardust (by ginkiha)"));
         }
 
         [Test]
