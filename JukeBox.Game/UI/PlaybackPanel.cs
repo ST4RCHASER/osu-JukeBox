@@ -68,6 +68,9 @@ public partial class PlaybackPanel : CompositeDrawable
     private PlaybackSpeedSlider playbackRateRow = null!;
     private SpriteText virtualAudioNote = null!;
 
+    /// <summary>The keyboard-shortcut hint under the transport — see where it is built.</summary>
+    private SpriteText shortcutHint = null!;
+
     /// <summary>Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the tab's pieces,
     /// so tests can assert what this section contains without depending on its internal layout.</summary>
     internal NowPlayingPanel NowPlaying => nowPlaying;
@@ -75,6 +78,10 @@ public partial class PlaybackPanel : CompositeDrawable
     internal QueuePanel Queue => queuePanel;
 
     internal PlaybackSpeedSlider PlaybackRateSlider => playbackRateRow;
+
+    /// <summary>Test-only: the keyboard-shortcut hint. Exposed so the one place the shortcuts are
+    /// discoverable from can't quietly disappear in a layout edit.</summary>
+    internal SpriteText ShortcutHint => shortcutHint;
 
     [BackgroundDependencyLoader]
     private void load()
@@ -125,6 +132,18 @@ public partial class PlaybackPanel : CompositeDrawable
                             // cancellation moves off-panel (see PlaybackRateSlider).
                             Padding = new MarginPadding { Horizontal = -SettingsPanel.CONTENT_MARGINS },
                             Child = playbackRateRow,
+                        },
+                        // Where the keyboard shortcuts are discoverable from: one line, directly
+                        // under the very controls they drive, rather than a section in Settings the
+                        // user would have to already suspect exists. Only the everyday five —
+                        // the full set (meter selection, mute, zoom reset, media keys) is in
+                        // Input.PlaybackShortcuts, and a line long enough to list all of them would
+                        // wrap into a paragraph nobody reads.
+                        shortcutHint = new SpriteText
+                        {
+                            Text = "Space play/pause · ←→ seek · ↑↓ volume · PgUp/PgDn speed",
+                            Font = FontUsage.Default.With(size: Theme.CaptionTextSize),
+                            Colour = Theme.TextTertiary,
                         },
                         // The queue keeps its own "Queue (N)" header — that count IS this section's
                         // header, so there is no second one here.

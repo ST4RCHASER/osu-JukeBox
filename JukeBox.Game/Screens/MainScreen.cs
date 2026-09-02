@@ -3,6 +3,7 @@
 using System;
 using JukeBox.Game.Configuration;
 using JukeBox.Game.Import;
+using JukeBox.Game.Input;
 using JukeBox.Game.Online;
 using JukeBox.Game.Playback;
 using JukeBox.Game.UI;
@@ -19,6 +20,10 @@ using osu.Framework.Screens;
 using osuTK;
 using osuTK.Graphics;
 using osuTK.Input;
+
+// Only the one type, not the namespace: osu.Game.Overlays also declares a BeatmapListingOverlay and
+// a SettingsOverlay, which this app has its own same-named versions of.
+using VolumeOverlay = osu.Game.Overlays.VolumeOverlay;
 
 namespace JukeBox.Game.Screens;
 
@@ -150,6 +155,16 @@ public partial class MainScreen : Screen
     /// </summary>
     private const float toast_depth = -1;
 
+    /// <summary>
+    /// The transient HUD layer — lazer's volume meters, the speed/zoom readout, and the shortcut
+    /// handler that drives both. In front of the columns and both modals (so the readouts are never
+    /// buried by what you are using, and so the shortcut handler sees keys before the screen's own
+    /// type-anywhere handling and before the hosted ruleset), but behind
+    /// <see cref="toast_depth"/>: a toast carries something that has to be read, a volume bar does
+    /// not.
+    /// </summary>
+    private const float hud_depth = -0.5f;
+
     /// <summary>See showTabBody: the departing body needs to lose its opacity fast, which is ease-OUT
     /// rather than <see cref="Theme.EaseExit"/>'s ease-IN.</summary>
     private const Easing tab_exit_easing = Easing.OutQuint;
@@ -164,6 +179,10 @@ public partial class MainScreen : Screen
     private Box leftColumnSurface = null!;
     private Box rightColumnSurface = null!;
     private ToastOverlay toastOverlay = null!;
+
+    private VolumeOverlay volumeOverlay = null!;
+
+    private TransientValueOverlay transientValues = null!;
     private Container sceneContainer = null!;
     private FillFlowContainer detachedPlaceholder = null!;
     private ScreenStack visualsStack = null!;
@@ -508,6 +527,18 @@ public partial class MainScreen : Screen
             fullscreenListing,
             mapIdOverlay,
             fileImportOverlay,
+            // Lazer's REAL volume overlay, hosted as-is rather than reimplemented: it needs only an
+            // AudioManager and an OsuColour (both already cached), it caches itself for its own
+            // MasterVolumeMeter, and it binds straight to the framework's master/effect/music
+            // bindables — the very ones the Settings sliders bind — so the two agree for free. It
+            // brings its own meters, its own selection cycling and its own timing; see
+            // Input.PlaybackShortcuts, which drives it through its public Adjust.
+            volumeOverlay = new VolumeOverlay { Depth = hud_depth },
+            // The speed/zoom readout. Volume is not routed here — see TransientValueOverlay.
+            transientValues = new TransientValueOverlay { Depth = hud_depth },
+            // In FRONT of the columns and the modals so it sees keys before the screen's own
+            // type-anywhere handling and before the hosted ruleset, but behind the toasts.
+            new PlaybackShortcuts(volumeOverlay, transientValues) { Depth = hud_depth },
             // Toasts are the LAST word in the draw order, and deliberately at the screen's top
             // level rather than inside playerBox (user request). Inside the box they anchored to
             // the PLAYER's bottom-right, which moves with the sidebars, focus mode and
@@ -1035,9 +1066,10 @@ public partial class MainScreen : Screen
         if (key >= Key.Number0 && key <= Key.Number9)
             return (char)('0' + (key - Key.Number0));
 
-        if (key == Key.Space)
-            return ' ';
-
+        // Space is deliberately NOT a search-opening character any more: it is play/pause (see
+        // Input.PlaybackShortcuts), and opening the listing seeded with a leading space — which is
+        // trimmed before the query is sent anyway — was never worth a key that every media player
+        // binds to the transport.
         return null;
     }
 

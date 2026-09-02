@@ -421,13 +421,17 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
                     Hide();
                 return true;
 
+            // Declined outright with nothing to move through, rather than swallowed to do nothing.
+            // The DOCKED listing holds focus for the whole session, and the focused drawable gets
+            // first refusal on every key — so consuming Up/Down with an empty result list silently
+            // took those keys away from the rest of the app permanently. Returning false hands them
+            // on (see Input.PlaybackShortcuts, where they are volume), while a listing that
+            // actually has results still navigates them as before.
             case Key.Up:
-                moveSelection(-1);
-                return true;
+                return moveSelection(-1);
 
             case Key.Down:
-                moveSelection(1);
-                return true;
+                return moveSelection(1);
 
             case Key.Enter:
             case Key.KeypadEnter:
@@ -438,13 +442,16 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
         return base.OnKeyDown(e);
     }
 
-    private void moveSelection(int delta)
+    /// <returns>Whether there was anything to move through — see the Up/Down cases in
+    /// <see cref="OnKeyDown"/> for why the caller needs to know.</returns>
+    private bool moveSelection(int delta)
     {
         if (cardsFlow.Count == 0)
-            return;
+            return false;
 
         int newIndex = selectedIndex < 0 ? 0 : Math.Clamp(selectedIndex + delta, 0, cardsFlow.Count - 1);
         setSelectedIndex(newIndex);
+        return true;
     }
 
     private void setSelectedIndex(int index)
