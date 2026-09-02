@@ -22,6 +22,32 @@ namespace JukeBox.Game.Tests.Beatmaps
         [TearDown]
         public void TearDown() { if (Directory.Exists(tmp)) Directory.Delete(tmp, true); }
 
+        /// <summary>
+        /// Each difficulty carries its OWN [Metadata] Creator out of the scan, because a guest
+        /// difficulty names a different mapper from whoever owns the set. Nothing above the cache can
+        /// credit the right person if this drops the field, and the presence card's third line
+        /// ("Insane (by ...)") is built from it — a formatter test cannot see this wiring, so it gets
+        /// its own.
+        /// </summary>
+        [Test]
+        public void EachDifficultyKeepsItsOwnMapper()
+        {
+            string dir = Path.Combine(tmp, "set");
+            Directory.CreateDirectory(dir);
+
+            const string header = "osu file format v14\n\n[General]\nAudioFilename: audio.mp3\nMode: 0\n\n[Metadata]\n";
+
+            File.WriteAllText(Path.Combine(dir, "host.osu"), header + "Version:Insane\nCreator:ginkiha\n");
+            File.WriteAllText(Path.Combine(dir, "guest.osu"), header + "Version:Nathan's Extra\nCreator:Nathan\n");
+            File.WriteAllBytes(Path.Combine(dir, "audio.mp3"), new byte[] { 0xFF });
+
+            var set = new BeatmapCache(Path.Combine(tmp, "cache"), new GatedMirror(makeOsz())).LoadFromDirectory(1, dir);
+
+            Assert.That(set.Difficulties.Single(d => d.Version == "Insane").Creator, Is.EqualTo("ginkiha"));
+            Assert.That(set.Difficulties.Single(d => d.Version == "Nathan's Extra").Creator, Is.EqualTo("Nathan"),
+                "a guest difficulty credits its own mapper, not the set host");
+        }
+
         private string makeOsz()
         {
             string dir = Path.Combine(tmp, "build"); Directory.CreateDirectory(dir);

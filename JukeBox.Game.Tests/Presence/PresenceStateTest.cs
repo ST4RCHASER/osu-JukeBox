@@ -31,9 +31,10 @@ namespace JukeBox.Game.Tests.Presence
             bool showStoryboard = true,
             bool hasVideo = false,
             bool showVideo = true,
-            double notPlayingForMs = 0)
+            double notPlayingForMs = 0,
+            string? mapper = null)
             => new PresenceInputs(title, artist, difficulty, hasStoryboard, renderChart, playing, position, length, rate, now,
-                onlineSetId, showStoryboard, hasVideo, showVideo, TimeSpan.FromMilliseconds(notPlayingForMs));
+                onlineSetId, showStoryboard, hasVideo, showVideo, TimeSpan.FromMilliseconds(notPlayingForMs), mapper);
 
         // ---- the activity verb follows what is actually on screen ----
 
@@ -121,7 +122,7 @@ namespace JukeBox.Game.Tests.Presence
             foreach (var state in new[] { listening, chart, storyboard, video, both })
             {
                 Assert.That(state.Details, Is.EqualTo("FREEDOM DIVE"), "details line");
-                Assert.That(state.State, Is.EqualTo("xi · [Insane]"), "state line");
+                Assert.That(state.State, Is.EqualTo("xi"), "state line");
             }
 
             Assert.That(listening.Activity, Is.EqualTo(PresenceActivity.Listening));
@@ -274,22 +275,61 @@ namespace JukeBox.Game.Tests.Presence
 
         // ---- content ----
 
+        /// <summary>
+        /// The three lines the card stacks, in order: title, artist, then difficulty and mapper.
+        /// The artist has the second line to ITSELF — the difficulty used to be appended there and
+        /// has moved down to line three to sit with its creator.
+        /// </summary>
         [Test]
-        public void TheArtistIsTheSecondLine()
+        public void TheCardStacksTitleThenArtistThenDifficultyByMapper()
         {
-            Assert.That(DiscordPresenceService.Build(inputs())!.State, Is.EqualTo("xi"));
+            var state = DiscordPresenceService.Build(inputs(difficulty: "Stardust", mapper: "ginkiha", onlineSetId: 1084287))!;
+
+            Assert.That(state.Details, Is.EqualTo("FREEDOM DIVE"), "line 1");
+            Assert.That(state.State, Is.EqualTo("xi"), "line 2");
+            Assert.That(state.ImageText, Is.EqualTo("Stardust (by ginkiha)"), "line 3");
         }
 
         [Test]
-        public void TheDifficultyJoinsTheArtistWhenThereIsOne()
+        public void TheDifficultyNoLongerRidesOnTheArtistLine()
         {
-            var state = DiscordPresenceService.Build(inputs(difficulty: "FOUR DIMENSIONS"))!;
+            var state = DiscordPresenceService.Build(inputs(difficulty: "FOUR DIMENSIONS", mapper: "Nathan"))!;
 
-            Assert.That(state.State, Is.EqualTo("xi · [FOUR DIMENSIONS]"));
+            Assert.That(state.State, Is.EqualTo("xi"));
+            Assert.That(state.State, Does.Not.Contain("FOUR DIMENSIONS"));
+            Assert.That(state.State, Does.Not.Contain("["));
         }
 
         [Test]
-        public void ABlankDifficultyIsNotShownAsEmptyBrackets()
+        public void TheDifficultyLineNamesItsMapper()
+        {
+            Assert.That(DiscordPresenceService.DifficultyLine("Stardust", "ginkiha"), Is.EqualTo("Stardust (by ginkiha)"));
+        }
+
+        /// <summary>
+        /// No mapper is a difficulty on its own, never a dangling "( by )".
+        /// </summary>
+        [Test]
+        public void AnUnknownMapperLeavesJustTheDifficulty()
+        {
+            Assert.That(DiscordPresenceService.DifficultyLine("Stardust", null), Is.EqualTo("Stardust"));
+            Assert.That(DiscordPresenceService.DifficultyLine("Stardust", "   "), Is.EqualTo("Stardust"));
+        }
+
+        /// <summary>
+        /// And no difficulty means no line at all — a bare "(by ginkiha)" would credit nothing.
+        /// </summary>
+        [Test]
+        public void NoDifficultyMeansNoThirdLineRatherThanAHalfOne()
+        {
+            Assert.That(DiscordPresenceService.DifficultyLine(null, "ginkiha"), Is.Null);
+            Assert.That(DiscordPresenceService.DifficultyLine("   ", "ginkiha"), Is.Null);
+            Assert.That(DiscordPresenceService.Build(inputs(difficulty: null, mapper: "ginkiha", onlineSetId: 1084287))!.ImageText,
+                Is.Null);
+        }
+
+        [Test]
+        public void ABlankDifficultyLeavesTheArtistLineAlone()
         {
             Assert.That(DiscordPresenceService.Build(inputs(difficulty: "   "))!.State, Is.EqualTo("xi"));
         }
@@ -382,13 +422,32 @@ namespace JukeBox.Game.Tests.Presence
             Assert.That(DiscordPresenceService.NeedsRepublish(listening, watching), Is.True);
         }
 
+        /// <summary>
+        /// The difficulty now lives on the third line ALONE — the title and artist above it are
+        /// unchanged by a difficulty switch. So this is the case that would silently stop reaching
+        /// Discord if the republish check ever went back to comparing only the top two lines.
+        /// </summary>
         [Test]
         public void SwitchingDifficultyRepublishes()
         {
-            var easy = DiscordPresenceService.Build(inputs(difficulty: "Easy"))!;
-            var insane = DiscordPresenceService.Build(inputs(difficulty: "Insane"))!;
+            var easy = DiscordPresenceService.Build(inputs(difficulty: "Easy", mapper: "ginkiha", onlineSetId: 1084287))!;
+            var insane = DiscordPresenceService.Build(inputs(difficulty: "Insane", mapper: "ginkiha", onlineSetId: 1084287))!;
 
+            Assert.That(easy.Details, Is.EqualTo(insane.Details), "precondition: line 1 is unchanged");
+            Assert.That(easy.State, Is.EqualTo(insane.State), "precondition: line 2 is unchanged");
             Assert.That(DiscordPresenceService.NeedsRepublish(easy, insane), Is.True);
+        }
+
+        /// <summary>
+        /// Same difficulty, different guest mapper — also only visible on the third line.
+        /// </summary>
+        [Test]
+        public void ADifferentMapperForTheSameDifficultyRepublishes()
+        {
+            var mine = DiscordPresenceService.Build(inputs(difficulty: "Insane", mapper: "ginkiha", onlineSetId: 1084287))!;
+            var guest = DiscordPresenceService.Build(inputs(difficulty: "Insane", mapper: "Nathan", onlineSetId: 1084287))!;
+
+            Assert.That(DiscordPresenceService.NeedsRepublish(mine, guest), Is.True);
         }
 
         [Test]
@@ -469,13 +528,16 @@ namespace JukeBox.Game.Tests.Presence
         }
 
         [Test]
-        public void TheTextCrossesOnTheTwoPresenceLines()
+        public void TheThreeLinesCrossOntoTheCard()
         {
             var presence = DiscordPresenceClient.BuildRichPresence(
-                DiscordPresenceService.Build(inputs(hasStoryboard: true, difficulty: "Insane"))!);
+                DiscordPresenceService.Build(inputs(hasStoryboard: true, difficulty: "Insane", mapper: "ginkiha",
+                    onlineSetId: 1084287))!);
 
-            Assert.That(presence.Details, Is.EqualTo("FREEDOM DIVE"));
-            Assert.That(presence.State, Is.EqualTo("xi · [Insane]"));
+            Assert.That(presence.Details, Is.EqualTo("FREEDOM DIVE"), "line 1");
+            Assert.That(presence.State, Is.EqualTo("xi"), "line 2");
+            // The large image's text, which the client renders as the visible third row.
+            Assert.That(presence.Assets!.LargeImageText, Is.EqualTo("Insane (by ginkiha)"), "line 3");
         }
 
         [Test]
@@ -552,10 +614,10 @@ namespace JukeBox.Game.Tests.Presence
         [Test]
         public void ThePlayingSetsCoverBecomesTheLargeImage()
         {
-            var state = DiscordPresenceService.Build(inputs(onlineSetId: 1084287))!;
+            var state = DiscordPresenceService.Build(inputs(onlineSetId: 1084287, difficulty: "Insane", mapper: "ginkiha"))!;
 
             Assert.That(state.ImageUrl, Is.EqualTo("https://b.ppy.sh/thumb/1084287l.jpg"));
-            Assert.That(state.ImageText, Is.EqualTo("xi - FREEDOM DIVE"));
+            Assert.That(state.ImageText, Is.EqualTo("Insane (by ginkiha)"));
         }
 
         /// <summary>
@@ -614,12 +676,13 @@ namespace JukeBox.Game.Tests.Presence
         [Test]
         public void TheCoverCrossesAsAnExternalLargeImage()
         {
-            var assets = DiscordPresenceClient.BuildAssets(DiscordPresenceService.Build(inputs(onlineSetId: 1084287))!)!;
+            var assets = DiscordPresenceClient.BuildAssets(
+                DiscordPresenceService.Build(inputs(onlineSetId: 1084287, difficulty: "Insane", mapper: "ginkiha"))!)!;
 
             // Sent as a plain URL. Discord rewrites it into its own signed mp:external/… proxy form
             // on the way in (verified live against a real client); nothing here has to do that.
             Assert.That(assets.LargeImageKey, Is.EqualTo("https://b.ppy.sh/thumb/1084287l.jpg"));
-            Assert.That(assets.LargeImageText, Is.EqualTo("xi - FREEDOM DIVE"));
+            Assert.That(assets.LargeImageText, Is.EqualTo("Insane (by ginkiha)"));
         }
 
         /// <summary>

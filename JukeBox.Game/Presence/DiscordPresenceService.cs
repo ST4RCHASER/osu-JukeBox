@@ -4,6 +4,7 @@ using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using JukeBox.Game.Beatmaps;
 using JukeBox.Game.Configuration;
 using JukeBox.Game.LazerPlayer;
 using JukeBox.Game.Playback;
@@ -268,10 +269,13 @@ public partial class DiscordPresenceService : Component
                 : null;
         }
 
+        var difficulty = currentDifficulty();
+
         return new PresenceInputs(
             Title: set.DisplayTitle,
             Artist: set.DisplayArtist,
-            Difficulty: currentDifficultyName(),
+            Difficulty: string.IsNullOrWhiteSpace(difficulty?.Version) ? null : difficulty.Version,
+            Mapper: currentMapper(difficulty),
             HasStoryboard: hasStoryboard,
             RenderChart: renderChart.Value,
             IsPlaying: playback.IsPlaying,
@@ -315,7 +319,7 @@ public partial class DiscordPresenceService : Component
 
     private DateTime? notPlayingSince;
 
-    private string? currentDifficultyName()
+    private DifficultyInfo? currentDifficulty()
     {
         string? osuFile = playback.SelectedOsuFile.Value;
         var set = playback.Current.Value;
@@ -323,18 +327,33 @@ public partial class DiscordPresenceService : Component
         if (osuFile == null || set == null)
             return null;
 
-        string? version = set.Difficulties.FirstOrDefault(d => d.Path == osuFile)?.Version;
+        return set.Difficulties.FirstOrDefault(d => d.Path == osuFile);
+    }
 
-        return string.IsNullOrWhiteSpace(version) ? null : version;
+    /// <summary>
+    /// Who to credit for the playing difficulty. The .osu's own Creator first, because a guest
+    /// difficulty names its own mapper and that is who the card should credit; the set's online
+    /// Creator second, which is all a locally imported map without that field has.
+    /// </summary>
+    private string? currentMapper(DifficultyInfo? difficulty)
+    {
+        string? creator = difficulty?.Creator;
+
+        if (!string.IsNullOrWhiteSpace(creator))
+            return creator;
+
+        creator = jukebox.NowPlaying.Value?.Creator;
+
+        return string.IsNullOrWhiteSpace(creator) ? null : creator;
     }
 
     /// <summary>
     /// What Discord should be showing, given the state of the app.
     ///
     /// <para>
-    /// The TEXT is the same in every case — title on the details line, artist and difficulty on the
-    /// state line, the shape Spotify uses. Only the activity verb changes, so the header carries all
-    /// of the "what is happening" and the body stays purely about the music.
+    /// The TEXT is the same in every case, and stacks on the card in three lines: the title, the
+    /// artist, then the difficulty and who mapped it. Only the activity verb changes, so the header
+    /// carries all of the "what is happening" and the body stays purely about the music.
     /// </para>
     ///
     /// <para>
@@ -371,16 +390,12 @@ public partial class DiscordPresenceService : Component
 
         var activity = watching ? PresenceActivity.Watching : PresenceActivity.Listening;
 
+        // The artist now has the second line to itself; the difficulty moved down to the third,
+        // where it sits with its mapper — the pairing that actually means something together.
         string state = artist;
 
-        if (inputs.Difficulty is { } difficulty && difficulty.Trim().Length > 0)
-            state = state.Length > 0 ? $"{state} · [{difficulty.Trim()}]" : $"[{difficulty.Trim()}]";
-
         string? imageUrl = CoverUrl(inputs.OnlineSetId);
-        string? imageText = imageUrl == null ? null
-            : artist.Length > 0 && title.Length > 0 ? $"{artist} - {title}"
-            : title.Length > 0 ? title
-            : artist;
+        string? imageText = imageUrl == null ? null : DifficultyLine(inputs.Difficulty, inputs.Mapper);
 
         DateTime? start = null;
         DateTime? end = null;
@@ -397,6 +412,36 @@ public partial class DiscordPresenceService : Component
         }
 
         return new PresenceState(activity, title, state, start, end, imageUrl, imageText);
+    }
+
+    /// <summary>
+    /// The card's third line: the difficulty, credited to whoever made it.
+    ///
+    /// <para>
+    /// This is carried by the large image's text, which the client renders as a visible row under
+    /// the state line rather than only as a hover tooltip — confirmed against a real card, where it
+    /// showed up as the third line of the activity. That field caps at 128 characters and its setter
+    /// throws rather than truncating, so the result still goes through the clamp on the way out.
+    /// </para>
+    ///
+    /// <para>
+    /// Null with no difficulty to name: there is nothing to credit, and half a line ("(by ginkiha)"
+    /// on its own, or a stray "( by )") would read as a bug. The mapper alone is dropped for the same
+    /// reason.
+    /// </para>
+    /// </summary>
+    /// <param name="difficulty">The playing difficulty's name.</param>
+    /// <param name="mapper">Who made that difficulty — not always whoever owns the set.</param>
+    internal static string? DifficultyLine(string? difficulty, string? mapper)
+    {
+        string name = difficulty?.Trim() ?? string.Empty;
+
+        if (name.Length == 0)
+            return null;
+
+        string by = mapper?.Trim() ?? string.Empty;
+
+        return by.Length > 0 ? $"{name} (by {by})" : name;
     }
 
     /// <summary>
@@ -465,6 +510,12 @@ public partial class DiscordPresenceService : Component
         // Two different sets can carry the same title and artist (a remap, a different mapper's
         // upload), and their covers are still different pictures.
         if (published.ImageUrl != next.ImageUrl)
+            return true;
+
+        // The third line lives here, so switching difficulty on one set changes NOTHING above and
+        // would otherwise never be sent — the whole card would keep crediting the previous
+        // difficulty. This is the line that makes a difficulty switch reach Discord.
+        if (published.ImageText != next.ImageText)
             return true;
 
         return !withinTolerance(published.StartUtc, next.StartUtc) || !withinTolerance(published.EndUtc, next.EndUtc);
@@ -575,6 +626,7 @@ public partial class DiscordPresenceService : Component
 /// <param name="Title">Romanized track title, as shown in the app.</param>
 /// <param name="Artist">Romanized artist, as shown in the app.</param>
 /// <param name="Difficulty">Name of the difficulty on screen, or null when there isn't one.</param>
+/// <param name="Mapper">Who made that difficulty, or null when nothing declares it.</param>
 /// <param name="HasStoryboard">Whether the difficulty on screen actually draws a storyboard.</param>
 /// <param name="ShowStoryboard">Whether the storyboard setting is on. Paired with
 /// <paramref name="HasStoryboard"/>: a toggle on for a map without one shows nothing.</param>
@@ -604,4 +656,5 @@ public readonly record struct PresenceInputs(
     bool ShowStoryboard = true,
     bool HasVideo = false,
     bool ShowVideo = true,
-    TimeSpan NotPlayingFor = default);
+    TimeSpan NotPlayingFor = default,
+    string? Mapper = null);

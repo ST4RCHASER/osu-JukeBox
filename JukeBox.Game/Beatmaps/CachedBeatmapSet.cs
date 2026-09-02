@@ -36,4 +36,10 @@ public class DifficultyInfo
     public string Version = "";    // [Metadata] Version (difficulty name); filename fallback
     public int Mode;               // [General] Mode: 0 = osu!std
     public string? AudioFilename;  // [General] AudioFilename (relative, as written in the file)
+
+    /// <summary>
+    /// [Metadata] Creator — who made THIS difficulty, which is not always whoever owns the set: a
+    /// guest difficulty names its own mapper. Null when the file doesn't declare one.
+    /// </summary>
+    public string? Creator;
 }

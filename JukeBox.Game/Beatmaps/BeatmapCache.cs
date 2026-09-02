@@ -479,6 +479,7 @@ public class BeatmapCache
                 Version = string.IsNullOrEmpty(info.Version) ? Path.GetFileNameWithoutExtension(osuFile) : info.Version,
                 Mode = info.Mode,
                 AudioFilename = info.AudioFilename,
+                Creator = info.Creator,
             });
 
             if (preferred == null || (preferredInfo!.Mode != 0 && info.Mode == 0))
