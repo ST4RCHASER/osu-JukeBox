@@ -582,6 +582,84 @@ public class BeatmapCache
         }
     }
 
+    /// <summary>
+    /// Deletes every cached set that can be fetched again, and reports what it did so the caller
+    /// can say so. Unlike <see cref="EvictToLimit"/> this is user-initiated and unconditional —
+    /// there is no size target and no least-recently-played ordering, because the user asked for
+    /// the space back rather than for the cache to stay under a limit.
+    ///
+    /// <para>
+    /// Two kinds of set survive, and both are counted rather than silently skipped.
+    /// <paramref name="protectedIds"/> is for sets that must not go while they are in use — the
+    /// one that is playing, whose folder the storyboard and video keep reading from for the rest
+    /// of the song. Locally-imported sets (negative ids, see <see cref="LocalSetId"/>) survive
+    /// unconditionally: no mirror has them, so deleting one destroys the only copy of a file the
+    /// user dragged in, which is not what "clear the cache" is asking for.
+    /// </para>
+    ///
+    /// <para>
+    /// Everything else goes, queued sets included. A queue entry whose set is no longer cached
+    /// re-downloads on demand the next time it plays (see <c>Jukebox.advanceRoundBodyAsync</c>,
+    /// which checks <see cref="IsCached"/> and falls through to <see cref="GetAsync"/>), so
+    /// keeping them back would cost disk for no benefit.
+    /// </para>
+    /// </summary>
+    public CacheClearResult Clear(IReadOnlyCollection<int> protectedIds)
+    {
+        if (!Directory.Exists(root))
+            return default;
+
+        int deleted = 0, keptInUse = 0, keptLocal = 0;
+        long freed = 0;
+
+        foreach (string dir in Directory.EnumerateDirectories(root))
+        {
+            // Same rule as EvictToLimit: only bare-integer directories are sets, which also skips
+            // the "<id>.extracting" and "import-<guid>.extracting" staging dirs of a download in
+            // flight — deleting one of those out from under an active import would break it.
+            if (!int.TryParse(Path.GetFileName(dir), out int setId))
+                continue;
+
+            if (setId < 0)
+            {
+                keptLocal++;
+                continue;
+            }
+
+            if (protectedIds.Contains(setId))
+            {
+                keptInUse++;
+                continue;
+            }
+
+            long size = dirSize(dir);
+
+            try
+            {
+                Directory.Delete(dir, true);
+                deleted++;
+                freed += size;
+            }
+            catch (Exception ex)
+            {
+                // One unreadable folder must not abandon the rest of the clear.
+                Logger.Error(ex, $"BeatmapCache: failed to delete set {setId} while clearing the cache");
+            }
+        }
+
+        Logger.Log($"BeatmapCache: cleared {deleted} set(s), {freed / (1024.0 * 1024.0):F1} MB freed "
+                   + $"({keptInUse} in use, {keptLocal} locally imported, kept)");
+
+        return new CacheClearResult(deleted, freed, keptInUse, keptLocal);
+    }
+
     private static long dirSize(string dir)
         => Directory.EnumerateFiles(dir, "*", osu_enum_options).Sum(f => new FileInfo(f).Length);
 }
+
+/// <summary>
+/// What a <see cref="BeatmapCache.Clear"/> actually did. Carries the kept counts as well as the
+/// deleted ones so the settings UI can explain a clear that left files behind, rather than
+/// reporting a freed figure the user can contradict by looking at the folder.
+/// </summary>
+public readonly record struct CacheClearResult(int SetsDeleted, long BytesFreed, int SetsKeptInUse, int SetsKeptLocal);

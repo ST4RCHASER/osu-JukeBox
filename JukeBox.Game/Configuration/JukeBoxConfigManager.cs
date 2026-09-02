@@ -395,6 +395,15 @@ public enum UiLayout
 
 public class JukeBoxConfigManager : IniConfigManager<JukeBoxSetting>
 {
+    /// <summary>
+    /// The file this manager reads and writes, in app storage — <see cref="IniConfigManager{T}"/>'s
+    /// own default, named here so callers can ask whether it exists YET. Its absence is what
+    /// JukeBoxGameBase treats as "this app has never run here", which is the only reliable
+    /// first-run signal available: the framework's own config file is written out in full the
+    /// first time any framework setting moves, which happens during window creation.
+    /// </summary>
+    public const string CONFIG_FILE = "game.ini";
+
     public JukeBoxConfigManager(Storage storage)
         : base(storage)
     {

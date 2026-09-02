@@ -127,6 +127,36 @@ namespace JukeBox.Game
             => dependencies = new DependencyContainer(base.CreateChildDependencies(parent));
 
         /// <summary>
+        /// Hit sounds are loud next to the music this app exists to play, so a new install starts
+        /// them at 60% rather than the framework's full volume.
+        /// </summary>
+        internal const double FRESH_INSTALL_EFFECT_VOLUME = 0.6;
+
+        /// <summary>
+        /// Applies <see cref="FRESH_INSTALL_EFFECT_VOLUME"/>, but ONLY on a first run.
+        ///
+        /// <para>
+        /// This is a starting value, not a migration, and the distinction is the whole point: the
+        /// effect volume lives in the FRAMEWORK's config, whose store is written out in full on
+        /// first save — every key, defaults included — so an existing install's framework.ini
+        /// already carries a VolumeEffect line whether or not the user ever moved the slider.
+        /// There is no per-key "was this deliberately set" flag anywhere in
+        /// <c>ConfigManager</c> to consult. So the only honest question we can ask is "has this
+        /// app ever run here before", and an existing user is left alone regardless of what their
+        /// effect volume happens to be — including when it is still the framework's own 100%.
+        /// </para>
+        ///
+        /// <para>
+        /// Static and bindable-taking so the rule is testable without a game host.
+        /// </para>
+        /// </summary>
+        internal static void ApplyFreshInstallEffectVolume(bool freshInstall, Bindable<double> effectVolume)
+        {
+            if (freshInstall)
+                effectVolume.Value = FRESH_INSTALL_EFFECT_VOLUME;
+        }
+
+        /// <summary>
         /// See the cache site in load(): a beat-sync provider with nothing to sync to. The clock
         /// must be non-null — BeatSyncedContainer.Update dereferences it unconditionally (lazer's
         /// Beatmap-backed provider always has a track clock); a never-started stopwatch keeps
@@ -150,6 +180,7 @@ namespace JukeBox.Game
         private LazerRulesetConfigCache lazerRulesetConfigs = null!;
         private SkinSelection skinSelection = null!;
         private SkinLibrary skinLibrary = null!;
+        private UI.JukeBoxDialogOverlay dialogOverlay = null!;
         private ChartModSelection chartMods = null!;
         private PlayfieldElementVisibility playfieldElements = null!;
         private ChartConversion chartConversion = null!;
@@ -243,6 +274,14 @@ namespace JukeBox.Game
                 Margin = new MarginPadding { Right = 10, Bottom = 10 },
             });
 
+            // Confirmation dialogs, on base.Content for the same reason as the FPS counter above:
+            // a dialog must cover the whole window, including the scaling container everything
+            // else lives inside. Cached as lazer's own IDialogOverlay so anything that pushes a
+            // dialog here is written exactly as it would be in lazer — see JukeBoxDialogOverlay
+            // for why the host is ours while the dialogs are not.
+            base.Content.Add(dialogOverlay = new UI.JukeBoxDialogOverlay());
+            dependencies.CacheAs<osu.Game.Overlays.IDialogOverlay>(dialogOverlay);
+
             // The realm-backed skin store, cached exactly as OsuGameBase caches it. Nothing in our
             // own skin chain consults it (LazerSkinProvider never falls back to parent lookups) —
             // it exists because scattered lazer gameplay pieces hard-resolve it for default-skin
@@ -270,8 +309,19 @@ namespace JukeBox.Game
             dependencies.Cache(menuSamples);
             Add(menuSamples);
 
+            // Sampled BEFORE the config manager is constructed, because constructing it is what
+            // creates the file. Our own game.ini is the freshness signal rather than the
+            // framework's framework.ini: the framework writes its whole store — every key,
+            // including ones nobody ever touched — the first time ANY of its settings changes,
+            // and window creation changes several of them before this point, so by now
+            // framework.ini may already exist on a first run. game.ini only appears once one of
+            // OUR settings moves, which nothing does during startup.
+            bool freshInstall = !Host.Storage.Exists(JukeBoxConfigManager.CONFIG_FILE);
+
             var config = new JukeBoxConfigManager(Host.Storage);
             dependencies.Cache(config);
+
+            ApplyFreshInstallEffectVolume(freshInstall, frameworkConfig.GetBindable<double>(osu.Framework.Configuration.FrameworkSetting.VolumeEffect));
 
             var mirror = new SwitchableMirror(new NerinyanMirror(http), new CatboyMirror(http), new OsuDirectMirror(http),
                 config.GetBindable<MirrorSource>(JukeBoxSetting.PreferredMirror));

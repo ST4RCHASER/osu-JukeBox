@@ -125,6 +125,7 @@ public partial class SettingsOverlay : FocusedOverlayContainer
 
     // ---- our settings ----
     private SkinSettingsDropdown skinDropdown = null!;
+    private MaintenanceSection maintenanceSection = null!;
     private SettingsCheckbox showStoryboardVideoCheckbox = null!;
     private SettingsSlider<double> backgroundDimRow = null!;
     private SettingsSlider<double> backgroundBlurRow = null!;
@@ -243,6 +244,7 @@ public partial class SettingsOverlay : FocusedOverlayContainer
     internal SettingsCheckbox RemoveChartMaskCheckbox => removeChartMaskCheckbox;
     internal SettingsCheckbox RemoveStoryboardMaskCheckbox => removeStoryboardMaskCheckbox;
     internal SettingsDropdown<SkinChoice> SkinDropdown => skinDropdown;
+    internal MaintenanceSection MaintenanceSection => maintenanceSection;
     internal SettingsDropdown<string> AudioDeviceDropdown => audioDeviceDropdown;
     internal SettingsSlider<double> MasterVolumeSlider => masterVolumeRow;
     internal SettingsCheckbox DetachPlayerCheckbox => detachPlayerCheckbox;
@@ -537,6 +539,11 @@ public partial class SettingsOverlay : FocusedOverlayContainer
                 discordPresenceCheckbox = new SettingsCheckbox { LabelText = "Discord Rich Presence" },
             },
         });
+
+        // Last section, and deliberately so: these are one-shot destructive actions rather than
+        // settings, and putting them anywhere above would mean scrolling past a pair of delete
+        // buttons to reach something you actually wanted to change.
+        sections.Add(maintenanceSection = new MaintenanceSection());
 
         // Quiet build stamp, last thing in the scrolling body — lazer puts its own version in the
         // same place. Deliberately NOT a settings row: no label column, no separator, centred and

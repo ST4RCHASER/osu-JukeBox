@@ -91,6 +91,50 @@ public partial class SkinLibrary : Component
     }
 
     /// <summary>
+    /// Deletes one imported skin's folder and re-lists. Returns false when the folder was already
+    /// gone or could not be removed, so the caller reports what happened rather than claiming a
+    /// deletion that did not.
+    ///
+    /// <para>
+    /// Deleting the SELECTED skin is deliberately NOT this method's business: the library only
+    /// knows what is installed, and nothing here reads or writes
+    /// <see cref="Configuration.JukeBoxSetting.Skin"/>. <c>MaintenanceSection</c> moves the
+    /// selection off the doomed skin first, and only then deletes.
+    /// </para>
+    /// </summary>
+    public bool Delete(string folder)
+    {
+        // A plain folder name, never a path. A caller passing "../../something" or an absolute
+        // path must not be able to steer a recursive delete out of the skins directory.
+        if (folder.Length == 0 || folder != Path.GetFileName(folder))
+        {
+            Logger.Log($"SkinLibrary: refusing to delete '{folder}' — not a plain folder name");
+            return false;
+        }
+
+        string directory = Path.Combine(Root, folder);
+
+        try
+        {
+            if (!Directory.Exists(directory))
+                return false;
+
+            Directory.Delete(directory, true);
+            Logger.Log($"SkinLibrary: deleted imported skin '{folder}'");
+            return true;
+        }
+        catch (Exception e)
+        {
+            Logger.Error(e, $"SkinLibrary: failed to delete imported skin '{folder}'");
+            return false;
+        }
+        finally
+        {
+            Refresh();
+        }
+    }
+
+    /// <summary>
     /// Lists the skins installed under <paramref name="skinsRoot"/>, ordered by display name
     /// (case-insensitive, ties broken by folder name so the order is stable across runs) and
     /// labelled with duplicate names disambiguated.

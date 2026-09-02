@@ -1,5 +1,6 @@
 #nullable enable
 
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -15,6 +16,7 @@ using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Shapes;
 using osu.Framework.Platform;
 using osu.Framework.Testing;
+using osu.Game.Overlays.Dialog;
 using osu.Game.Overlays.Settings;
 using osuTK.Input;
 
@@ -651,6 +653,207 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("config untouched", () => config.Get<string>(JukeBoxSetting.CustomSkinPath) == "deleted-by-hand");
         }
 
+        // ---- Maintenance ----------------------------------------------------------------
+
+        // The destructive actions are one-shot things you DO, so they sit at the very bottom —
+        // but the build stamp stays the last thing in the body regardless.
+        [Test]
+        public void MaintenanceIsTheLastSectionAndTheVersionStampStaysBelowIt()
+        {
+            AddStep("show overlay", () => overlay.Show());
+            AddStep("scroll maintenance into view", () => overlay.ScrollControlIntoView(overlay.MaintenanceSection));
+            AddUntilStep("laid out", () => overlay.MaintenanceSection.DrawHeight > 0);
+
+            AddAssert("the version stamp sits below Maintenance", () =>
+                overlay.VersionDrawable.ScreenSpaceDrawQuad.AABBFloat.Top
+                >= overlay.MaintenanceSection.ScreenSpaceDrawQuad.AABBFloat.Bottom - 1);
+        }
+
+        // Nothing is deleted on the button press alone — the press only asks.
+        [Test]
+        public void ClearingTheCacheDoesNothingUntilItIsConfirmed()
+        {
+            AddStep("put a set in the cache", () => writeCachedSet(4242));
+            AddStep("show overlay", () => overlay.Show());
+
+            AddStep("press clear", () => overlay.MaintenanceSection.ClearCacheButton.TriggerClick());
+
+            AddUntilStep("a confirmation is up", () => currentDialog() != null);
+            AddAssert("and the set is still there", () => Directory.Exists(cachedSetPath(4242)));
+
+            AddStep("cancel", () => currentDialog()!.PerformAction<PopupDialogCancelButton>());
+            AddUntilStep("dialog dismissed", () => currentDialog() == null);
+            AddAssert("still there after cancelling", () => Directory.Exists(cachedSetPath(4242)));
+        }
+
+        [Test]
+        public void ConfirmingTheClearEmptiesTheCacheAndReportsWhatItFreed()
+        {
+            AddStep("put two sets in the cache", () =>
+            {
+                writeCachedSet(4242);
+                writeCachedSet(4243);
+            });
+
+            AddStep("show overlay", () => overlay.Show());
+            AddStep("press clear", () => overlay.MaintenanceSection.ClearCacheButton.TriggerClick());
+            AddUntilStep("a confirmation is up", () => currentDialog() != null);
+            AddStep("confirm", () => currentDialog()!.PerformAction<PopupDialogDangerousButton>());
+
+            AddUntilStep("both sets are gone", () => !Directory.Exists(cachedSetPath(4242)) && !Directory.Exists(cachedSetPath(4243)));
+            AddUntilStep("and it says how much it freed", () => overlay.MaintenanceSection.Status.Contains("Cleared 2 beatmaps")
+                                                               && overlay.MaintenanceSection.Status.Contains("KB"));
+        }
+
+        // One button per imported skin, named so it cannot be misread.
+        [Test]
+        public void EachImportedSkinGetsItsOwnRemoveButton()
+        {
+            AddStep("install two skins", () =>
+            {
+                installSkin("aristia-archive", "Aristia");
+                installSkin("rafis-2019", "Rafis");
+                skinLibrary.Refresh();
+            });
+
+            AddStep("show overlay", () => overlay.Show());
+
+            AddUntilStep("one button each, by name", () => overlay.MaintenanceSection.SkinRemoveButtons
+                .Select(b => b.Text.ToString())
+                .SequenceEqual(new[] { "Remove skin \"Aristia\"", "Remove skin \"Rafis\"" }));
+        }
+
+        /// <summary>
+        /// The danger buttons must not touch. lazer's SettingsButton carries a NEGATIVE vertical
+        /// margin (-5, so -10 across the pair) which a FillFlowContainer takes straight off the
+        /// step between children — so the obvious Spacing of 8 renders as a 2px overlap and three
+        /// buttons read as one continuous pink slab. Measured off the rendered rectangles, because
+        /// that is the only place the bug was visible.
+        /// </summary>
+        [Test]
+        public void TheDangerButtonsAreEvenlySpacedAndNeverOverlap()
+        {
+            AddStep("install two skins", () =>
+            {
+                installSkin("aristia-archive", "Aristia");
+                installSkin("rafis-2019", "Rafis");
+                skinLibrary.Refresh();
+            });
+
+            AddStep("show overlay", () => overlay.Show());
+            AddUntilStep("all three buttons laid out", () => overlay.MaintenanceSection.SkinRemoveButtons.Count == 2
+                                                            && overlay.MaintenanceSection.ClearCacheButton.DrawHeight > 0);
+            AddWaitStep("let the flow settle", 3);
+
+            AddAssert("every gap is the row spacing, and positive", () =>
+            {
+                var rects = maintenanceButtonRects();
+
+                for (int i = 1; i < rects.Count; i++)
+                {
+                    float gap = rects[i].Top - rects[i - 1].Bottom;
+
+                    if (gap <= 0 || Math.Abs(gap - Theme.RowSpacing) > 0.5f)
+                        return false;
+                }
+
+                return rects.Count == 3;
+            });
+        }
+
+        [Test]
+        public void RemovingASkinDeletesOnlyItsOwnFolderAndOnlyOnceConfirmed()
+        {
+            AddStep("install two skins", () =>
+            {
+                installSkin("aristia-archive", "Aristia");
+                installSkin("rafis-2019", "Rafis");
+                skinLibrary.Refresh();
+            });
+
+            AddStep("show overlay", () => overlay.Show());
+            AddStep("press remove on Aristia", () => overlay.MaintenanceSection.SkinRemoveButtons[0].TriggerClick());
+
+            AddUntilStep("a confirmation is up", () => currentDialog() != null);
+            AddAssert("nothing deleted yet", () => Directory.Exists(Path.Combine(skinsRoot, "aristia-archive")));
+
+            AddStep("confirm", () => currentDialog()!.PerformAction<PopupDialogDangerousButton>());
+
+            AddUntilStep("Aristia is gone", () => !Directory.Exists(Path.Combine(skinsRoot, "aristia-archive")));
+            AddAssert("Rafis is untouched", () => Directory.Exists(Path.Combine(skinsRoot, "rafis-2019")));
+            AddUntilStep("the library dropped it", () => skinLibrary.Skins.Select(s => s.Folder).SequenceEqual(new[] { "rafis-2019" }));
+        }
+
+        // Deleting the skin that is SELECTED must leave a working selection behind. Classic, not
+        // Argon: it is this app's legacy-fidelity default, and someone running an imported legacy
+        // skin lands closer to where they were.
+        [Test]
+        public void RemovingTheSelectedSkinFallsBackToClassicAndSaysSo()
+        {
+            AddStep("install and select a skin", () =>
+            {
+                installSkin("aristia-archive", "Aristia");
+                skinLibrary.Refresh();
+                config.SetValue(JukeBoxSetting.CustomSkinPath, "aristia-archive");
+                config.SetValue(JukeBoxSetting.Skin, JukeBoxSkin.Custom);
+            });
+
+            AddStep("show overlay", () => overlay.Show());
+            AddStep("press remove", () => overlay.MaintenanceSection.SkinRemoveButtons[0].TriggerClick());
+            AddUntilStep("a confirmation is up", () => currentDialog() != null);
+            AddStep("confirm", () => currentDialog()!.PerformAction<PopupDialogDangerousButton>());
+
+            AddUntilStep("gone from disk", () => !Directory.Exists(Path.Combine(skinsRoot, "aristia-archive")));
+            AddAssert("selection fell back to Classic", () => config.Get<JukeBoxSkin>(JukeBoxSetting.Skin) == JukeBoxSkin.Classic);
+            AddAssert("and no import is left selected", () => config.Get<string>(JukeBoxSetting.CustomSkinPath).Length == 0);
+            AddAssert("the status says which and what happened", () => overlay.MaintenanceSection.Status == "Removed \"Aristia\". Gameplay skin is now Classic.");
+        }
+
+        [Test]
+        public void RemovingTheLastSkinLeavesTheDropdownWithBuiltInsOnly()
+        {
+            AddStep("install one skin", () =>
+            {
+                installSkin("solo-skin", "Solo");
+                skinLibrary.Refresh();
+            });
+
+            AddStep("show overlay", () => overlay.Show());
+            AddStep("press remove", () => overlay.MaintenanceSection.SkinRemoveButtons[0].TriggerClick());
+            AddUntilStep("a confirmation is up", () => currentDialog() != null);
+            AddStep("confirm", () => currentDialog()!.PerformAction<PopupDialogDangerousButton>());
+
+            AddUntilStep("no removal buttons left", () => overlay.MaintenanceSection.SkinRemoveButtons.Count == 0);
+            AddUntilStep("dropdown is bundled skins only", () => overlay.SkinDropdown.Items.All(i => !i.IsImported));
+        }
+
+        [Resolved]
+        private osu.Game.Overlays.IDialogOverlay dialogOverlay { get; set; } = null!;
+
+        private PopupDialog? currentDialog() => dialogOverlay.CurrentDialog;
+
+        /// <summary>The Maintenance section's buttons as rendered, top to bottom.</summary>
+        private List<osu.Framework.Graphics.Primitives.RectangleF> maintenanceButtonRects()
+            => new[] { overlay.MaintenanceSection.ClearCacheButton }
+               .Concat(overlay.MaintenanceSection.SkinRemoveButtons)
+               .Select(b => b.ScreenSpaceDrawQuad.AABBFloat)
+               .OrderBy(r => r.Top)
+               .ToList();
+
+        private string cachedSetPath(int setId) => Path.Combine(host.Storage.GetFullPath("cache"), setId.ToString());
+
+        /// <summary>A cache folder that looks enough like a set for BeatmapCache to count it.</summary>
+        private void writeCachedSet(int setId)
+        {
+            string dir = cachedSetPath(setId);
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(Path.Combine(dir, "map.osu"), "osu file format v14\n");
+            File.WriteAllBytes(Path.Combine(dir, "audio.mp3"), new byte[4096]);
+            cachedSets.Add(setId);
+        }
+
+        private readonly List<int> cachedSets = new List<int>();
+
         [Resolved]
         private SkinLibrary skinLibrary { get; set; } = null!;
 
@@ -691,8 +894,20 @@ namespace JukeBox.Game.Tests.Visual
         [TearDown]
         public void RemoveInstalledSkins()
         {
-            if (installedSkins.Count == 0)
+            // Nothing was written, so nothing to undo — and nothing to ask `host` for. TearDown
+            // also runs for TestConstructor, which never loads the scene and so never gets one.
+            if (installedSkins.Count == 0 && cachedSets.Count == 0)
                 return;
+
+            foreach (int setId in cachedSets)
+            {
+                string dir = cachedSetPath(setId);
+
+                if (Directory.Exists(dir))
+                    Directory.Delete(dir, true);
+            }
+
+            cachedSets.Clear();
 
             foreach (string folder in installedSkins)
             {

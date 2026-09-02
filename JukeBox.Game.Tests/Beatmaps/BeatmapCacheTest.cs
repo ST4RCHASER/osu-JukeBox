@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.IO.Compression;
+using System.Linq;
 using System.Threading.Tasks;
 using JukeBox.Game.Beatmaps;
 using JukeBox.Game.Online;
@@ -207,6 +208,110 @@ namespace JukeBox.Game.Tests.Beatmaps
 
             Assert.That(Directory.Exists(dirOld), Is.True);
             Assert.That(Directory.Exists(dirMid), Is.False);
+        }
+
+        [Test]
+        public void ClearDeletesEveryRedownloadableSetAndReportsWhatItFreed()
+        {
+            string cacheDir = Path.Combine(tmp, "cache");
+            Directory.CreateDirectory(cacheDir);
+
+            string a = makeFakeSetDir(cacheDir, 100, 1024 * 1024, new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+            string b = makeFakeSetDir(cacheDir, 200, 2 * 1024 * 1024, new DateTime(2026, 1, 2, 0, 0, 0, DateTimeKind.Utc));
+
+            var cache = new BeatmapCache(cacheDir, new FileMirror(Path.Combine(tmp, "unused.osz")));
+
+            var result = cache.Clear(Array.Empty<int>());
+
+            Assert.That(Directory.Exists(a), Is.False);
+            Assert.That(Directory.Exists(b), Is.False);
+            Assert.That(result.SetsDeleted, Is.EqualTo(2));
+            Assert.That(result.BytesFreed, Is.EqualTo(3 * 1024 * 1024));
+            Assert.That(result.SetsKeptInUse, Is.Zero);
+            Assert.That(result.SetsKeptLocal, Is.Zero);
+        }
+
+        // The set that is playing keeps its folder: the storyboard and video read from it for the
+        // rest of the song, so deleting it would break what is on screen right now.
+        [Test]
+        public void ClearKeepsTheSetThatIsPlayingAndSaysSo()
+        {
+            string cacheDir = Path.Combine(tmp, "cache");
+            Directory.CreateDirectory(cacheDir);
+
+            string playing = makeFakeSetDir(cacheDir, 100, 1024 * 1024, new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+            string other = makeFakeSetDir(cacheDir, 200, 1024 * 1024, new DateTime(2026, 1, 2, 0, 0, 0, DateTimeKind.Utc));
+
+            var cache = new BeatmapCache(cacheDir, new FileMirror(Path.Combine(tmp, "unused.osz")));
+
+            var result = cache.Clear(new[] { 100 });
+
+            Assert.That(Directory.Exists(playing), Is.True);
+            Assert.That(Directory.Exists(other), Is.False);
+            Assert.That(result.SetsDeleted, Is.EqualTo(1));
+            Assert.That(result.SetsKeptInUse, Is.EqualTo(1));
+            Assert.That(result.BytesFreed, Is.EqualTo(1024 * 1024), "the kept set's bytes are not counted as freed");
+        }
+
+        // Negative ids are sets the user dragged in as a .osz. No mirror has them, so deleting one
+        // destroys the only copy — which is not what "clear the cache" is asking for.
+        [Test]
+        public void ClearNeverDeletesLocallyImportedSets()
+        {
+            string cacheDir = Path.Combine(tmp, "cache");
+            Directory.CreateDirectory(cacheDir);
+
+            string local = makeFakeSetDir(cacheDir, -42, 1024 * 1024, new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+            string downloaded = makeFakeSetDir(cacheDir, 200, 1024 * 1024, new DateTime(2026, 1, 2, 0, 0, 0, DateTimeKind.Utc));
+
+            var cache = new BeatmapCache(cacheDir, new FileMirror(Path.Combine(tmp, "unused.osz")));
+
+            var result = cache.Clear(Array.Empty<int>());
+
+            Assert.That(Directory.Exists(local), Is.True);
+            Assert.That(Directory.Exists(downloaded), Is.False);
+            Assert.That(result.SetsKeptLocal, Is.EqualTo(1));
+        }
+
+        // A download in flight extracts into "<id>.extracting"; deleting that mid-import would
+        // break it. Only bare-integer directories are sets.
+        [Test]
+        public void ClearLeavesAnInFlightImportAlone()
+        {
+            string cacheDir = Path.Combine(tmp, "cache");
+            string staging = Path.Combine(cacheDir, "777.extracting");
+            Directory.CreateDirectory(staging);
+            File.WriteAllBytes(Path.Combine(staging, "partial.bin"), new byte[1024]);
+
+            var cache = new BeatmapCache(cacheDir, new FileMirror(Path.Combine(tmp, "unused.osz")));
+
+            cache.Clear(Array.Empty<int>());
+
+            Assert.That(Directory.Exists(staging), Is.True);
+        }
+
+        /// <summary>
+        /// The claim that makes clearing safe for queued songs: a set that was cleared is simply
+        /// fetched again the next time it is asked for, rather than erroring. Exercised at the
+        /// cache itself, which is where the queue's play path lands (<c>Jukebox</c> checks
+        /// <see cref="BeatmapCache.IsCached"/> and falls through to <see cref="BeatmapCache.GetAsync"/>).
+        /// </summary>
+        [Test]
+        public async Task AClearedSetIsDownloadedAgainOnDemand()
+        {
+            var mirror = new FileMirror(makeOsz());
+            var cache = new BeatmapCache(Path.Combine(tmp, "cache"), mirror);
+
+            await cache.GetAsync(4242).ConfigureAwait(false);
+            Assert.That(cache.IsCached(4242), Is.True, "cached by the first fetch");
+
+            cache.Clear(Array.Empty<int>());
+            Assert.That(cache.IsCached(4242), Is.False, "and gone after the clear");
+
+            var again = await cache.GetAsync(4242).ConfigureAwait(false);
+
+            Assert.That(cache.IsCached(4242), Is.True, "re-downloaded on demand rather than throwing");
+            Assert.That(Directory.EnumerateFiles(again.Directory, "*.osu", SearchOption.AllDirectories).Any(), Is.True);
         }
 
         private static string makeFakeSetDir(string cacheDir, int setId, int sizeBytes, DateTime mtimeUtc)

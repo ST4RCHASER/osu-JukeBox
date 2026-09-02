@@ -116,6 +116,44 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("restore Argon", () => config.SetValue(JukeBoxSetting.Skin, JukeBoxSkin.Argon));
         }
 
+        /// <summary>
+        /// A skin folder vanishing under a running process — which is exactly what the Maintenance
+        /// section does to the detached viewer, since both processes read the same skins directory.
+        /// It must degrade, not throw: the viewer re-resolves on its next song and shows a bundled
+        /// skin rather than falling over.
+        /// </summary>
+        [Test]
+        public void ASelectedSkinDeletedFromUnderUsDegradesInsteadOfThrowing()
+        {
+            AddStep("install and select a skin", () =>
+            {
+                string directory = Path.Combine(skinsRoot, installed[0]);
+                Directory.CreateDirectory(directory);
+                File.WriteAllText(Path.Combine(directory, "skin.ini"), "[General]\nName: Doomed\nVersion: 2.5\n");
+                installedAny = true;
+
+                config.SetValue(JukeBoxSetting.CustomSkinPath, installed[0]);
+                config.SetValue(JukeBoxSetting.Skin, JukeBoxSkin.Custom);
+            });
+
+            AddAssert("it resolves while it exists", () => skins.CustomSkinDirectory != null);
+
+            AddStep("delete it from under the app", () => Directory.Delete(Path.Combine(skinsRoot, installed[0]), true));
+
+            AddAssert("the directory now resolves to nothing", () => skins.CustomSkinDirectory == null);
+            AddAssert("and building a skin falls back rather than throwing", () =>
+            {
+                using var skin = skins.CreateEffectiveSkin(resources);
+                return skin is ArgonSkin;
+            });
+
+            AddStep("restore Argon", () =>
+            {
+                config.SetValue(JukeBoxSetting.Skin, JukeBoxSkin.Argon);
+                config.SetValue(JukeBoxSetting.CustomSkinPath, string.Empty);
+            });
+        }
+
         private static readonly string[] installed = { "roll-a", "roll-b", "roll-c", "roll-d" };
 
         [Resolved]

@@ -153,7 +153,29 @@ namespace JukeBox.Game.Tests.LazerPlayer
             Assert.That(listed[0].Name, Is.EqualTo("Aristia Reborn"), "and it now goes by the updated skin.ini name");
         }
 
-        /// <param name="fileName">Both the archive's file name and, by default, the declared name.</param>
+        // Removing one skin takes exactly its folder and nothing beside it.
+        [Test]
+        public void RemovingASkinDropsOnlyThatOneFromTheLibrary()
+        {
+            install("aristia-old", "Aristia");
+            install("rafis-2019", "Rafis");
+
+            Directory.Delete(Path.Combine(skinsRoot, "aristia-old"), true);
+
+            Assert.That(SkinLibrary.Scan(skinsRoot).Select(s => s.Folder), Is.EqualTo(new[] { "rafis-2019" }));
+        }
+
+        [Test]
+        public void RemovingTheLastSkinLeavesAnEmptyLibrary()
+        {
+            install("solo", "Solo");
+            Directory.Delete(Path.Combine(skinsRoot, "solo"), true);
+
+            Assert.That(SkinLibrary.Scan(skinsRoot), Is.Empty);
+        }
+
+        /// <param name="fileName">The archive's file name, which the installed folder is named after.</param>
+        /// <param name="declaredName">What its skin.ini declares; defaults to <paramref name="fileName"/>.</param>
         private string makeOsk(string fileName, string? declaredName = null)
         {
             string build = Path.Combine(tmp, "build-" + Path.GetRandomFileName());
