@@ -95,6 +95,100 @@ namespace JukeBox.Game.Tests.Visual
         // NOTE: deliberately NOT deleting `tmp` in teardown — see TestScenePlaybackController for
         // why (queued steps still run after this class's [TearDown] fires).
 
+        /// <summary>
+        /// The reported bug: on a song change the audio swapped immediately but the PREVIOUS song's
+        /// storyboard and chart kept running for seconds, because the outgoing stack was only taken
+        /// off screen once the incoming one had finished loading — a load that is seconds long on a
+        /// storyboard-heavy set. Whatever else the swap does, the old stack has to stop being what
+        /// the user is watching (and listening to) the moment the track changes.
+        /// </summary>
+        [Test]
+        public void TheOutgoingStackStopsTheMomentTheTrackChanges()
+        {
+            NowPlayingScreen screen = null!;
+            ScreenStack stack = null!;
+            BeatmapVisuals? first = null;
+
+            AddStep("reset selection", () =>
+            {
+                controller.Current.Value = null;
+                controller.SelectedOsuFile.Value = null;
+            });
+
+            AddStep("create screen", () => Add(stack = new ScreenStack(screen = new NowPlayingScreen())
+            {
+                RelativeSizeAxes = Axes.Both,
+            }));
+
+            AddStep("play the first set", () => controller.Current.Value = fixtureSet);
+            AddUntilStep("its visuals are on screen",
+                () => screen.CurrentVisuals?.IsLoaded == true && screen.CurrentVisuals.Alpha == 1);
+            AddStep("capture them", () => first = screen.CurrentVisuals);
+
+            // Same frame as the change, deliberately: this is the whole point. The assertion runs in
+            // the step immediately after, before any load can have completed.
+            AddStep("change song", () => controller.Current.Value = buildSet(2, hardDiff, null, hardDiff));
+
+            AddAssert("the old stack is retired at once", () => first!.Retired);
+            AddAssert("and silent — hitsounds off, and no longer kept alive to sound while hidden",
+                () => !first!.HasHitSoundPlayer && !first.ChartLayerAlwaysPresent
+                      && first.AudioAdjustments.Volume.Value == 0);
+            AddAssert("and off screen in that same frame, not once the new one loads", () => first!.Alpha == 0);
+            // Not present is what actually stops it animating: osu!framework skips the update
+            // subtree of a drawable that is not present (the same rule the hidden-chart hitsounds
+            // needed AlwaysPresent to escape, which Retire clears).
+            AddAssert("and no longer updating at all", () => !first!.IsPresent);
+
+            AddUntilStep("the new stack arrives and is not retired",
+                () => screen.CurrentVisuals != null && screen.CurrentVisuals != first
+                      && screen.CurrentVisuals.IsLoaded && !screen.CurrentVisuals.Retired);
+            AddAssert("the old one is gone entirely", () => first!.Disposed);
+
+            AddStep("remove screen", () => Remove(stack, true));
+        }
+
+        /// <summary>
+        /// A song change moves two bindables — the set and the difficulty selection — and used to
+        /// cost two full builds, the first thrown away for being a generation behind while both
+        /// competed for the same load threads. One change, one build.
+        /// </summary>
+        [Test]
+        public void ASongChangeBuildsExactlyOneStack()
+        {
+            NowPlayingScreen screen = null!;
+            ScreenStack stack = null!;
+            int buildsBefore = 0;
+
+            AddStep("reset selection", () =>
+            {
+                controller.Current.Value = null;
+                controller.SelectedOsuFile.Value = null;
+            });
+
+            AddStep("create screen", () => Add(stack = new ScreenStack(screen = new NowPlayingScreen())
+            {
+                RelativeSizeAxes = Axes.Both,
+            }));
+
+            AddStep("play the first set", () => controller.Current.Value = fixtureSet);
+            AddUntilStep("its visuals are on screen", () => screen.CurrentVisuals?.IsLoaded == true);
+            AddStep("note the build count", () => buildsBefore = screen.Builds);
+
+            // The controller sets these as a pair, and the difficulty is NOT the set's preferred
+            // one — the case that used to produce a second build.
+            AddStep("change song, selecting a non-preferred difficulty", () =>
+            {
+                controller.Current.Value = buildSet(4, easyDiff, null, easyDiff, hardDiff);
+                controller.SelectedOsuFile.Value = hardDiff;
+            });
+
+            AddUntilStep("the new stack is on screen",
+                () => screen.CurrentVisuals?.IsLoaded == true && screen.CurrentVisuals.OsuFile == hardDiff);
+            AddAssert("and it cost exactly one build", () => screen.Builds - buildsBefore == 1);
+
+            AddStep("remove screen", () => Remove(stack, true));
+        }
+
         [Test]
         public void SwitchingDifficultyRebuildsVisualsWithoutTouchingClock()
         {

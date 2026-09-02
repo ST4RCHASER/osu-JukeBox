@@ -202,6 +202,56 @@ public partial class BeatmapVisuals : CompositeDrawable
     /// <summary>Test-only: the lazer storyboard layer.</summary>
     internal LazerStoryboardLayer StoryboardLayer => storyboardLayer;
 
+    /// <summary>Test-only: whether this stack has been retired (see <see cref="Retire"/>).</summary>
+    internal bool Retired => retired;
+
+    private bool retired;
+
+
+    /// <summary>
+    /// Stops this stack being what the user is watching, immediately, without waiting for its
+    /// replacement to finish loading.
+    ///
+    /// <para>
+    /// The track swaps the instant the next song is ready, but building the next visual stack
+    /// (decoding a storyboard, converting the beatmap, building lazer's ruleset and its skin) takes
+    /// seconds on a heavy set — and for all of those seconds this stack was still on screen,
+    /// animating a storyboard and drawing a chart belonging to a song that had already stopped
+    /// playing. Hiding it here is what makes the visuals honest: black (or whatever the incoming
+    /// stack shows once it arrives) says "nothing to show yet", the previous song's storyboard says
+    /// something false.
+    /// </para>
+    ///
+    /// <para>
+    /// Sound is silenced explicitly rather than left to the fade: hitsounds run off the chart
+    /// layer, which is deliberately <see cref="Drawable.AlwaysPresent"/> so it keeps updating while
+    /// invisible (that is what makes "hitsounds with the chart hidden" work at all), so a layer
+    /// that was only faded out would go on playing the old song's hitsounds over the new one.
+    /// </para>
+    /// </summary>
+    internal void Retire()
+    {
+        if (retired)
+            return;
+
+        retired = true;
+
+        if (chartLayer != null)
+        {
+            chartLayer.HitSoundsEnabled.Value = false;
+            chartLayer.AlwaysPresent = false;
+        }
+
+        // Storyboard Sample events and keysounds, which reach the audio graph through this.
+        audioAdjustments.Volume.Value = 0;
+
+        // Hidden outright rather than faded: this drawable's clock IS the playback clock (see
+        // load's FramedOffsetClock), so a transform here would only run while the track is moving —
+        // retiring during a pause, a seek, or the gap between two songs would leave the old stack
+        // sitting on screen indefinitely, which is the bug rather than a softer version of the fix.
+        Alpha = 0;
+    }
+
     /// <summary>Test-only: whether a VISIBLE chart layer is currently present. The lazer layer
     /// also exists invisibly when only hitsounds are enabled (lazer's DrawableRuleset is the
     /// hitsound source), so visibility is the equivalent of the old chart-layer presence.</summary>
@@ -734,6 +784,11 @@ public partial class BeatmapVisuals : CompositeDrawable
     /// </summary>
     private void updateLazerLayer()
     {
+        // A retired stack is on its way off screen and has already been silenced (see Retire) —
+        // a setting changing under it must not build a layer or switch its hitsounds back on.
+        if (retired)
+            return;
+
         // A keysound-only set IS its hitsounds — the silent track carries no music, so leaving
         // them off the user's setting would play the map in total silence. Forced on for these
         // sets only; the setting is untouched and governs everything else as before.
@@ -799,6 +854,11 @@ public partial class BeatmapVisuals : CompositeDrawable
     protected override void Update()
     {
         base.Update();
+
+        // Nothing here is worth doing for a stack that is fading out and about to be removed, and
+        // the layer rules below would undo what Retire just switched off.
+        if (retired)
+            return;
 
         // A storyboard video's decoder fault only surfaces asynchronously — keep the background
         // rule live so a faulted (black) video brings the background back.

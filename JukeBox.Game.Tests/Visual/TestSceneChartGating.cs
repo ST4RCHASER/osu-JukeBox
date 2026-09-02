@@ -132,6 +132,63 @@ namespace JukeBox.Game.Tests.Visual
             });
         }
 
+        /// <summary>
+        /// Retiring a stack is what a song change does to the stack it replaces (see
+        /// NowPlayingScreen), and it has to stop BOTH halves of it: what is drawn and what is
+        /// heard. The audio half is the one that does not follow from hiding — the chart layer is
+        /// deliberately AlwaysPresent so it keeps updating (and sounding) while invisible, which is
+        /// what makes "hitsounds with the chart hidden" work, and is exactly what would keep the
+        /// old song's hitsounds playing over the new one.
+        /// </summary>
+        [Test]
+        public void RetiringAStackSilencesItAsWellAsHidingIt()
+        {
+            var manual = new ManualClock();
+            var framed = new FramedClock(manual);
+            BeatmapVisuals visuals = null!;
+
+            AddStep("create visuals", () => Add(visuals = new BeatmapVisuals(plainSet, framed)
+            {
+                RelativeSizeAxes = Axes.Both,
+            }));
+            AddUntilStep("chart layer built and sounding",
+                () => visuals.IsLoaded && visuals.ChartLayerBuilt && visuals.HasHitSoundPlayer && visuals.ChartLayerAlwaysPresent);
+
+            AddStep("advance the clock", () =>
+            {
+                manual.CurrentTime = 3000;
+                framed.ProcessFrame();
+            });
+            AddUntilStep("the stack follows it", () => System.Math.Abs(visuals.VisualClockTime - 3000) < 1);
+
+            AddStep("retire the stack", () => visuals.Retire());
+
+            AddAssert("it is retired", () => visuals.Retired);
+            AddAssert("its hitsounds are off and it is no longer kept alive to sound while hidden",
+                () => !visuals.HasHitSoundPlayer && !visuals.ChartLayerAlwaysPresent);
+            AddAssert("and the storyboard's own audio is silenced too", () => visuals.AudioAdjustments.Volume.Value == 0);
+
+            AddAssert("and it is off screen immediately, not on the next frame", () => visuals.Alpha == 0);
+
+            // Off screen is also what stops it ANIMATING: osu!framework skips the whole update
+            // subtree of a drawable that is not present, which is the same rule that made the
+            // hidden-chart hitsounds need AlwaysPresent in the first place. With that flag now
+            // cleared, the storyboard and the chart stop advancing along with everything else.
+            AddAssert("and not present, so nothing in it updates any more", () => !visuals.IsPresent);
+
+            // Settings must not resurrect it either: the layer rules run per frame and off bindables.
+            AddStep("toggle the chart settings under it", () =>
+            {
+                config.SetValue(JukeBoxSetting.RenderChart, false);
+                config.SetValue(JukeBoxSetting.RenderChart, true);
+            });
+            AddWaitStep("let frames pass", 5);
+            AddAssert("still silent, still hidden, still not present",
+                () => !visuals.HasHitSoundPlayer && !visuals.ChartLayerAlwaysPresent && visuals.Alpha == 0 && !visuals.IsPresent);
+
+            AddStep("remove visuals", () => Remove(visuals, true));
+        }
+
         // The per-beatmap/global audio offsets shift the whole visual clock relative to the track:
         // visual time = playback time + (beatmap offset + global offset).
         [Test]
