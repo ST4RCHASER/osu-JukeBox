@@ -25,21 +25,35 @@ namespace JukeBox.Game.Presence;
 internal sealed class DiscordPresenceClient : IPresenceClient
 {
     /// <summary>
-    /// The Discord application whose name appears after the activity verb — "Listening to
-    /// <em>this app's name</em>". It is the ONE value that has to be filled in for presence to
-    /// appear at all, and it is deliberately left as a placeholder rather than borrowed: shipping
-    /// somebody else's id (osu!lazer's, say) would advertise every listener as playing THEIR app.
+    /// The Discord application whose name appears after the activity verb — this is why the card
+    /// reads "Listening to osu!JukeBox". Application ids are public, not secrets.
     ///
     /// <para>
-    /// To turn presence on for a build: create a free application at
-    /// https://discord.com/developers/applications ("New Application", named exactly what the
-    /// activity should read as — "osu!JukeBox"), copy its Application ID off the General
-    /// Information page, and paste it here. Nothing else about the application needs configuring;
-    /// no OAuth, no bot, no redirect URL. Until then <see cref="Start"/> short-circuits and the
-    /// whole feature is inert — the setting still toggles, it just has no Discord to talk to.
+    /// This is osu!JukeBox's own application, and it must never be swapped for another project's
+    /// id (osu!lazer's, say): the id IS the app name on every listener's profile, so borrowing one
+    /// would advertise all of them as using somebody else's app. To point a fork at its own
+    /// application, create one at https://discord.com/developers/applications ("New Application",
+    /// named exactly what the activity should read as), copy its Application ID off the General
+    /// Information page, and replace this one value. Nothing else needs configuring — no OAuth, no
+    /// bot, no redirect URL. An id that doesn't parse leaves <see cref="Start"/> short-circuiting
+    /// and the feature inert rather than half-connected.
     /// </para>
     /// </summary>
-    public const string CLIENT_ID = "000000000000000000";
+    public const string CLIENT_ID = "1544686568302841997";
+
+    /// <summary>
+    /// Art asset for the small corner badge, which would keep the app identifiable alongside a
+    /// beatmap cover — the shape Spotify uses (album art large, service icon small). Empty, and so
+    /// not sent at all, because a badge needs an image uploaded under the application's
+    /// Rich Presence → Art Assets first and naming one that isn't there renders nothing. Upload an
+    /// icon, put its asset name here, and the badge appears.
+    ///
+    /// <para>
+    /// Leaving it empty costs no identity: the activity header spells out the application name
+    /// whatever the images show.
+    /// </para>
+    /// </summary>
+    public const string SMALL_IMAGE_KEY = "";
 
     private readonly string clientId;
 
@@ -175,7 +189,52 @@ internal sealed class DiscordPresenceClient : IPresenceClient
         Timestamps = state.StartUtc is { } start && state.EndUtc is { } end
             ? new Timestamps(start.ToUniversalTime(), end.ToUniversalTime())
             : null,
+        Assets = BuildAssets(state),
     };
+
+    /// <summary>
+    /// The images on the card. <see cref="Assets.LargeImageKey"/> takes a plain https URL as well as
+    /// the name of an image uploaded to the application, which is what lets the playing map's own
+    /// cover art appear there with nothing uploaded at all. Discord rewrites the URL into its own
+    /// signed <c>mp:external/…</c> proxy form on receipt and serves it from there — verified against
+    /// a live client, which echoed the rewritten key back.
+    ///
+    /// <para>
+    /// Null when there is nothing to put in either slot, which is not the same as an empty
+    /// <see cref="Assets"/>: with no images at all Discord falls back to the application's own icon,
+    /// so a local map with no published cover still shows something rather than a hole.
+    /// </para>
+    ///
+    /// <para>
+    /// Both values are clamped rather than passed through. The library's setters THROW
+    /// (<c>StringOutOfRangeException</c>) past Discord's caps — 256 characters for an image
+    /// reference, 128 for its tooltip — so an over-long one would cost the entire update, not just
+    /// the image.
+    /// </para>
+    /// </summary>
+    internal static Assets? BuildAssets(PresenceState state)
+    {
+        if (state.ImageUrl == null && SMALL_IMAGE_KEY.Length == 0)
+            return null;
+
+        return new Assets
+        {
+            LargeImageKey = state.ImageUrl,
+            LargeImageText = state.ImageText == null ? null : ClampLength(state.ImageText),
+            SmallImageKey = SMALL_IMAGE_KEY.Length > 0 ? SMALL_IMAGE_KEY : null,
+            SmallImageText = SMALL_IMAGE_KEY.Length > 0 ? app_name : null,
+        };
+    }
+
+    /// <summary>Tooltip on the small badge — the application's name, which is what that badge is.</summary>
+    private const string app_name = "osu!JukeBox";
+
+    /// <summary>
+    /// Discord's cap on an image reference (a URL or an uploaded asset name). The library's setter
+    /// throws <c>StringOutOfRangeException</c> past it rather than truncating, so an over-long value
+    /// costs the whole presence update, not just the picture.
+    /// </summary>
+    internal const int MAX_IMAGE_REFERENCE_LENGTH = 256;
 
     private const int max_bytes = 128;
 

@@ -234,7 +234,8 @@ public partial class DiscordPresenceService : Component
             // rate mods, so the timestamps scale correctly without this having to know about any
             // of them individually.
             Rate: playback.PlaybackClock.Rate,
-            NowUtc: DateTime.UtcNow);
+            NowUtc: DateTime.UtcNow,
+            OnlineSetId: set.Id);
     }
 
     private string? currentDifficultyName()
@@ -286,6 +287,12 @@ public partial class DiscordPresenceService : Component
         if (inputs.Difficulty is { } difficulty && difficulty.Trim().Length > 0)
             state = state.Length > 0 ? $"{state} · [{difficulty.Trim()}]" : $"[{difficulty.Trim()}]";
 
+        string? imageUrl = CoverUrl(inputs.OnlineSetId);
+        string? imageText = imageUrl == null ? null
+            : artist.Length > 0 && title.Length > 0 ? $"{artist} - {title}"
+            : title.Length > 0 ? title
+            : artist;
+
         DateTime? start = null;
         DateTime? end = null;
 
@@ -300,7 +307,34 @@ public partial class DiscordPresenceService : Component
             end = inputs.NowUtc + TimeSpan.FromMilliseconds((inputs.LengthMs - position) / inputs.Rate);
         }
 
-        return new PresenceState(activity, prefix + title, state, start, end);
+        return new PresenceState(activity, prefix + title, state, start, end, imageUrl, imageText);
+    }
+
+    /// <summary>
+    /// osu!'s published cover art for a beatmap set — the map's own background, which is what the
+    /// user is looking at while it plays, and the same image
+    /// <see cref="UI.NowPlayingPanel"/> already shows as the now-playing artwork.
+    ///
+    /// <para>
+    /// This particular variant on purpose: of everything osu! publishes for a set it is the only
+    /// near-square one (160x120), and Discord renders the large image in a square. The
+    /// <c>covers/</c> family is all letterbox strips by comparison — <c>card</c> is 400x100 and
+    /// <c>cover</c> 900x250, which would show as a thin band in that slot.
+    /// </para>
+    /// </summary>
+    /// <param name="onlineSetId">The set's osu! id, or 0 for a local or dropped map.</param>
+    /// <returns>The cover URL, or null when there is no online set to have one.</returns>
+    internal static string? CoverUrl(int onlineSetId)
+    {
+        if (onlineSetId <= 0)
+            return null;
+
+        // No length guard: Discord rejects an image reference over
+        // DiscordPresenceClient.MAX_IMAGE_REFERENCE_LENGTH characters and the library's setter
+        // throws rather than truncating, but a ten-digit id can only ever make this about forty
+        // characters. The cap is held by construction, and asserted as a property in the tests
+        // rather than re-checked here on every song change.
+        return $"https://b.ppy.sh/thumb/{onlineSetId}l.jpg";
     }
 
     /// <summary>
@@ -315,6 +349,11 @@ public partial class DiscordPresenceService : Component
             return true;
 
         if (published.Activity != next.Activity || published.Details != next.Details || published.State != next.State)
+            return true;
+
+        // Two different sets can carry the same title and artist (a remap, a different mapper's
+        // upload), and their covers are still different pictures.
+        if (published.ImageUrl != next.ImageUrl)
             return true;
 
         return !withinTolerance(published.StartUtc, next.StartUtc) || !withinTolerance(published.EndUtc, next.EndUtc);
@@ -406,6 +445,8 @@ public partial class DiscordPresenceService : Component
 /// <param name="LengthMs">Track length; 0 when unknown.</param>
 /// <param name="Rate">The playback clock's effective rate; 1 is normal speed.</param>
 /// <param name="NowUtc">The instant the timestamps are anchored to.</param>
+/// <param name="OnlineSetId">The set's osu! id, or 0 for a local or dropped map with no online
+/// listing (and therefore no published cover art).</param>
 public readonly record struct PresenceInputs(
     string Title,
     string Artist,
@@ -416,4 +457,5 @@ public readonly record struct PresenceInputs(
     double PositionMs,
     double LengthMs,
     double Rate,
-    DateTime NowUtc);
+    DateTime NowUtc,
+    int OnlineSetId = 0);

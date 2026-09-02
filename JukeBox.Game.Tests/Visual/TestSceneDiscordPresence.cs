@@ -129,9 +129,25 @@ namespace JukeBox.Game.Tests.Visual
         {
             AddUntilStep("initial presence sent", () => client.PublishCount == 1);
 
-            AddStep("next song", () => service.Inputs = service.Inputs with { Title = "Blue Zenith", Artist = "xi" });
+            AddStep("next song", () => service.Inputs = service.Inputs with { Title = "Blue Zenith", Artist = "xi", OnlineSetId = 292301 });
 
             AddUntilStep("presence follows", () => client.Published?.Details == "Blue Zenith");
+            AddAssert("and so does the cover art", () => client.Published!.ImageUrl == "https://b.ppy.sh/thumb/292301l.jpg");
+        }
+
+        /// <summary>
+        /// The cover rides the same debounced update as everything else — there is no second timer
+        /// and no separate fetch, so a song change carries the new art with it.
+        /// </summary>
+        [Test]
+        public void ALocalMapFallsBackToNoCover()
+        {
+            AddUntilStep("cover showing", () => client.Published?.ImageUrl != null);
+
+            AddStep("play something with no online listing", () => service.Inputs = service.Inputs with { OnlineSetId = 0 });
+
+            AddUntilStep("cover dropped", () => client.Published?.ImageUrl == null);
+            AddAssert("track still named", () => client.Published!.Details == "FREEDOM DIVE");
         }
 
         [Test]
@@ -183,7 +199,8 @@ namespace JukeBox.Game.Tests.Visual
                 PositionMs: 0,
                 LengthMs: 180_000,
                 Rate: 1,
-                NowUtc: new DateTime(2026, 9, 2, 12, 0, 0, DateTimeKind.Utc));
+                NowUtc: new DateTime(2026, 9, 2, 12, 0, 0, DateTimeKind.Utc),
+                OnlineSetId: 1084287);
 
             public bool Silent;
 

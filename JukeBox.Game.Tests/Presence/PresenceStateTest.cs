@@ -26,8 +26,9 @@ namespace JukeBox.Game.Tests.Presence
             double rate = 1,
             string title = "FREEDOM DIVE",
             string artist = "xi",
-            string? difficulty = null)
-            => new PresenceInputs(title, artist, difficulty, hasStoryboard, renderChart, playing, position, length, rate, now);
+            string? difficulty = null,
+            int onlineSetId = 0)
+            => new PresenceInputs(title, artist, difficulty, hasStoryboard, renderChart, playing, position, length, rate, now, onlineSetId);
 
         // ---- precedence: the activity follows what is actually on screen ----
 
@@ -331,12 +332,125 @@ namespace JukeBox.Game.Tests.Presence
         }
 
         [Test]
-        public void TheShippedClientIdIsRecognisedAsAPlaceholder()
+        public void TheShippedClientIdIsARealApplication()
         {
-            // The feature ships inert on purpose: borrowing another app's id would advertise every
-            // listener as using THAT app. Filling CLIENT_ID in is the deliberate step that turns it on.
-            Assert.That(DiscordPresenceClient.IsUsableClientId(DiscordPresenceClient.CLIENT_ID), Is.False);
-            Assert.That(DiscordPresenceClient.IsUsableClientId("1216669957799018608"), Is.True);
+            // osu!JukeBox's own application. The id IS the app name on every listener's profile, so
+            // a build shipping an unusable one would connect to nothing, and one shipping somebody
+            // else's would misattribute every user.
+            Assert.That(DiscordPresenceClient.CLIENT_ID, Is.EqualTo("1544686568302841997"));
+            Assert.That(DiscordPresenceClient.IsUsableClientId(DiscordPresenceClient.CLIENT_ID), Is.True);
+        }
+
+        [Test]
+        public void AnUnusableClientIdIsRejectedRatherThanHalfConnected()
+        {
+            Assert.That(DiscordPresenceClient.IsUsableClientId("000000000000000000"), Is.False);
+            Assert.That(DiscordPresenceClient.IsUsableClientId(string.Empty), Is.False);
+            Assert.That(DiscordPresenceClient.IsUsableClientId("not-an-id"), Is.False);
+        }
+
+        // ---- cover art ----
+
+        [Test]
+        public void ThePlayingSetsCoverBecomesTheLargeImage()
+        {
+            var state = DiscordPresenceService.Build(inputs(onlineSetId: 1084287))!;
+
+            Assert.That(state.ImageUrl, Is.EqualTo("https://b.ppy.sh/thumb/1084287l.jpg"));
+            Assert.That(state.ImageText, Is.EqualTo("xi - FREEDOM DIVE"));
+        }
+
+        /// <summary>
+        /// A local or dropped map has no online listing and so no published cover. Carrying no image
+        /// is what makes Discord fall back to the application's own icon; a made-up URL would leave
+        /// a broken hole on the card instead.
+        /// </summary>
+        [Test]
+        public void AMapWithNoOnlineIdCarriesNoImageAtAll()
+        {
+            var state = DiscordPresenceService.Build(inputs(onlineSetId: 0))!;
+
+            Assert.That(state.ImageUrl, Is.Null);
+            Assert.That(state.ImageText, Is.Null);
+        }
+
+        /// <summary>
+        /// The cover URL is handed straight to a setter that THROWS past Discord's 256-character
+        /// cap, taking the whole update with it. Nothing checks that at runtime because the format
+        /// cannot overflow — so the property is asserted here instead, across the widest set ids
+        /// representable, and it is this test that would catch a future format change (a title in
+        /// the path, say) that no longer holds it.
+        /// </summary>
+        [Test]
+        public void NoSetIdCanProduceACoverUrlOverDiscordsCap()
+        {
+            foreach (int setId in new[] { 1, 999, 1084287, int.MaxValue })
+            {
+                Assert.That(DiscordPresenceService.CoverUrl(setId),
+                    Has.Length.LessThanOrEqualTo(DiscordPresenceClient.MAX_IMAGE_REFERENCE_LENGTH),
+                    $"set id {setId}");
+            }
+        }
+
+        [Test]
+        public void ANonExistentSetIdIsNotACover()
+        {
+            Assert.That(DiscordPresenceService.CoverUrl(0), Is.Null);
+            Assert.That(DiscordPresenceService.CoverUrl(-1), Is.Null);
+        }
+
+        /// <summary>
+        /// Same title and artist, different mapset — a remap, or a second upload of the same song.
+        /// The text lines are identical, so only the cover says the picture changed.
+        /// </summary>
+        [Test]
+        public void ADifferentSetWithTheSameNameRepublishes()
+        {
+            var first = DiscordPresenceService.Build(inputs(onlineSetId: 1084287))!;
+            var second = DiscordPresenceService.Build(inputs(onlineSetId: 999999))!;
+
+            Assert.That(first.Details, Is.EqualTo(second.Details), "precondition: the text is identical");
+            Assert.That(DiscordPresenceService.NeedsRepublish(first, second), Is.True);
+        }
+
+        [Test]
+        public void TheCoverCrossesAsAnExternalLargeImage()
+        {
+            var assets = DiscordPresenceClient.BuildAssets(DiscordPresenceService.Build(inputs(onlineSetId: 1084287))!)!;
+
+            // Sent as a plain URL. Discord rewrites it into its own signed mp:external/… proxy form
+            // on the way in (verified live against a real client); nothing here has to do that.
+            Assert.That(assets.LargeImageKey, Is.EqualTo("https://b.ppy.sh/thumb/1084287l.jpg"));
+            Assert.That(assets.LargeImageText, Is.EqualTo("xi - FREEDOM DIVE"));
+        }
+
+        /// <summary>
+        /// The tooltip carries the mapset's own artist and title, which are arbitrary user content
+        /// and can be far longer than Discord's 128-character cap. The library's setter throws past
+        /// it rather than truncating, so the clamp is what keeps a long-titled map from silently
+        /// costing the entire presence update.
+        /// </summary>
+        [Test]
+        public void ALongTitledMapsTooltipIsClampedBeforeItReachesTheSetter()
+        {
+            var assets = DiscordPresenceClient.BuildAssets(new PresenceState(
+                PresenceActivity.Listening, "d", "s",
+                null, null,
+                DiscordPresenceService.CoverUrl(1084287),
+                new string('x', 500)))!;
+
+            Assert.That(assets.LargeImageText, Has.Length.LessThanOrEqualTo(128));
+        }
+
+        /// <summary>
+        /// Not an EMPTY assets block: an activity carrying no images at all is precisely what makes
+        /// Discord show the application icon, which is the intended fallback.
+        /// </summary>
+        [Test]
+        public void NoCoverAndNoBadgeMeansNoAssetsBlockAtAll()
+        {
+            Assert.That(DiscordPresenceClient.SMALL_IMAGE_KEY, Is.Empty, "precondition: no badge art is uploaded yet");
+            Assert.That(DiscordPresenceClient.BuildAssets(DiscordPresenceService.Build(inputs(onlineSetId: 0))!), Is.Null);
         }
 
         /// <summary>
@@ -351,11 +465,11 @@ namespace JukeBox.Game.Tests.Presence
 
             Assert.DoesNotThrow(() =>
             {
-                using var placeholder = new DiscordPresenceClient();
-                placeholder.Start();
-                placeholder.Publish(state);
-                placeholder.Clear();
-            }, "with the placeholder id");
+                using var unusable = new DiscordPresenceClient("000000000000000000");
+                unusable.Start();
+                unusable.Publish(state);
+                unusable.Clear();
+            }, "with an unusable id");
 
             Assert.DoesNotThrow(() =>
             {
@@ -367,10 +481,14 @@ namespace JukeBox.Game.Tests.Presence
             }, "with an id Discord will not accept");
         }
 
+        // Deliberately NOT DiscordPresenceClient.CLIENT_ID anywhere above: that is the real
+        // application, and connecting with it would flash a genuine "Listening to osu!JukeBox" onto
+        // whoever's Discord happens to be running the suite.
+
         [Test]
         public void PublishingBeforeStartDoesNotThrow()
         {
-            using var client = new DiscordPresenceClient();
+            using var client = new DiscordPresenceClient("000000000000000000");
 
             Assert.DoesNotThrow(() => client.Publish(DiscordPresenceService.Build(inputs())!));
         }

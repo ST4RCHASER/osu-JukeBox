@@ -34,9 +34,15 @@ public enum PresenceActivity
 /// (and what Spotify does) is to show no bar at all rather than a wrong one.</param>
 /// <param name="EndUtc">When the track will finish at the current rate. Null whenever
 /// <paramref name="StartUtc"/> is — Discord only draws a progress bar given both.</param>
+/// <param name="ImageUrl">The playing set's cover art, as a public URL. Null for a set with no
+/// online id — a local or dropped map has no published cover to point at — and Discord then falls
+/// back to the application's own icon, which is what it shows for an activity carrying no image.</param>
+/// <param name="ImageText">Hover tooltip for that image. Null whenever <paramref name="ImageUrl"/> is.</param>
 public sealed record PresenceState(
     PresenceActivity Activity,
     string Details,
     string State,
     DateTime? StartUtc,
-    DateTime? EndUtc);
+    DateTime? EndUtc,
+    string? ImageUrl = null,
+    string? ImageText = null);
