@@ -157,6 +157,12 @@ public partial class MainScreen : Screen
     private Container visualsHost = null!;
     private Container playerBox = null!;
     private Container boxFrame = null!;
+
+    // The two columns' own painted surfaces, held so the "everything released" look can make them
+    // slightly see-through without touching a single control on top of them (see
+    // updateReleasedChrome).
+    private Box leftColumnSurface = null!;
+    private Box rightColumnSurface = null!;
     private ToastOverlay toastOverlay = null!;
     private Container sceneContainer = null!;
     private FillFlowContainer detachedPlaceholder = null!;
@@ -244,6 +250,12 @@ public partial class MainScreen : Screen
     /// masking for a "Remove ... mask" setting.
     /// </summary>
     internal Container BoxFrame => boxFrame;
+
+    /// <summary>Test hooks: the painted surface inside each side column — the only part of a column
+    /// the "everything released" look touches (see <see cref="updateReleasedChrome"/>).</summary>
+    internal Box LeftColumnSurface => leftColumnSurface;
+
+    internal Box RightColumnSurface => rightColumnSurface;
 
     /// <summary>
     /// Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the toast stack, to assert
@@ -425,7 +437,7 @@ public partial class MainScreen : Screen
                 EdgeEffect = Theme.PanelShadow,
                 Children = new Drawable[]
                 {
-                    new Box
+                    leftColumnSurface = new Box
                     {
                         RelativeSizeAxes = Axes.Both,
                         Colour = Theme.PanelSurface,
@@ -450,7 +462,7 @@ public partial class MainScreen : Screen
                 EdgeEffect = Theme.PanelShadow,
                 Children = new Drawable[]
                 {
-                    new Box
+                    rightColumnSurface = new Box
                     {
                         RelativeSizeAxes = Axes.Both,
                         Colour = Theme.PanelSurface,
@@ -570,9 +582,11 @@ public partial class MainScreen : Screen
 
         removeChartMask = config.GetBindable<bool>(JukeBoxSetting.RemoveChartMask);
         removeStoryboardMask = config.GetBindable<bool>(JukeBoxSetting.RemoveStoryboardMask);
-        removeChartMask.BindValueChanged(_ => updatePlayerBoxMasking());
-        removeStoryboardMask.BindValueChanged(_ => updatePlayerBoxMasking());
+        removeChartMask.BindValueChanged(_ => releasesChanged());
+        removeStoryboardMask.BindValueChanged(_ => releasesChanged());
         updatePlayerBoxMasking();
+        // The resting state lands instantly; only live toggles animate (same rule as applyLayout).
+        updateReleasedChrome(animate: false);
 
         jukebox.Start();
 
@@ -695,6 +709,14 @@ public partial class MainScreen : Screen
     /// the gutter" wants the answer pinned down in a report.
     /// </para>
     /// </summary>
+    /// <summary>Either release changing moves two things: what the box clips, and how the chrome
+    /// around it looks.</summary>
+    private void releasesChanged()
+    {
+        updatePlayerBoxMasking();
+        updateReleasedChrome(animate: true);
+    }
+
     private void updatePlayerBoxMasking()
     {
         bool released = removeChartMask.Value || removeStoryboardMask.Value;
@@ -702,6 +724,44 @@ public partial class MainScreen : Screen
         playerBox.Masking = !released;
 
         Logger.Log($"Player box masking: removeChartMask={removeChartMask.Value} removeStoryboardMask={removeStoryboardMask.Value} → box {(released ? "releases its content (per-layer clips take over)" : "clips its content")}");
+    }
+
+    /// <summary>
+    /// How opaque a column's surface is while everything is released. Chosen by eye in the real
+    /// window against a bright storyboard: <see cref="Theme.PanelSurface"/> is itself 92% opaque, so
+    /// this lands at roughly two thirds coverage — enough that the spilled scene reads as continuing
+    /// behind the columns, not so little that the panel text loses its ground. The text and controls
+    /// are untouched: only the surface underneath them fades.
+    /// </summary>
+    internal const float released_surface_alpha = 0.85f;
+
+    /// <summary>
+    /// The "everything is released" look: with BOTH mask settings on, the player's card frame
+    /// (rounded corners, drop shadow and the black letterbox bed it paints) would be a rectangle
+    /// drawn ON TOP of content that is deliberately spilling past it, so it goes away entirely, and
+    /// the side columns turn slightly see-through so that content reads as continuing behind them.
+    ///
+    /// <para>
+    /// Deliberately BOTH releases rather than either: with one layer still clipped to the box, the
+    /// box is still the frame the user is looking at, and removing its card would leave that layer
+    /// cropped against nothing. This is also why the card is not tied to
+    /// <see cref="playerBox"/>'s masking, which follows either release on its own.
+    /// </para>
+    ///
+    /// <para>
+    /// Independent of focus mode: that fades the whole columns (and animates the card's radius)
+    /// without touching either of these, so the two compose — entering focus mode with everything
+    /// released takes columns that are already faded the rest of the way out.
+    /// </para>
+    /// </summary>
+    private void updateReleasedChrome(bool animate)
+    {
+        bool allReleased = removeChartMask.Value && removeStoryboardMask.Value;
+        double duration = animate ? Theme.DurationNormal : 0;
+
+        boxFrame.FadeTo(allReleased ? 0 : 1, duration, Theme.EaseEnter);
+        leftColumnSurface.FadeTo(allReleased ? released_surface_alpha : 1, duration, Theme.EaseEnter);
+        rightColumnSurface.FadeTo(allReleased ? released_surface_alpha : 1, duration, Theme.EaseEnter);
     }
 
     private void updateSceneScale()

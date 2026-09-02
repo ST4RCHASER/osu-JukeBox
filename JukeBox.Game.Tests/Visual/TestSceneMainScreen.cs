@@ -877,6 +877,97 @@ namespace JukeBox.Game.Tests.Visual
                       && clippers(chartProbe).SequenceEqual(new[] { visuals().ChartClip, screen.PlayerBox }));
         }
 
+        // ---- the "everything released" look ----
+        //
+        // With BOTH masks off the box is no longer the frame anything is bounded by, so its card
+        // (rounded corners, shadow, black bed) would be a rectangle drawn over content deliberately
+        // spilling past it — it goes; and the columns turn slightly see-through so that content
+        // reads as continuing behind them.
+
+        private void setReleases(bool chart, bool storyboard)
+        {
+            AddStep($"chart mask {(chart ? "off" : "on")}, storyboard mask {(storyboard ? "off" : "on")}", () =>
+            {
+                config.SetValue(JukeBoxSetting.RemoveChartMask, chart);
+                config.SetValue(JukeBoxSetting.RemoveStoryboardMask, storyboard);
+            });
+        }
+
+        [TestCase(false, false)]
+        [TestCase(true, false)]
+        [TestCase(false, true)]
+        public void TheCardStaysWhileEitherLayerIsStillClipped(bool chart, bool storyboard)
+        {
+            addRealVisuals();
+            setReleases(chart, storyboard);
+
+            AddUntilStep("the card is fully there", () => screen.BoxFrame.Alpha == 1);
+            AddAssert("and both column surfaces are opaque",
+                () => screen.LeftColumnSurface.Alpha == 1 && screen.RightColumnSurface.Alpha == 1);
+
+            AddStep("restore", () => setReleasesNow(false, false));
+        }
+
+        [Test]
+        public void ReleasingBothMasksDropsTheCardAndLetsTheColumnsSeeThrough()
+        {
+            addRealVisuals();
+
+            AddAssert("the card is there to begin with", () => screen.BoxFrame.Alpha == 1);
+
+            setReleases(chart: true, storyboard: true);
+
+            AddUntilStep("the card fades away entirely", () => screen.BoxFrame.Alpha == 0);
+            AddUntilStep("and both column surfaces settle slightly see-through",
+                () => screen.LeftColumnSurface.Alpha == MainScreen.released_surface_alpha
+                      && screen.RightColumnSurface.Alpha == MainScreen.released_surface_alpha);
+
+            // Only the SURFACE fades: a column's own content (the docked listing, the tab bodies)
+            // has to stay fully legible on top of it.
+            AddAssert("the columns themselves, and their content, stay opaque",
+                () => screen.LeftColumn.Alpha == 1 && screen.RightColumn.Alpha == 1
+                      && screen.ChildrenOfType<BeatmapListingOverlay>().First().Alpha == 1);
+
+            setReleases(chart: true, storyboard: false);
+
+            AddUntilStep("putting either mask back brings the card and the surfaces back",
+                () => screen.BoxFrame.Alpha == 1
+                      && screen.LeftColumnSurface.Alpha == 1 && screen.RightColumnSurface.Alpha == 1);
+
+            AddStep("restore", () => setReleasesNow(false, false));
+        }
+
+        /// <summary>
+        /// Focus mode fades the whole columns and animates the card's radius; the released look
+        /// fades the card and the column SURFACES. The two have to compose rather than fight over
+        /// the same drawables.
+        /// </summary>
+        [Test]
+        public void TheReleasedLookAndFocusModeDoNotFightOverTheSameDrawables()
+        {
+            addRealVisuals();
+            setReleases(chart: true, storyboard: true);
+
+            AddUntilStep("card gone, surfaces see-through", () =>
+                screen.BoxFrame.Alpha == 0 && screen.LeftColumnSurface.Alpha == MainScreen.released_surface_alpha);
+
+            AddStep("enter focus mode", () => InputManager.Key(Key.Tab));
+
+            AddUntilStep("the columns leave and the card stays gone",
+                () => screen.LeftColumn.Alpha == 0 && screen.RightColumn.Alpha == 0 && screen.BoxFrame.Alpha == 0);
+
+            AddStep("put the masks back", () => setReleasesNow(false, false));
+
+            AddUntilStep("the card returns even with the columns still away",
+                () => screen.BoxFrame.Alpha == 1 && screen.LeftColumn.Alpha == 0);
+        }
+
+        private void setReleasesNow(bool chart, bool storyboard)
+        {
+            config.SetValue(JukeBoxSetting.RemoveChartMask, chart);
+            config.SetValue(JukeBoxSetting.RemoveStoryboardMask, storyboard);
+        }
+
         // A released layer reaching over the gutter must go UNDER the side columns, never over
         // them: the columns are later children of this screen than the player's host and every one
         // of the three sits at the same depth, so child order is what decides — which is exactly
