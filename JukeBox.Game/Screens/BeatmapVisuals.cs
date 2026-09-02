@@ -87,26 +87,23 @@ public partial class BeatmapVisuals : CompositeDrawable
     // catch_reserved_height's remarks.
     private int chartMode = -1;
 
-    // Tuned against MEASURED real-lazer catch geometry (a diagnostic test hosted a real
-    // DrawableCatchRuleset in an exact 1024×768 box and read back Catcher/Playfield
-    // ScreenSpaceDrawQuad fractions), not lazer's own extra_bottom_space (200) constant — that
-    // constant sizes catch's *internal* safety-clip container ("Visible area" in
-    // CatchPlayfieldAdjustmentContainer), which is far more generous than what's actually
-    // rendered and was never the thing clipping anything of ours. Using it as our own divisor
-    // (768+200=968) instead forced that internal safety container to fit EXACTLY flush with
-    // chartContainer's own edges (zero margin) — turning its normally-invisible clip boundary
-    // into a hard, visible seam exactly at the scene edge, clipping fruits mid-sprite as they
-    // entered from the top. 680 instead targets the CATCHER's own measured top edge landing at
-    // ~90% of the box height (real lazer: catcher top ≈85.8%, bottom ≈111.2%, fruit spawn top
-    // ≈-5.8%, all measured relative to an unscaled 1024×768 box) — big enough to read as "the
-    // catcher sits near the bottom" without unnecessarily inflating catch's on-screen size
-    // relative to the other three rulesets. The resulting top/bottom overflow is deliberately
-    // NOT compensated for further: nothing between chartContainer and MainScreen's playerBox
-    // masks (see BeatmapVisuals class summary / MainScreen.sceneContainer), so it renders
-    // unclipped into the surrounding letterbox margin — matching real lazer's own "off-screen
-    // spawn"/catcher-past-the-nominal-canvas look — and is clipped only if it ever reaches
-    // playerBox's own edge, same as everything else in the boxed player.
-    private const float catch_reserved_height = 680f;
+    // The height, in game units, of the coordinate space lazer hands a ruleset: osu!'s own
+    // ScalingContainerTargetDrawSize is 1024×768, and a widescreen window is simply WIDER than
+    // 1024 at the same 768 height. Only catch cares, and it cares completely:
+    // CatchPlayfieldAdjustmentContainer places everything with ABSOLUTE constants against that
+    // space — its "Visible area" is 968 units tall offset 100 down, and the playable area inside
+    // it is 614.4 units tall at y=115.2 (768 × 0.8, positioned stable's "three fourths of the
+    // difference" way) — so the catcher's height on screen is decided by how many of these units
+    // the container it lives in is tall, not by any fraction of it. Handing catch our own 480-unit
+    // design canvas would therefore place the catcher roughly a third of a screen BELOW the scene;
+    // handing it 768 puts every piece exactly where the real game puts it (measured: playable area
+    // spanning 15%–95% of the box, catcher plate at 85%–87%, fruits spawning ~6% above the top).
+    //
+    // A previous tuning divided by 680 instead, to make catch bigger — which pushed the catcher's
+    // plate down to ~89%–92% and its surrounding sprite (a legacy skin's catcher is a whole
+    // character, not Argon's thin plate) past the bottom edge entirely. That is the "y offset" this
+    // replaced: the user asked for the default game placement back.
+    private const float catch_game_height = 768f;
 
     // Config-bound (when a config manager is present — test scenes without one keep the
     // defaults). Fields, not locals: config bindables use weak references back to the master.
@@ -814,10 +811,11 @@ public partial class BeatmapVisuals : CompositeDrawable
         // sampled when a setting last changed.
         updateLayerClips();
 
-        // Catch alone needs chartContainer to actually BE a fixed 1024×768-ish canvas: its
-        // PlayfieldAdjustmentContainer positions the catcher/fruits with ABSOLUTE pixel constants
-        // calibrated against that exact reference size (see catch_reserved_height's remarks) —
-        // give it anything else and the catcher/fruits render at the wrong scale outright.
+        // Every ruleset gets the same rectangle — the player box's REAL aspect — and catch alone
+        // gets it in different UNITS: it positions the catcher and the fruits with absolute
+        // constants against lazer's own 768-tall game space (see catch_game_height), so the
+        // container has to be that many units tall for its arrangement to land where the real game
+        // puts it. Same on-screen rectangle either way; only the coordinate scale differs.
         //
         // Standard/taiko/mania are the opposite: their PlayfieldAdjustmentContainers size
         // themselves in RELATIVE, scale-invariant fractions of whatever box they're actually
@@ -835,12 +833,6 @@ public partial class BeatmapVisuals : CompositeDrawable
         // (DrawSize, matching this Drawable's own actual aspect) instead of a fixed 1024×768 fixes
         // this directly — std/mania's own on-screen footprint is unaffected (their sizing is
         // scale-invariant, so this is a no-op for them beyond a harmless coordinate-scale change).
-        if (chartMode == 2)
-        {
-            chartContainer.Size = new Vector2(1024, 768);
-            chartContainer.Scale = new Vector2(DrawHeight / catch_reserved_height);
-        }
-        else
         {
             // Taiko's own PlayfieldAdjustmentContainer already scales itself as a scale-invariant
             // fraction of whatever aspect its parent hands it, including its own [5:4, 16:9]
@@ -876,8 +868,14 @@ public partial class BeatmapVisuals : CompositeDrawable
                 }
             }
 
-            chartContainer.Size = available;
-            chartContainer.Scale = Vector2.One;
+            // Catch's units, everyone else's as-is. The rectangle is identical either way: a
+            // container sized `available / unitScale` and scaled by `unitScale` covers exactly what
+            // `available` at scale one covers, which is what lets catch reason in lazer's 768-tall
+            // space without changing anyone's on-screen footprint.
+            float unitScale = chartMode == 2 && DrawHeight > 0 ? DrawHeight / catch_game_height : 1;
+
+            chartContainer.Size = available / unitScale;
+            chartContainer.Scale = new Vector2(unitScale);
         }
     }
 

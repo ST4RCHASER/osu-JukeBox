@@ -12,6 +12,8 @@ using NUnit.Framework;
 using osu.Framework.Allocation;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
+using osu.Framework.Graphics.Shapes;
+using osu.Framework.Graphics.Sprites;
 using osu.Framework.Screens;
 using osu.Framework.Testing;
 using osu.Framework.Timing;
@@ -869,6 +871,7 @@ namespace JukeBox.Game.Tests.Visual
         public void CatchCatcherSitsNearBottomWithNoIntermediateMasking()
         {
             BeatmapVisuals visuals = null!;
+            Container canvas = null!;
 
             // A locally-advancing clock (unlike the shared, frozen playbackClock field) — a real
             // FALLING fruit is needed to check the top-clip regression, and a frozen clock never
@@ -914,7 +917,16 @@ namespace JukeBox.Game.Tests.Visual
                     PreferredOsuFile = osuFile,
                 };
 
-                Add(visuals = new BeatmapVisuals(set, clock) { RelativeSizeAxes = Axes.Both });
+                // The app's REAL design canvas (MainScreen.scene_width/height), not the test
+                // window: catch is the one ruleset whose arrangement depends on how many units
+                // tall its container is, so hosting it in a 768-tall test window would make the
+                // measurement here agree with the app only by accident — and would go on agreeing
+                // if the unit conversion were deleted outright.
+                Add(canvas = new Container
+                {
+                    Size = new osuTK.Vector2(854, 480),
+                    Child = visuals = new BeatmapVisuals(set, clock),
+                });
             });
 
             AddUntilStep("chart loaded", () => visuals.IsLoaded && visuals.HasChartLayer && visuals.ChartRenderer?.DrawableRuleset != null);
@@ -934,18 +946,71 @@ namespace JukeBox.Game.Tests.Visual
             // (see catch_reserved_height's remarks in BeatmapVisuals), and is meant to render
             // unclipped into whatever letterbox margin MainScreen's playerBox provides around it.
             // The two invariants that DO hold at this level:
-            AddAssert("catcher sits near the bottom of the scene (~90-97% down, real-lazer proportions)", () =>
+            // What the user actually looks at is the catcher's PLATE, not the Catcher drawable's
+            // own bounds — those are a square of BASE_SIZE whose lower half is empty catch area and
+            // legitimately hangs past the scene (real lazer: bottom at ~111% of its own game box).
+            // The plate is what has to be on screen, and where the real game puts it: lazer's
+            // CatchPlayfieldAdjustmentContainer arranges everything in absolute units against a
+            // 768-tall space, so hosting catch in exactly that space (see catch_game_height) lands
+            // the plate at ~85-87% down. The tuning this replaced pushed it to ~89-92%, which for
+            // a legacy skin — whose catcher is a whole character rather than Argon's thin plate —
+            // put most of it below the bottom edge.
+            AddAssert("the catcher's plate is fully on screen, near the bottom, where the real game puts it", () =>
             {
                 var box = visuals.ScreenSpaceDrawQuad;
-                var catcher = visuals.ChartRenderer!.DrawableRuleset!.ChildrenOfType<Catcher>().Single();
-                var catcherQuad = catcher.ScreenSpaceDrawQuad;
+                float boxTop = box.TopLeft.Y;
+                float boxHeight = box.BottomLeft.Y - boxTop;
 
-                // Catcher's own Origin is TopCentre (lazer's Catcher.cs), so its top edge is the
-                // meaningful single Y reference — matches how it's actually anchored/positioned.
+                var pieces = visuals.ChartRenderer!.DrawableRuleset!.ChildrenOfType<SkinnableCatcher>().Single()
+                                    .ChildrenOfType<Drawable>()
+                                    .Where(d => d.Alpha > 0 && d is Sprite or Box)
+                                    .Select(d => d.ScreenSpaceDrawQuad.AABBFloat)
+                                    .ToList();
+
+                if (pieces.Count == 0)
+                    return false;
+
+                float top = (pieces.Min(q => q.Top) - boxTop) / boxHeight;
+                float bottom = (pieces.Max(q => q.Bottom) - boxTop) / boxHeight;
+
+                return top is >= 0.80f and <= 0.88f && bottom <= 0.92f;
+            });
+
+            // The other half of "like the real game": fruits enter from just above the scene, the
+            // way they enter from just above the window in lazer (its own measured spawn top is
+            // ~6% above the box). Anything much larger means catch has been handed a coordinate
+            // space taller than the one its constants were written against.
+            AddAssert("the playfield reaches just above the scene, as lazer's does", () =>
+            {
+                var box = visuals.ScreenSpaceDrawQuad;
+                var playfield = visuals.ChartRenderer!.DrawableRuleset!.Playfield.ScreenSpaceDrawQuad;
+
                 float boxHeight = box.BottomLeft.Y - box.TopLeft.Y;
-                float catcherTopFraction = (catcherQuad.TopLeft.Y - box.TopLeft.Y) / boxHeight;
+                float overshoot = (box.TopLeft.Y - playfield.TopLeft.Y) / boxHeight;
 
-                return catcherTopFraction is >= 0.87f and <= 0.98f;
+                return overshoot is > 0.02f and < 0.09f;
+            });
+
+            // And horizontally: catch is handed the scene's REAL rectangle, exactly as lazer hands
+            // its ruleset the whole game window. It matters because catch's own "Visible area"
+            // spans its container's full width on purpose — lazer's comment on it says so: "the
+            // container still extends across the screen horizontally, so that hit explosions at the
+            // sides of the playfield do not get cut off". A fixed 4:3 canvas here would hand catch
+            // a box narrower than the scene and clip those explosions at its edges instead.
+            AddAssert("catch is given the whole scene to arrange itself in, as lazer gives it the window", () =>
+            {
+                var box = visuals.ScreenSpaceDrawQuad.AABBFloat;
+                var ruleset = visuals.ChartRenderer!.DrawableRuleset!.ScreenSpaceDrawQuad.AABBFloat;
+                var playfield = visuals.ChartRenderer!.DrawableRuleset!.Playfield.ScreenSpaceDrawQuad.AABBFloat;
+
+                bool fillsTheScene = Math.Abs(ruleset.Left - box.Left) < 1 && Math.Abs(ruleset.Right - box.Right) < 1;
+
+                // The lane itself is a fixed 819.2 game units wide, which at this aspect is 60% of
+                // the scene — that is the size the real game draws it, and it is what changes if
+                // catch is ever handed a different number of units.
+                float laneWidth = playfield.Width / box.Width;
+
+                return fillsTheScene && laneWidth is > 0.55f and < 0.65f;
             });
             // Lazer's own CatchPlayfieldAdjustmentContainer has an internal "Visible area" node
             // with Masking = true — that's inherent to catch's real ruleset (a generous safety
@@ -985,7 +1050,7 @@ namespace JukeBox.Game.Tests.Visual
             });
 
             AddStep("restore settings", () => config.SetValue(JukeBoxSetting.RenderChart, false));
-            AddStep("remove visuals", () => Remove(visuals, true));
+            AddStep("remove visuals", () => Remove(canvas, true));
         }
 
         // Regression coverage for taiko lane alignment: unlike catch's PlayfieldAdjustmentContainer
