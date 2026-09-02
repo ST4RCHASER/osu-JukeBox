@@ -131,6 +131,40 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("restore default 100%", () => overlay.PlayfieldZoomSlider.Current.Value = 1.0);
         }
 
+        /// <summary>
+        /// The two mask releases sit beside the zoom they interact with, are off out of the box
+        /// (the boxed player every previous version had), and each carries its own setting — the
+        /// whole point being that a user can release the storyboard without releasing the chart.
+        /// </summary>
+        [Test]
+        public void MaskReleaseCheckboxesAreIndependentAndPersistAcrossRecreation()
+        {
+            AddStep("show overlay", () => overlay.Show());
+
+            AddAssert("both start off", () => !overlay.RemoveChartMaskCheckbox.Current.Value
+                                              && !overlay.RemoveStoryboardMaskCheckbox.Current.Value);
+            AddAssert("and so does the config", () => !config.Get<bool>(JukeBoxSetting.RemoveChartMask)
+                                                      && !config.Get<bool>(JukeBoxSetting.RemoveStoryboardMask));
+
+            AddStep("tick the storyboard one only", () => overlay.RemoveStoryboardMaskCheckbox.Current.Value = true);
+            AddAssert("only its setting moved", () => config.Get<bool>(JukeBoxSetting.RemoveStoryboardMask)
+                                                      && !config.Get<bool>(JukeBoxSetting.RemoveChartMask));
+
+            AddStep("recreate overlay", () => Child = overlay = new SettingsOverlay());
+            AddAssert("the choice came back", () => overlay.RemoveStoryboardMaskCheckbox.Current.Value
+                                                    && !overlay.RemoveChartMaskCheckbox.Current.Value);
+
+            AddStep("tick the chart one too", () => overlay.RemoveChartMaskCheckbox.Current.Value = true);
+            AddAssert("both settings on", () => config.Get<bool>(JukeBoxSetting.RemoveChartMask)
+                                                && config.Get<bool>(JukeBoxSetting.RemoveStoryboardMask));
+
+            AddStep("restore both", () =>
+            {
+                overlay.RemoveChartMaskCheckbox.Current.Value = false;
+                overlay.RemoveStoryboardMaskCheckbox.Current.Value = false;
+            });
+        }
+
         // Regression coverage for the ChartZoom -> PlayfieldZoom rework's widened 1%-200% range
         // (was 50%-150%) — the slider must actually reach both new extremes, not just clamp back
         // to the old window.

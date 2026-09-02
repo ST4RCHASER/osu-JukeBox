@@ -77,6 +77,16 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
 
     private readonly BindableBool samplePlaybackDisabled = new BindableBool(true);
 
+    /// <summary>
+    /// Test hook (JukeBox.Game.Tests has InternalsVisibleTo): the live state of the gate above —
+    /// false means lazer's hit objects are actually allowed to play their samples right now. It
+    /// starts shut and is only ever recomputed in <see cref="Update"/>, which makes it the honest
+    /// answer to "are hitsounds really playing", including for a layer that is hidden: a hidden
+    /// drawable that osu!framework considers absent never updates, so a layer whose gate is still
+    /// shut is a layer that is silently doing nothing (see BeatmapVisuals.updateChartVisibility).
+    /// </summary>
+    internal bool SamplePlaybackDisabled => samplePlaybackDisabled.Value;
+
     // Big-seek snap: FrameStabilityContainer's frame-stable catch-up advances a bounded slice of
     // gameplay time per real frame, so a large scrub (diff switch mid-song, user seeking the
     // track) would fast-forward visibly for seconds (measured: a 30s jump took 63 frames ≈ 1s at

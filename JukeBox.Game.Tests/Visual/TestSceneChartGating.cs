@@ -126,6 +126,7 @@ namespace JukeBox.Game.Tests.Visual
             {
                 config.SetValue(JukeBoxSetting.RenderChart, false);
                 config.SetValue(JukeBoxSetting.PlayHitSounds, false);
+                config.SetValue(JukeBoxSetting.ChartOpacity, 1.0);
             });
         }
 
@@ -367,6 +368,141 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("storyboard hitsounds present", () => screen.CurrentVisuals?.HasHitSoundPlayer == true);
 
             AddStep("clean up", () => Remove(stack, true));
+        }
+
+        /// <summary>
+        /// The user's report: "play hit sound should be playable when render chart off". The layer
+        /// was already being kept alive for exactly this — but at Alpha 0 osu!framework treats a
+        /// drawable as absent and skips its whole subtree in UpdateSubTree, so the hidden layer
+        /// never ran an Update, its DrawableRuleset's clock never advanced, and its sample gate
+        /// stayed shut at the "disabled" it is constructed with. The gate, not the layer's mere
+        /// existence, is therefore what this asserts.
+        /// </summary>
+        [Test]
+        public void HitSoundsPlayWithTheChartHiddenAndTheLayerStillUpdates()
+        {
+            BeatmapVisuals visuals = null!;
+
+            AddStep("hit sounds only", () =>
+            {
+                config.SetValue(JukeBoxSetting.RenderChart, false);
+                config.SetValue(JukeBoxSetting.PlayHitSounds, true);
+            });
+
+            AddStep("create visuals", () => Add(visuals = new BeatmapVisuals(plainSet, idleClock)
+            {
+                RelativeSizeAxes = Axes.Both,
+            }));
+
+            AddUntilStep("layer built", () => visuals.ChartLayerBuilt);
+            AddAssert("but invisible", () => visuals.ChartLayerAlpha == 0 && !visuals.HasChartLayer);
+            AddAssert("kept present so it keeps updating", () => visuals.ChartLayerAlwaysPresent);
+            AddAssert("hitsounds enabled", () => visuals.HasHitSoundPlayer);
+
+            AddUntilStep("the sample gate actually opens", () => visuals.ChartRenderer?.SamplePlaybackDisabled == false);
+
+            AddStep("show the chart too", () => config.SetValue(JukeBoxSetting.RenderChart, true));
+            AddUntilStep("same layer, now visible", () => visuals.HasChartLayer && visuals.ChartLayerAlpha == 1);
+            AddAssert("gate still open", () => visuals.ChartRenderer?.SamplePlaybackDisabled == false);
+
+            AddStep("remove visuals", () => Remove(visuals, true));
+        }
+
+        /// <summary>
+        /// The other half of that rule: with nothing wanting the layer, none is built at all — the
+        /// beatmap conversion and autoplay generation a layer costs are not paid for a track the
+        /// user is neither watching nor listening to.
+        /// </summary>
+        [Test]
+        public void NeitherChartNorHitSoundsBuildsNoLayerAtAll()
+        {
+            BeatmapVisuals visuals = null!;
+
+            AddStep("both off", () =>
+            {
+                config.SetValue(JukeBoxSetting.RenderChart, false);
+                config.SetValue(JukeBoxSetting.PlayHitSounds, false);
+            });
+
+            AddStep("create visuals", () => Add(visuals = new BeatmapVisuals(plainSet, idleClock)
+            {
+                RelativeSizeAxes = Axes.Both,
+            }));
+
+            AddUntilStep("visuals loaded", () => visuals.IsLoaded);
+            AddAssert("no layer", () => !visuals.ChartLayerBuilt);
+
+            AddStep("ask for hit sounds", () => config.SetValue(JukeBoxSetting.PlayHitSounds, true));
+            AddUntilStep("now there is one", () => visuals.ChartLayerBuilt);
+
+            AddStep("take them away again", () => config.SetValue(JukeBoxSetting.PlayHitSounds, false));
+            AddUntilStep("and it is gone", () => !visuals.ChartLayerBuilt);
+
+            AddStep("remove visuals", () => Remove(visuals, true));
+        }
+
+        /// <summary>
+        /// Chart opacity is alpha on the layer already on screen: it applies live, and — unlike a
+        /// mod or a conversion — it must NOT rebuild the layer, which is what holding onto the
+        /// layer instance across the change asserts.
+        /// </summary>
+        [Test]
+        public void ChartOpacityAppliesLiveWithoutRebuildingTheLayer()
+        {
+            BeatmapVisuals visuals = null!;
+            JukeBox.Game.LazerPlayer.LazerChartLayer built = null!;
+
+            AddStep("render the chart", () => config.SetValue(JukeBoxSetting.RenderChart, true));
+            AddStep("create visuals", () => Add(visuals = new BeatmapVisuals(plainSet, idleClock)
+            {
+                RelativeSizeAxes = Axes.Both,
+            }));
+
+            AddUntilStep("chart visible at full opacity", () => visuals.ChartLayerAlpha == 1);
+            AddStep("remember the layer", () => built = visuals.ChartRenderer!);
+
+            AddStep("40% opacity", () => config.SetValue(JukeBoxSetting.ChartOpacity, 0.4));
+            AddUntilStep("layer is 40% opaque", () => System.Math.Abs(visuals.ChartLayerAlpha - 0.4f) < 0.001f);
+            AddAssert("and was never rebuilt", () => ReferenceEquals(visuals.ChartRenderer, built));
+
+            // Fully transparent is the user's business, and it is NOT the hitsounds-off state: the
+            // layer stays present and audible, exactly as a hidden one does.
+            AddStep("0% opacity", () => config.SetValue(JukeBoxSetting.ChartOpacity, 0.0));
+            AddUntilStep("invisible", () => visuals.ChartLayerAlpha == 0);
+            AddAssert("still the same, still present", () => ReferenceEquals(visuals.ChartRenderer, built) && visuals.ChartLayerAlwaysPresent);
+
+            AddStep("back to full", () => config.SetValue(JukeBoxSetting.ChartOpacity, 1.0));
+            AddUntilStep("opaque again", () => visuals.ChartLayerAlpha == 1);
+
+            AddStep("remove visuals", () => Remove(visuals, true));
+        }
+
+        /// <summary>Opacity only decides how visible a RENDERED chart is — with rendering off the
+        /// layer is hidden outright, whatever the slider says.</summary>
+        [Test]
+        public void ChartOpacityIsIgnoredWhileTheChartIsNotRendered()
+        {
+            BeatmapVisuals visuals = null!;
+
+            AddStep("full opacity, hit sounds only", () =>
+            {
+                config.SetValue(JukeBoxSetting.ChartOpacity, 1.0);
+                config.SetValue(JukeBoxSetting.RenderChart, false);
+                config.SetValue(JukeBoxSetting.PlayHitSounds, true);
+            });
+
+            AddStep("create visuals", () => Add(visuals = new BeatmapVisuals(plainSet, idleClock)
+            {
+                RelativeSizeAxes = Axes.Both,
+            }));
+
+            AddUntilStep("layer built", () => visuals.ChartLayerBuilt);
+            AddAssert("hidden despite 100%", () => visuals.ChartLayerAlpha == 0);
+
+            AddStep("render it", () => config.SetValue(JukeBoxSetting.RenderChart, true));
+            AddUntilStep("now the opacity is what shows", () => visuals.ChartLayerAlpha == 1);
+
+            AddStep("remove visuals", () => Remove(visuals, true));
         }
     }
 }

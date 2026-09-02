@@ -51,6 +51,24 @@ public partial class BeatmapVisuals : CompositeDrawable
     private Container chartContainer = null!;
     private LazerChartLayer? chartLayer;
 
+    // One clip per layer, each sized to MainScreen's player box (see updateLayerClips) and each
+    // masking only while that box has stopped doing it itself. They exist for the two
+    // "Remove ... mask" settings: a child can never escape an ancestor's mask, so releasing the
+    // storyboard (or the chart) past the box's edges means the BOX stops clipping — and then
+    // everything else here still has to be clipped exactly where it was, which is what these do.
+    // With neither setting on they are inert (Masking false), leaving the box's own single mask in
+    // charge exactly as before.
+    private Container backdropClip = null!;
+    private Container storyboardClip = null!;
+    private Container dimClip = null!;
+    private Container chartClip = null!;
+
+    // The canvas-sized inner container of backdropClip. The clip itself is box-sized, so the black
+    // bed and the background have to be sized to this drawable's own design canvas explicitly
+    // rather than relatively — otherwise the background would stop being scaled by PlayfieldZoom
+    // along with the rest of the scene.
+    private Container backdropCanvas = null!;
+
     // Carries the app Volume setting down to every lazer-rendered audio component (storyboard
     // Sample events / keysounds in storyboardLayer, chart hitsounds in chartLayer) — those are
     // DrawableAudioWrapper-based (lazer's PausableSkinnableSound chain) and walk up the Drawable
@@ -98,6 +116,9 @@ public partial class BeatmapVisuals : CompositeDrawable
     private readonly BindableDouble backgroundBlur = new();
     private readonly Bindable<bool> showStoryboardVideo = new(true);
     private readonly BindableDouble playfieldZoom = new(1.0);
+    private readonly BindableDouble chartOpacity = new(1.0);
+    private readonly Bindable<bool> removeChartMask = new();
+    private readonly Bindable<bool> removeStoryboardMask = new();
     private readonly IBindable<JukeBoxSkin> effectiveSkin = new Bindable<JukeBoxSkin>();
 
     // Same rebuild trigger as effectiveSkin, for a skin change the enum value can't express: a
@@ -150,6 +171,11 @@ public partial class BeatmapVisuals : CompositeDrawable
     [Resolved(canBeNull: true)]
     private Bindable<Vector2>? playerBoxSize { get; set; }
 
+    // The box's live corner radius, from the same source and just as optional — the per-layer clips
+    // round their corners the way the box would have while standing in for it.
+    [Resolved(canBeNull: true, name: MainScreen.player_box_corner_radius)]
+    private Bindable<float>? playerBoxCornerRadius { get; set; }
+
     private readonly BindableDouble beatmapOffset = new();
     private readonly BindableDouble globalOffset = new();
 
@@ -182,6 +208,27 @@ public partial class BeatmapVisuals : CompositeDrawable
     /// also exists invisibly when only hitsounds are enabled (lazer's DrawableRuleset is the
     /// hitsound source), so visibility is the equivalent of the old chart-layer presence.</summary>
     internal bool HasChartLayer => chartLayer is { Alpha: > 0 };
+
+    /// <summary>Test-only: whether the lazer gameplay layer EXISTS, visible or not — the thing
+    /// hitsounds actually need (see <see cref="updateChartVisibility"/>).</summary>
+    internal bool ChartLayerBuilt => chartLayer != null;
+
+    /// <summary>Test-only: the gameplay layer's current alpha, 0 with no layer.</summary>
+    internal float ChartLayerAlpha => chartLayer?.Alpha ?? 0;
+
+    /// <summary>Test-only: whether the gameplay layer keeps updating (and so sounding) while
+    /// invisible — false with no layer.</summary>
+    internal bool ChartLayerAlwaysPresent => chartLayer?.AlwaysPresent == true;
+
+    /// <summary>Test-only: the per-layer clips, so tests can assert what each one is masking
+    /// rather than re-deriving the rule.</summary>
+    internal Container StoryboardClip => storyboardClip;
+
+    internal Container ChartClip => chartClip;
+
+    internal Container BackdropClip => backdropClip;
+
+    internal Container DimClip => dimClip;
 
     /// <summary>Test-only: whether lazer-native hitsound playback is currently enabled.</summary>
     internal bool HasHitSoundPlayer => chartLayer?.HitSoundsEnabled.Value == true;
@@ -269,10 +316,23 @@ public partial class BeatmapVisuals : CompositeDrawable
         // the storyboard (uniform-scaled, possibly narrower than widescreen) don't necessarily
         // cover the full width/height, so without this the letterboxing would show whatever's
         // behind this drawable instead of black, same as osu! stable/lazer's own letterboxing.
-        AddInternal(new Box
+        // Inside backdropClip with the background, since neither ever wants releasing: both are
+        // canvas-shaped by construction and the background's FillMode.Fill overspill (plus anything
+        // PlayfieldZoom magnifies past the box) is exactly what the box's mask was cropping.
+        AddInternal(backdropClip = new Container
         {
-            RelativeSizeAxes = Axes.Both,
-            Colour = Color4.Black,
+            Anchor = Anchor.Centre,
+            Origin = Anchor.Centre,
+            Child = backdropCanvas = new Container
+            {
+                Anchor = Anchor.Centre,
+                Origin = Anchor.Centre,
+                Child = new Box
+                {
+                    RelativeSizeAxes = Axes.Both,
+                    Colour = Color4.Black,
+                },
+            },
         });
 
         // [General] Mode and [Events] background both belong to the SELECTED difficulty, so scan it
@@ -309,7 +369,7 @@ public partial class BeatmapVisuals : CompositeDrawable
                 // whose background blur also leaves storyboards/videos sharp). One extra
                 // framebuffer while a background is shown; the content is static, so the buffer
                 // only re-renders when the blur radius itself changes.
-                AddInternal(backgroundBlurContainer = new BufferedContainer(cachedFrameBuffer: true)
+                backdropCanvas.Add(backgroundBlurContainer = new BufferedContainer(cachedFrameBuffer: true)
                 {
                     RelativeSizeAxes = Axes.Both,
                     RedrawOnScale = false,
@@ -342,10 +402,16 @@ public partial class BeatmapVisuals : CompositeDrawable
         // machinery) is gone. Sizing is lazer's own: the storyboard scales itself off our height.
         // The storyboard gets its own audio sub-container so the "Storyboard / video" toggle can
         // silence its Sample events (keysounds) while hidden — Alpha alone leaves audio running.
-        audioAdjustments.Add(storyboardAudio = new AudioContainer
+        audioAdjustments.Add(storyboardClip = new Container
         {
-            RelativeSizeAxes = Axes.Both,
-            Child = storyboardLayer = new LazerStoryboardLayer(set, osuFile),
+            Anchor = Anchor.Centre,
+            Origin = Anchor.Centre,
+            Child = storyboardAudio = new AudioContainer
+            {
+                Anchor = Anchor.Centre,
+                Origin = Anchor.Centre,
+                Child = storyboardLayer = new LazerStoryboardLayer(set, osuFile),
+            },
         });
 
         // Real osu! behaviour: the flat background auto-hides only when the storyboard REPLACES
@@ -357,11 +423,17 @@ public partial class BeatmapVisuals : CompositeDrawable
 
         // Background-dim scrim: sits between the storyboard/video/background stack and the chart
         // so the chart stays readable. Applies whenever the setting is > 0, even with chart off.
-        audioAdjustments.Add(dimScrim = new Box
+        audioAdjustments.Add(dimClip = new Container
         {
-            RelativeSizeAxes = Axes.Both,
-            Colour = Color4.Black,
-            Alpha = 0,
+            Anchor = Anchor.Centre,
+            Origin = Anchor.Centre,
+            Child = dimScrim = new Box
+            {
+                Anchor = Anchor.Centre,
+                Origin = Anchor.Centre,
+                Colour = Color4.Black,
+                Alpha = 0,
+            },
         });
 
         // The chart (and hitsound player) get added/removed inside this fixed container as the
@@ -369,11 +441,16 @@ public partial class BeatmapVisuals : CompositeDrawable
         // catch's absolute-pixel needs vs the other three rulesets' real-aspect needs) every
         // Update() — see its own remarks there; the placeholder size here only matters for the
         // very first layout pass before Update() has run once.
-        audioAdjustments.Add(chartContainer = new Container
+        audioAdjustments.Add(chartClip = new Container
         {
             Anchor = Anchor.Centre,
             Origin = Anchor.Centre,
-            Size = new Vector2(1024, 768),
+            Child = chartContainer = new Container
+            {
+                Anchor = Anchor.Centre,
+                Origin = Anchor.Centre,
+                Size = new Vector2(1024, 768),
+            },
         });
 
         // All four rulesets (0 std / 1 taiko / 2 catch / 3 mania) render through lazer's real
@@ -424,6 +501,9 @@ public partial class BeatmapVisuals : CompositeDrawable
             config.BindWith(JukeBoxSetting.BackgroundBlur, backgroundBlur);
             config.BindWith(JukeBoxSetting.ShowStoryboardVideo, showStoryboardVideo);
             config.BindWith(JukeBoxSetting.PlayfieldZoom, playfieldZoom);
+            config.BindWith(JukeBoxSetting.ChartOpacity, chartOpacity);
+            config.BindWith(JukeBoxSetting.RemoveChartMask, removeChartMask);
+            config.BindWith(JukeBoxSetting.RemoveStoryboardMask, removeStoryboardMask);
         }
 
         if (skinSelection != null)
@@ -455,6 +535,11 @@ public partial class BeatmapVisuals : CompositeDrawable
         // Live-react to settings changes without a rebuild (initial state already applied in load()).
         renderChart.BindValueChanged(_ => updateLazerLayer());
         playHitSounds.BindValueChanged(_ => updateLazerLayer());
+
+        // Opacity is pure alpha on the layer already on screen — no rebuild, unlike mods or a
+        // conversion (see chartModRevision), which change what the layer IS rather than how
+        // opaque it is.
+        chartOpacity.BindValueChanged(_ => updateChartVisibility());
         backgroundDim.BindValueChanged(e => dimScrim.Alpha = (float)e.NewValue, true);
         backgroundBlur.BindValueChanged(e =>
         {
@@ -611,6 +696,16 @@ public partial class BeatmapVisuals : CompositeDrawable
     /// One lazer gameplay layer serves both settings: RenderChart shows lazer's rendered gameplay,
     /// PlayHitSounds enables lazer's native hitsound/keysound playback. Hitsounds without chart
     /// keeps the layer alive but invisible — the DrawableRuleset is what plays the samples.
+    ///
+    /// <para>
+    /// The rule, in full: the layer is BUILT whenever either setting wants it (neither wanting it
+    /// builds nothing at all, so the conversion + autoplay-generation cost is never paid for a
+    /// track nobody is charting or listening to); it is VISIBLE at
+    /// <see cref="JukeBoxSetting.ChartOpacity"/> while RenderChart is on and invisible otherwise;
+    /// and its audio is independent of both, because it is <see cref="Drawable.AlwaysPresent"/> —
+    /// see <see cref="updateChartVisibility"/> for why that single flag is what makes
+    /// hitsounds-without-chart work at all.
+    /// </para>
     /// </summary>
     private void updateLazerLayer()
     {
@@ -631,7 +726,12 @@ public partial class BeatmapVisuals : CompositeDrawable
             if (replay?.Score != null)
                 Logger.Log($"Playing back {replay.PlayerName}'s replay on '{Path.GetFileName(osuFile)}' instead of autoplay");
 
-            chartContainer.Add(chartLayer = new LazerChartLayer(chartWorking!, osuFile!, replay?.Score));
+            chartContainer.Add(chartLayer = new LazerChartLayer(chartWorking!, osuFile!, replay?.Score)
+            {
+                // See updateChartVisibility: this is what keeps the layer updating — and therefore
+                // sounding — while it is invisible.
+                AlwaysPresent = true,
+            });
         }
         else if (!wantLayer && chartLayer != null)
         {
@@ -641,9 +741,34 @@ public partial class BeatmapVisuals : CompositeDrawable
 
         if (chartLayer != null)
         {
-            chartLayer.Alpha = renderChart.Value ? 1 : 0;
             chartLayer.HitSoundsEnabled.Value = hitSounds;
+            updateChartVisibility();
         }
+    }
+
+    /// <summary>
+    /// How opaque the gameplay layer is: the user's <see cref="JukeBoxSetting.ChartOpacity"/> while
+    /// the chart is being rendered, and nothing at all when it isn't. Applied live to the layer on
+    /// screen — opacity never rebuilds anything.
+    ///
+    /// <para>
+    /// The layer stays <see cref="Drawable.AlwaysPresent"/> at every alpha, which is the whole
+    /// mechanism behind "hit sounds keep playing with Render chart off". osu!framework treats a
+    /// drawable at alpha 0 as absent and skips its entire subtree in <c>UpdateSubTree</c> — so the
+    /// hidden layer's own <c>Update</c> never ran, the DrawableRuleset's frame-stable clock never
+    /// advanced, and <c>LazerChartLayer</c>'s sample gate stayed shut at its initial "disabled".
+    /// The layer was alive and silent. AlwaysPresent keeps it updating (and therefore seeking,
+    /// following the rate, and sounding) exactly as the visible one does at the cost of drawing a
+    /// fully transparent subtree, which is a cost only a user who asked for hitsounds without a
+    /// chart — or dragged the opacity to zero, the same state by another route — ever pays.
+    /// </para>
+    /// </summary>
+    private void updateChartVisibility()
+    {
+        if (chartLayer == null)
+            return;
+
+        chartLayer.Alpha = renderChart.Value ? (float)chartOpacity.Value : 0;
     }
 
     protected override void Update()
@@ -654,6 +779,12 @@ public partial class BeatmapVisuals : CompositeDrawable
         // rule live so a faulted (black) video brings the background back.
         updateBackgroundVisibility();
         reportUnplayableVideo();
+
+        // Re-read every frame for the same reason the chart sizing below is: the box's size, the
+        // zoom and the corner radius all move continuously (window resize, the focus-mode
+        // transition, a dragged zoom slider), and the clips have to track them, not a value
+        // sampled when a setting last changed.
+        updateLayerClips();
 
         // Catch alone needs chartContainer to actually BE a fixed 1024×768-ish canvas: its
         // PlayfieldAdjustmentContainer positions the catcher/fruits with ABSOLUTE pixel constants
@@ -720,6 +851,75 @@ public partial class BeatmapVisuals : CompositeDrawable
             chartContainer.Size = available;
             chartContainer.Scale = Vector2.One;
         }
+    }
+
+    /// <summary>
+    /// Keeps the four per-layer clips (and the canvas-sized containers inside them) matched to the
+    /// player box, and decides which of them is actually masking.
+    ///
+    /// <para>
+    /// A clip masks ONLY while <see cref="Screens.MainScreen"/>'s box has stopped masking on behalf
+    /// of a "Remove ... mask" setting — with neither setting on, all four are inert and the box's
+    /// own single mask does the work exactly as it did before this feature existed, which is worth
+    /// more than the redundancy would be: two masks at nominally the same rectangle are two chances
+    /// for a rounding difference to show up as a seam along an edge.
+    /// </para>
+    ///
+    /// <para>
+    /// The rectangle is the box's real pixel size converted into this canvas's own local units by
+    /// dividing out the scale <c>MainScreen.updateSceneScale</c> applies to the whole scene (its
+    /// contain-fit factor times <see cref="JukeBoxSetting.PlayfieldZoom"/>) — so a clip covers
+    /// precisely what the box covers, whatever the window size, the layout or the zoom. Without a
+    /// box to measure (the detached viewer, a bare test scene) nothing here masks at all: there is
+    /// no box in those hosts for content to be released FROM.
+    /// </para>
+    /// </summary>
+    private void updateLayerClips()
+    {
+        var canvas = DrawSize;
+
+        // The clips are box-sized, so their contents can't size themselves relatively any more —
+        // these three are the layers whose footprint IS the design canvas.
+        backdropCanvas.Size = canvas;
+        storyboardAudio.Size = canvas;
+        dimScrim.Size = canvas;
+
+        var boxLocal = canvas;
+        float cornerRadiusLocal = 0;
+        bool boxKnown = false;
+
+        if (playerBoxSize != null && canvas.X > 0 && canvas.Y > 0)
+        {
+            var box = playerBoxSize.Value;
+
+            if (box.X > 0 && box.Y > 0)
+            {
+                float sceneScale = Math.Min(box.X / canvas.X, box.Y / canvas.Y) * (float)playfieldZoom.Value;
+
+                if (sceneScale > 0)
+                {
+                    boxLocal = box / sceneScale;
+                    cornerRadiusLocal = (playerBoxCornerRadius?.Value ?? 0) / sceneScale;
+                    boxKnown = true;
+                }
+            }
+        }
+
+        // "Stand in for the box" — true exactly when the box has been released for one layer or the
+        // other, since that is the only time anything here has to clip.
+        bool standIn = boxKnown && (removeChartMask.Value || removeStoryboardMask.Value);
+
+        applyClip(backdropClip, standIn, boxLocal, cornerRadiusLocal);
+        applyClip(storyboardClip, standIn && !removeStoryboardMask.Value, boxLocal, cornerRadiusLocal);
+        applyClip(dimClip, standIn, boxLocal, cornerRadiusLocal);
+        applyClip(chartClip, standIn && !removeChartMask.Value, boxLocal, cornerRadiusLocal);
+    }
+
+    private static void applyClip(Container clip, bool masking, Vector2 size, float cornerRadius)
+    {
+        clip.Size = size;
+        clip.Masking = masking;
+        clip.CornerRadius = masking ? cornerRadius : 0;
     }
 
     protected override void Dispose(bool isDisposing)

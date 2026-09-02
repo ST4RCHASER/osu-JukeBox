@@ -90,6 +90,8 @@ namespace JukeBox.Game.Tests.Visual
                 config.SetValue(JukeBoxSetting.ChartMods, string.Empty);
                 config.SetValue(JukeBoxSetting.HiddenPlayfieldElements, string.Empty);
                 config.SetValue(JukeBoxSetting.ConvertToRuleset, ChartConversionTarget.Off);
+                config.SetValue(JukeBoxSetting.RenderChart, false);
+                config.SetValue(JukeBoxSetting.ChartOpacity, 1.0);
                 conversion.Publish(null);
                 jukebox.NowPlaying.Value = null;
                 playback.Current.Value = null;
@@ -513,6 +515,54 @@ namespace JukeBox.Game.Tests.Visual
                 () => visibility.Shown(PlayfieldElement.OsuSpinner).Value = false);
 
             AddAssert("the tab's checkbox followed", () => !panel.ElementCheckbox(PlayfieldElement.OsuSpinner).Current.Value);
+        }
+
+        /// <summary>
+        /// "Chart opacity" is a dependent row of "Render chart": there is nothing for an opacity to
+        /// apply to while nothing is being rendered, so it greys out and refuses input — and comes
+        /// straight back when rendering does. Both directions, since a one-way wiring reads exactly
+        /// the same on screen until the user unticks the box.
+        /// </summary>
+        [Test]
+        public void ChartOpacityRowFollowsRenderChartInBothDirections()
+        {
+            AddStep("render chart off", () => config.SetValue(JukeBoxSetting.RenderChart, false));
+            AddUntilStep("opacity row is inert and greyed",
+                () => panel.ChartOpacityInert && panel.ChartOpacitySlider.Alpha < 1);
+
+            AddStep("render chart on", () => config.SetValue(JukeBoxSetting.RenderChart, true));
+            AddUntilStep("opacity row is live and full strength",
+                () => !panel.ChartOpacityInert && panel.ChartOpacitySlider.Alpha == 1);
+
+            AddStep("render chart off again", () => config.SetValue(JukeBoxSetting.RenderChart, false));
+            AddUntilStep("and inert again", () => panel.ChartOpacityInert && panel.ChartOpacitySlider.Alpha < 1);
+        }
+
+        /// <summary>
+        /// The row carries the real setting both ways — a slider that only reads, or only writes,
+        /// would look right on screen while losing the user's choice on the next launch (or ignoring
+        /// what the settings mirror hands the detached viewer).
+        /// </summary>
+        [Test]
+        public void ChartOpacityRowRoundTripsTheSetting()
+        {
+            AddStep("render chart on", () => config.SetValue(JukeBoxSetting.RenderChart, true));
+
+            AddStep("drag the row to 35%", () => panel.ChartOpacitySlider.Current.Value = 0.35);
+            AddUntilStep("config followed", () => Math.Abs(config.Get<double>(JukeBoxSetting.ChartOpacity) - 0.35) < 0.001);
+
+            AddStep("write 80% into config", () => config.SetValue(JukeBoxSetting.ChartOpacity, 0.8));
+            AddUntilStep("row followed", () => Math.Abs(panel.ChartOpacitySlider.Current.Value - 0.8) < 0.001);
+
+            // The write below must land even while the row is disabled: the grey-out exists to stop
+            // USER edits, and the settings mirror writes this key on every sync tick.
+            AddStep("render chart off, then write config again", () =>
+            {
+                config.SetValue(JukeBoxSetting.RenderChart, false);
+                config.SetValue(JukeBoxSetting.ChartOpacity, 0.55);
+            });
+            AddUntilStep("the greyed row still followed",
+                () => panel.ChartOpacityInert && Math.Abs(panel.ChartOpacitySlider.Current.Value - 0.55) < 0.001);
         }
 
         /// <summary>A set whose difficulties cover every mode, with <paramref name="mode"/>'s one

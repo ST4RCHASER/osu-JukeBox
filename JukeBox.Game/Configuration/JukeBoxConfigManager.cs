@@ -177,6 +177,39 @@ public enum JukeBoxSetting
     /// the viewer a setting it has no use for.
     /// </summary>
     DiscordRichPresence,
+
+    /// <summary>
+    /// Lets the rendered CHART (playfield) draw past the player box's edges instead of being
+    /// clipped at them — the box's mask is what normally crops a ruleset's own overflow (catch's
+    /// fruit spawn line and catcher, taiko's post-hit fly-up, a zoomed-in playfield) once it
+    /// reaches the box edge. Off (the default) is the boxed behaviour every previous version had.
+    ///
+    /// Only the chart is released: the background, the dim scrim and the storyboard keep clipping
+    /// exactly where they did (see <c>BeatmapVisuals</c>'s per-layer clips), and the released
+    /// chart still draws BEHIND the side columns, which sit above the player in the screen's own
+    /// child order.
+    /// </summary>
+    RemoveChartMask,
+
+    /// <summary>
+    /// The same release for the STORYBOARD (and its video), which is the one most often asked for:
+    /// widescreen storyboards are authored wider than the 4:3 play area and lazer renders them
+    /// that way, so the box's edges crop content their authors meant to be seen. Independent of
+    /// <see cref="RemoveChartMask"/> — each layer has its own clip.
+    /// </summary>
+    RemoveStoryboardMask,
+
+    /// <summary>
+    /// How opaque the rendered chart is, 0-1 (1 = fully opaque, the default). Applied as alpha
+    /// straight onto the live gameplay layer, so it takes effect on the chart already on screen
+    /// with no rebuild — unlike mods or a conversion, which change what the layer IS.
+    ///
+    /// Only meaningful while <see cref="RenderChart"/> is on; with rendering off the layer is
+    /// hidden outright (and kept alive only when <see cref="PlayHitSounds"/> wants its audio).
+    /// Hitsounds are independent of this value: a chart at 0% still plays them, exactly as a
+    /// hidden one does.
+    /// </summary>
+    ChartOpacity,
 }
 
 /// <summary>
@@ -322,6 +355,10 @@ public class JukeBoxConfigManager : IniConfigManager<JukeBoxSetting>
         SetDefault(JukeBoxSetting.SearchApi, SearchApi.Mirror);
         SetDefault(JukeBoxSetting.OsuClientId, string.Empty);
         SetDefault(JukeBoxSetting.OsuClientSecret, string.Empty);
+
+        SetDefault(JukeBoxSetting.RemoveChartMask, false);
+        SetDefault(JukeBoxSetting.RemoveStoryboardMask, false);
+        SetDefault(JukeBoxSetting.ChartOpacity, 1.0, 0.0, 1.0);
 
         SetDefault(JukeBoxSetting.ChartMods, string.Empty);
         SetDefault(JukeBoxSetting.HiddenPlayfieldElements, string.Empty);

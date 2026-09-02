@@ -125,6 +125,23 @@ public partial class ChartPanel : CompositeDrawable
     private SettingsCheckbox renderChartCheckbox = null!;
     private SettingsCheckbox playHitSoundsCheckbox = null!;
 
+    private SettingsSlider<double> chartOpacityRow = null!;
+
+    /// <summary>
+    /// Slider-facing adapter for <see cref="JukeBoxSetting.ChartOpacity"/>. The "only while the
+    /// chart is rendered" grey-out lives on THIS bindable's Disabled, never on the config bindable
+    /// itself — same reason as every other adapter here: a disabled config bindable makes any
+    /// programmatic write throw, and this one is written by the settings mirror.
+    /// </summary>
+    private readonly BindableDouble chartOpacityUi = new BindableDouble(1)
+    {
+        MinValue = 0,
+        MaxValue = 1,
+        Precision = 0.01,
+    };
+
+    private Bindable<double>? chartOpacityConfig;
+
     /// <summary>"Convert to", and the line explaining why it is greyed when the map on screen has
     /// no conversion available.</summary>
     private SettingsEnumDropdown<ChartConversionTarget>? convertDropdown;
@@ -213,6 +230,13 @@ public partial class ChartPanel : CompositeDrawable
     internal SettingsCheckbox RenderChartCheckbox => renderChartCheckbox;
 
     internal SettingsCheckbox PlayHitSoundsCheckbox => playHitSoundsCheckbox;
+
+    /// <summary>Test-only access to the chart-opacity row and its dependent-row state.</summary>
+    internal SettingsSlider<double> ChartOpacitySlider => chartOpacityRow;
+
+    /// <summary>Test-only: whether the opacity row refuses input because nothing is being
+    /// rendered for it to apply to.</summary>
+    internal bool ChartOpacityInert => chartOpacityUi.Disabled;
 
     internal SettingsCheckbox ModCheckbox(ChartMod mod) => modCheckboxes[mod];
 
@@ -307,6 +331,21 @@ public partial class ChartPanel : CompositeDrawable
                 Children = new Drawable[]
                 {
                     renderChartCheckbox = new SettingsCheckbox { LabelText = "Render chart" },
+                    // Indented under the checkbox it depends on, the same dependent-row shape the
+                    // key-count value uses: with nothing being rendered there is nothing for an
+                    // opacity to apply to, so the row greys out and refuses input alongside it.
+                    new Container
+                    {
+                        RelativeSizeAxes = Axes.X,
+                        AutoSizeAxes = Axes.Y,
+                        Padding = new MarginPadding { Left = 24 },
+                        Child = chartOpacityRow = new SettingsSlider<double>
+                        {
+                            LabelText = "Chart opacity",
+                            DisplayAsPercentage = true,
+                            KeyboardStep = 0.01f,
+                        },
+                    },
                     playHitSoundsCheckbox = new SettingsCheckbox { LabelText = "Play hit sounds" },
                 },
             },
@@ -652,6 +691,8 @@ public partial class ChartPanel : CompositeDrawable
         renderChartCheckbox.Current = config.GetBindable<bool>(JukeBoxSetting.RenderChart);
         playHitSoundsCheckbox.Current = config.GetBindable<bool>(JukeBoxSetting.PlayHitSounds);
 
+        bindChartOpacity();
+
         if (hitLightingCheckbox != null && lazerConfig != null)
             hitLightingCheckbox.Current = lazerConfig.GetBindable<bool>(OsuSetting.HitLighting);
 
@@ -698,6 +739,38 @@ public partial class ChartPanel : CompositeDrawable
         currentSet.BindValueChanged(_ => updateForCurrentRuleset());
         selectedOsuFile.BindValueChanged(_ => updateForCurrentRuleset());
         updateForCurrentRuleset();
+    }
+
+    /// <summary>
+    /// Two-way sync between the opacity slider and its config value, plus the dependent-row state:
+    /// the row follows "Render chart" in both directions — greyed and inert the moment rendering is
+    /// switched off, live again the moment it is switched back on.
+    /// </summary>
+    private void bindChartOpacity()
+    {
+        chartOpacityConfig = config.GetBindable<double>(JukeBoxSetting.ChartOpacity);
+        chartOpacityRow.Current = chartOpacityUi;
+
+        // Config → UI lifts the disable for the mirroring write, since the disable exists to stop
+        // USER edits rather than programmatic ones (see chartOpacityUi's remarks).
+        chartOpacityConfig.BindValueChanged(e =>
+        {
+            bool wasDisabled = chartOpacityUi.Disabled;
+
+            chartOpacityUi.Disabled = false;
+            chartOpacityUi.Value = e.NewValue;
+            chartOpacityUi.Disabled = wasDisabled;
+        }, true);
+
+        chartOpacityUi.BindValueChanged(e => chartOpacityConfig.Value = e.NewValue);
+
+        renderChartCheckbox.Current.BindValueChanged(e => updateChartOpacityState(e.NewValue), true);
+    }
+
+    private void updateChartOpacityState(bool rendering)
+    {
+        chartOpacityUi.Disabled = !rendering;
+        chartOpacityRow.FadeTo(rendering ? 1 : locked_alpha, Theme.HoverFadeDuration, Easing.OutQuint);
     }
 
     /// <summary>

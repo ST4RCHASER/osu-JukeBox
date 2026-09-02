@@ -131,6 +131,8 @@ public partial class MainScreen : Screen
     private Bindable<double> playfieldZoom = null!;
     private Bindable<bool> detachPlayer = null!;
     private Bindable<bool> detachPlayOnMain = null!;
+    private Bindable<bool> removeChartMask = null!;
+    private Bindable<bool> removeStoryboardMask = null!;
 
     private const float tab_slide_offset = 20;
 
@@ -147,6 +149,7 @@ public partial class MainScreen : Screen
 
     private Container visualsHost = null!;
     private Container playerBox = null!;
+    private Container boxFrame = null!;
     private ToastOverlay toastOverlay = null!;
     private Container sceneContainer = null!;
     private FillFlowContainer detachedPlaceholder = null!;
@@ -159,6 +162,20 @@ public partial class MainScreen : Screen
     // playerBox.OnUpdate rather than this screen's Update()).
     [Cached]
     private readonly Bindable<Vector2> playerBoxSize = new();
+
+    /// <summary>
+    /// The box's live corner radius, cached alongside <see cref="playerBoxSize"/> and for the same
+    /// consumer: while a "Remove ... mask" setting has <see cref="playerBox"/> not masking, the
+    /// per-layer clips inside <see cref="BeatmapVisuals"/> stand in for it, and they have to round
+    /// their corners the same way the box would have — including mid-animation, since the radius
+    /// tweens to zero on the way into focus mode (see <see cref="applyLayout"/>).
+    /// </summary>
+    [Cached(name: player_box_corner_radius)]
+    private readonly Bindable<float> playerBoxCornerRadius = new(Theme.CornerRadius);
+
+    /// <summary>DI name for <see cref="playerBoxCornerRadius"/> — a bare <c>Bindable&lt;float&gt;</c>
+    /// is far too generic a type to cache unnamed.</summary>
+    internal const string player_box_corner_radius = "player box corner radius";
 
     /// <summary>
     /// Cached HERE rather than app-wide on purpose: only the master window has a
@@ -213,6 +230,13 @@ public partial class MainScreen : Screen
     /// own bounds, however it tries to overflow internally) without depending on layout internals.
     /// </summary>
     internal Container PlayerBox => playerBox;
+
+    /// <summary>
+    /// Test-only access to the card frame behind <see cref="PlayerBox"/> — the rounded, shadowed
+    /// black bed that keeps the box looking like a card even while the box itself has stopped
+    /// masking for a "Remove ... mask" setting.
+    /// </summary>
+    internal Container BoxFrame => boxFrame;
 
     /// <summary>
     /// Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the toast stack, to assert
@@ -299,60 +323,81 @@ public partial class MainScreen : Screen
             visualsHost = new Container
             {
                 RelativeSizeAxes = Axes.Both,
-                Child = playerBox = new Container
+                Children = new Drawable[]
                 {
-                    RelativeSizeAxes = Axes.Both,
-                    Masking = true,
-                    CornerRadius = Theme.CornerRadius,
-                    EdgeEffect = Theme.PanelShadow,
-                    Children = new Drawable[]
+                    // The card the player sits on, and BEHIND the player rather than around it:
+                    // rounded, shadowed, and holding the black bed (the player's letterbox ground,
+                    // and the empty-state fill while nothing is playing yet). It is a sibling of
+                    // playerBox, not its parent or its child, for two reasons that pull in opposite
+                    // directions — an edge effect needs its own container to be masking (the
+                    // framework refuses the combination outright), while a masking playerBox would
+                    // clip a child's outward shadow away entirely. As a sibling drawn first it
+                    // always masks itself, always casts its shadow, and never depends on whether
+                    // playerBox is clipping this frame.
+                    boxFrame = new Container
                     {
-                        // Black bed: the player's letterbox ground, and the empty-state fill
-                        // while nothing is playing yet.
-                        new Box
+                        RelativeSizeAxes = Axes.Both,
+                        Masking = true,
+                        CornerRadius = Theme.CornerRadius,
+                        EdgeEffect = Theme.PanelShadow,
+                        Child = new Box
                         {
                             RelativeSizeAxes = Axes.Both,
                             Colour = Colour4.Black,
                         },
-                        // Fixed design-size canvas, scaled uniformly to fit playerBox (see
-                        // updateSceneScale) instead of visualsStack stretching RelativeSizeAxes
-                        // straight to the box — that's what let the scene overflow (and get
-                        // masked/cropped) whenever the box got narrower than the design aspect.
-                        sceneContainer = new Container
+                    },
+                    playerBox = new Container
+                    {
+                        RelativeSizeAxes = Axes.Both,
+                        // The content clip, and the one thing here that is ever switched off: the
+                        // two "Remove ... mask" settings release the scene past the box's edges by
+                        // turning this off (see updatePlayerBoxMasking), after which
+                        // BeatmapVisuals' own per-layer clips — sized to exactly this box — keep
+                        // clipping whatever the user did NOT release.
+                        Masking = true,
+                        CornerRadius = Theme.CornerRadius,
+                        Children = new Drawable[]
                         {
-                            Anchor = Anchor.Centre,
-                            Origin = Anchor.Centre,
-                            Size = new Vector2(scene_width, scene_height),
-                            Child = visualsStack = new ScreenStack { RelativeSizeAxes = Axes.Both },
-                        },
-                        // Shown instead of the scene while DetachPlayer has the visuals living
-                        // in their own window (see Detach.DetachedViewerManager). The scene
-                        // itself stays loaded underneath at Alpha 0 — draw cost is skipped, but
-                        // re-attaching is instant with no reload gap.
-                        detachedPlaceholder = new FillFlowContainer
-                        {
-                            Anchor = Anchor.Centre,
-                            Origin = Anchor.Centre,
-                            AutoSizeAxes = Axes.Both,
-                            Direction = FillDirection.Vertical,
-                            Spacing = new Vector2(0, 12),
-                            Alpha = 0,
-                            Children = new Drawable[]
+                            // Fixed design-size canvas, scaled uniformly to fit playerBox (see
+                            // updateSceneScale) instead of visualsStack stretching RelativeSizeAxes
+                            // straight to the box — that's what let the scene overflow (and get
+                            // masked/cropped) whenever the box got narrower than the design aspect.
+                            sceneContainer = new Container
                             {
-                                new SpriteIcon
+                                Anchor = Anchor.Centre,
+                                Origin = Anchor.Centre,
+                                Size = new Vector2(scene_width, scene_height),
+                                Child = visualsStack = new ScreenStack { RelativeSizeAxes = Axes.Both },
+                            },
+                            // Shown instead of the scene while DetachPlayer has the visuals living
+                            // in their own window (see Detach.DetachedViewerManager). The scene
+                            // itself stays loaded underneath at Alpha 0 — draw cost is skipped, but
+                            // re-attaching is instant with no reload gap.
+                            detachedPlaceholder = new FillFlowContainer
+                            {
+                                Anchor = Anchor.Centre,
+                                Origin = Anchor.Centre,
+                                AutoSizeAxes = Axes.Both,
+                                Direction = FillDirection.Vertical,
+                                Spacing = new Vector2(0, 12),
+                                Alpha = 0,
+                                Children = new Drawable[]
                                 {
-                                    Anchor = Anchor.TopCentre,
-                                    Origin = Anchor.TopCentre,
-                                    Icon = FontAwesome.Solid.ExternalLinkAlt,
-                                    Size = new Vector2(28),
-                                    Colour = Colour4.White.Opacity(0.4f),
-                                },
-                                new SpriteText
-                                {
-                                    Anchor = Anchor.TopCentre,
-                                    Origin = Anchor.TopCentre,
-                                    Text = "Playing in detached window",
-                                    Colour = Colour4.White.Opacity(0.6f),
+                                    new SpriteIcon
+                                    {
+                                        Anchor = Anchor.TopCentre,
+                                        Origin = Anchor.TopCentre,
+                                        Icon = FontAwesome.Solid.ExternalLinkAlt,
+                                        Size = new Vector2(28),
+                                        Colour = Colour4.White.Opacity(0.4f),
+                                    },
+                                    new SpriteText
+                                    {
+                                        Anchor = Anchor.TopCentre,
+                                        Origin = Anchor.TopCentre,
+                                        Text = "Playing in detached window",
+                                        Colour = Colour4.White.Opacity(0.6f),
+                                    },
                                 },
                             },
                         },
@@ -514,6 +559,12 @@ public partial class MainScreen : Screen
         detachPlayOnMain.BindValueChanged(_ => updatePlayerBoxPresentation());
         updatePlayerBoxPresentation();
 
+        removeChartMask = config.GetBindable<bool>(JukeBoxSetting.RemoveChartMask);
+        removeStoryboardMask = config.GetBindable<bool>(JukeBoxSetting.RemoveStoryboardMask);
+        removeChartMask.BindValueChanged(_ => updatePlayerBoxMasking());
+        removeStoryboardMask.BindValueChanged(_ => updatePlayerBoxMasking());
+        updatePlayerBoxMasking();
+
         jukebox.Start();
 
         lastError.BindTo(jukebox.LastError);
@@ -611,9 +662,33 @@ public partial class MainScreen : Screen
         Logger.Log($"Player box presentation: detach={detachPlayer.Value} playOnMain={detachPlayOnMain.Value} → {(placeholderShown ? "placeholder" : "scene")}");
     }
 
+    /// <summary>
+    /// Releasing EITHER layer means <see cref="playerBox"/> stops clipping its content — a child
+    /// can never escape an ancestor's mask, so there is nowhere else the release can happen. The
+    /// scene doesn't simply spill wholesale as a result: <see cref="BeatmapVisuals"/> gives every
+    /// layer its own clip sized to this exact box (see its <c>updateLayerClips</c>), and those take
+    /// over for everything the user did not release. The released layer still draws behind the side
+    /// columns and every overlay, all of which are later children of this screen than
+    /// <see cref="visualsHost"/>.
+    ///
+    /// <para>
+    /// Logged for the same reason the detach presentation is: "why is my storyboard spilling over
+    /// the gutter" wants the answer pinned down in a report.
+    /// </para>
+    /// </summary>
+    private void updatePlayerBoxMasking()
+    {
+        bool released = removeChartMask.Value || removeStoryboardMask.Value;
+
+        playerBox.Masking = !released;
+
+        Logger.Log($"Player box masking: removeChartMask={removeChartMask.Value} removeStoryboardMask={removeStoryboardMask.Value} → box {(released ? "releases its content (per-layer clips take over)" : "clips its content")}");
+    }
+
     private void updateSceneScale()
     {
         playerBoxSize.Value = playerBox.DrawSize;
+        playerBoxCornerRadius.Value = playerBox.CornerRadius;
 
         if (playerBox.DrawWidth <= 0 || playerBox.DrawHeight <= 0)
             return;
@@ -703,7 +778,13 @@ public partial class MainScreen : Screen
         var targetPadding = focus ? new MarginPadding() : threeColumnPadding();
 
         visualsHost.TransformTo(nameof(visualsHost.Padding), targetPadding, duration, easing);
-        playerBox.TransformTo(nameof(playerBox.CornerRadius), focus ? 0f : Theme.CornerRadius, duration, easing);
+
+        // Both, in lockstep: playerBox rounds the CONTENT (whenever it is masking at all) and
+        // boxFrame rounds the card itself. A radius left behind on either would show as a square
+        // corner over a rounded one for the length of the transition.
+        float targetRadius = focus ? 0f : Theme.CornerRadius;
+        playerBox.TransformTo(nameof(playerBox.CornerRadius), targetRadius, duration, easing);
+        boxFrame.TransformTo(nameof(boxFrame.CornerRadius), targetRadius, duration, easing);
 
         // Defensive: drop keyboard focus before it ends up parked on a search box (or any other
         // input-consuming child) inside a column that just went Alpha 0 / non-present. The big

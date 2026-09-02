@@ -128,6 +128,8 @@ public partial class SettingsOverlay : FocusedOverlayContainer
     private SettingsSlider<double> backgroundBlurRow = null!;
     private SettingsSlider<double> uiScaleRow = null!;
     private SettingsSlider<double> playfieldZoomRow = null!;
+    private SettingsCheckbox removeChartMaskCheckbox = null!;
+    private SettingsCheckbox removeStoryboardMaskCheckbox = null!;
     private SettingsEnumDropdown<MirrorSource> mirrorDropdown = null!;
     private SettingsEnumDropdown<SearchApi> searchApiDropdown = null!;
     private SettingsTextBox clientIdTextBox = null!;
@@ -214,6 +216,8 @@ public partial class SettingsOverlay : FocusedOverlayContainer
 
     internal SettingsSlider<double> BackgroundDimSlider => backgroundDimRow;
     internal SettingsSlider<double> PlayfieldZoomSlider => playfieldZoomRow;
+    internal SettingsCheckbox RemoveChartMaskCheckbox => removeChartMaskCheckbox;
+    internal SettingsCheckbox RemoveStoryboardMaskCheckbox => removeStoryboardMaskCheckbox;
     internal SettingsDropdown<SkinChoice> SkinDropdown => skinDropdown;
     internal SettingsDropdown<string> AudioDeviceDropdown => audioDeviceDropdown;
     internal SettingsSlider<double> MasterVolumeSlider => masterVolumeRow;
@@ -338,6 +342,13 @@ public partial class SettingsOverlay : FocusedOverlayContainer
         gameplayRows.Add(backgroundDimRow = new SettingsSlider<double> { LabelText = "Background dim", DisplayAsPercentage = true, KeyboardStep = 0.01f });
         gameplayRows.Add(backgroundBlurRow = new SettingsSlider<double> { LabelText = "Background blur", DisplayAsPercentage = true, KeyboardStep = 0.01f });
         gameplayRows.Add(playfieldZoomRow = new SettingsSlider<double> { LabelText = "Playfield zoom", DisplayAsPercentage = true, KeyboardStep = 0.01f });
+
+        // The two mask releases, sitting with the zoom they interact with: zooming in is the other
+        // way to push content at the box's edges, and these decide whether it stops there. Named
+        // for what they remove rather than what they show, which is how the user asked for them.
+        gameplayRows.Add(removeChartMaskCheckbox = new SettingsCheckbox { LabelText = "Remove playfield/chart mask" });
+        gameplayRows.Add(removeStoryboardMaskCheckbox = new SettingsCheckbox { LabelText = "Remove storyboard mask" });
+
         sections.Add(new LazerSection("Gameplay", FontAwesome.Regular.DotCircle) { Children = gameplayRows });
 
         var beatmapRows = new List<Drawable>();
@@ -564,6 +575,8 @@ public partial class SettingsOverlay : FocusedOverlayContainer
         backgroundDimRow.Current = config.GetBindable<double>(JukeBoxSetting.BackgroundDim);
         backgroundBlurRow.Current = config.GetBindable<double>(JukeBoxSetting.BackgroundBlur);
         playfieldZoomRow.Current = config.GetBindable<double>(JukeBoxSetting.PlayfieldZoom);
+        removeChartMaskCheckbox.Current = config.GetBindable<bool>(JukeBoxSetting.RemoveChartMask);
+        removeStoryboardMaskCheckbox.Current = config.GetBindable<bool>(JukeBoxSetting.RemoveStoryboardMask);
         uiScaleRow.Current = config.GetBindable<double>(JukeBoxSetting.UiScale);
         globalOffsetRow.Current = config.GetBindable<double>(JukeBoxSetting.GlobalAudioOffset);
         mirrorDropdown.Current = config.GetBindable<MirrorSource>(JukeBoxSetting.PreferredMirror);

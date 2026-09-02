@@ -16,6 +16,7 @@ using NUnit.Framework;
 using osu.Framework.Allocation;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
+using osu.Framework.Graphics.Effects;
 using osu.Framework.Graphics.Primitives;
 using osu.Framework.Graphics.Shapes;
 using osu.Framework.Graphics.Sprites;
@@ -89,6 +90,14 @@ namespace JukeBox.Game.Tests.Visual
                 queue.Items.Clear();
                 mirror.Sets.Clear();
                 config.SetValue(JukeBoxSetting.UiLayout, UiLayout.ThreeColumn);
+
+                // Both mask releases and anything a previous test put on screen: back to the
+                // resting state every other test here assumes (boxed player, nothing playing).
+                config.SetValue(JukeBoxSetting.RemoveChartMask, false);
+                config.SetValue(JukeBoxSetting.RemoveStoryboardMask, false);
+                playback.Current.Value = null;
+                playback.SelectedOsuFile.Value = null;
+
                 screen = new MainScreen { RelativeSizeAxes = Axes.Both };
                 // MainScreen is a Screen — osu!framework requires a Screen to be hosted by a
                 // ScreenStack (see JukeBoxGame's own top-level screenStack.Push(new MainScreen())).
@@ -524,6 +533,212 @@ namespace JukeBox.Game.Tests.Visual
                 screen.VisualsHostPadding.Left == 0 && screen.VisualsHostPadding.Right == 0
                 && screen.VisualsHostPadding.Top == 0 && screen.VisualsHostPadding.Bottom == 0);
             AddAssert("still masked in focus mode", () => screen.PlayerBox.Masking);
+        }
+
+        // ---- the two mask releases (Settings → Gameplay) ----
+        //
+        // A child can never escape an ancestor's mask, so releasing a layer past the box's edges
+        // means the BOX stops clipping and BeatmapVisuals' own per-layer clips — each sized to that
+        // same box — take over for whatever the user did NOT release. These tests drive that from
+        // the real config, through the real screen, with a real beatmap's visual stack on screen,
+        // and ask the only question that matters of each layer: is anything still clipping it?
+
+        private CachedBeatmapSet? maskFixtureSet;
+
+        /// <summary>
+        /// Puts a real <see cref="BeatmapVisuals"/> on screen through the same bindable
+        /// <see cref="NowPlayingScreen"/> listens to, so the clips under test are the ones the app
+        /// actually builds rather than a stand-in. A one-hit-object difficulty is enough: nothing
+        /// here depends on what the chart contains.
+        /// </summary>
+        private void addRealVisuals()
+        {
+            AddStep("put a real beatmap on screen", () =>
+            {
+                if (maskFixtureSet == null)
+                {
+                    string dir = Path.Combine(tmp, "mask-fixture");
+                    Directory.CreateDirectory(dir);
+                    File.WriteAllText(Path.Combine(dir, "mask [Normal].osu"),
+                        "osu file format v14\n\n[General]\nAudioFilename: audio.wav\nMode: 0\n\n[Metadata]\nVersion:Normal\n\n"
+                        + "[Difficulty]\nCircleSize:4\n\n[TimingPoints]\n0,500,4,1,0,100,1,0\n\n[HitObjects]\n256,192,1000,1,0\n");
+
+                    maskFixtureSet = cache.LoadFromDirectory(424242, dir);
+                }
+
+                playback.Current.Value = maskFixtureSet;
+                playback.SelectedOsuFile.Value = maskFixtureSet.PreferredOsuFile;
+            });
+
+            AddUntilStep("visuals loaded into the box", () => screen.ChildrenOfType<BeatmapVisuals>().Any(v => v.IsLoaded));
+        }
+
+        private BeatmapVisuals visuals() => screen.ChildrenOfType<BeatmapVisuals>().First(v => v.IsLoaded);
+
+        /// <summary>A marker parked far outside the player box, so "is this clipped" has a definite
+        /// answer instead of depending on what a particular beatmap happens to draw.</summary>
+        private static Box outsideProbe() => new Box
+        {
+            Anchor = Anchor.Centre,
+            Origin = Anchor.Centre,
+            Size = new osuTK.Vector2(20),
+            X = 4000,
+        };
+
+        private bool outsideTheBox(Drawable probe)
+            => probe.ScreenSpaceDrawQuad.TopLeft.X > screen.PlayerBox.ScreenSpaceDrawQuad.TopRight.X;
+
+        /// <summary>
+        /// Every masking container between <paramref name="d"/> and the screen — that is, everything
+        /// that would actually clip it. Empty means the drawable is free to render wherever it
+        /// lands (up to the window itself).
+        /// </summary>
+        private List<Container> clippers(Drawable d)
+        {
+            var found = new List<Container>();
+
+            for (CompositeDrawable? p = d.Parent; p != null; p = p.Parent)
+            {
+                if (p is Container { Masking: true } c)
+                    found.Add(c);
+
+                if (p == screen)
+                    break;
+            }
+
+            return found;
+        }
+
+        private static bool coversTheSameRect(Drawable a, Drawable b)
+        {
+            var one = a.ScreenSpaceDrawQuad.AABBFloat;
+            var other = b.ScreenSpaceDrawQuad.AABBFloat;
+
+            return Math.Abs(one.X - other.X) < 1 && Math.Abs(one.Y - other.Y) < 1
+                   && Math.Abs(one.Width - other.Width) < 1 && Math.Abs(one.Height - other.Height) < 1;
+        }
+
+        [Test]
+        public void MaskReleasesAreOffByDefaultAndLeaveTheBoxInSoleCharge()
+        {
+            addRealVisuals();
+
+            AddAssert("box clips its content", () => screen.PlayerBox.Masking);
+            AddAssert("and no per-layer clip is standing in for it", () =>
+                !visuals().StoryboardClip.Masking && !visuals().ChartClip.Masking
+                && !visuals().BackdropClip.Masking && !visuals().DimClip.Masking);
+        }
+
+        [Test]
+        public void EachMaskReleaseFreesOnlyItsOwnLayer()
+        {
+            addRealVisuals();
+
+            Box storyboardProbe = null!;
+            Box chartProbe = null!;
+
+            AddStep("park a probe past the box's edge in each layer", () =>
+            {
+                visuals().StoryboardClip.Add(storyboardProbe = outsideProbe());
+                visuals().ChartClip.Add(chartProbe = outsideProbe());
+            });
+
+            AddUntilStep("both probes really are outside the box",
+                () => outsideTheBox(storyboardProbe) && outsideTheBox(chartProbe));
+            AddAssert("and both are clipped to begin with",
+                () => clippers(storyboardProbe).Any() && clippers(chartProbe).Any());
+
+            AddStep("remove the storyboard mask", () => config.SetValue(JukeBoxSetting.RemoveStoryboardMask, true));
+
+            AddUntilStep("nothing clips the storyboard any more", () => !clippers(storyboardProbe).Any());
+            AddAssert("the chart is still clipped, and by the box's own rectangle", () =>
+                clippers(chartProbe).SequenceEqual(new[] { visuals().ChartClip })
+                && coversTheSameRect(visuals().ChartClip, screen.PlayerBox));
+            AddAssert("the background and the dim keep clipping too",
+                () => visuals().BackdropClip.Masking && visuals().DimClip.Masking
+                      && coversTheSameRect(visuals().BackdropClip, screen.PlayerBox));
+
+            AddStep("remove the chart mask as well", () => config.SetValue(JukeBoxSetting.RemoveChartMask, true));
+            AddUntilStep("now neither is clipped",
+                () => !clippers(storyboardProbe).Any() && !clippers(chartProbe).Any());
+
+            AddStep("put the storyboard mask back", () => config.SetValue(JukeBoxSetting.RemoveStoryboardMask, false));
+            AddUntilStep("and only the storyboard is clipped again",
+                () => clippers(storyboardProbe).Any() && !clippers(chartProbe).Any());
+
+            AddStep("put the chart mask back", () => config.SetValue(JukeBoxSetting.RemoveChartMask, false));
+            AddUntilStep("the box is in sole charge once more",
+                () => screen.PlayerBox.Masking && clippers(chartProbe).SequenceEqual(new[] { screen.PlayerBox }));
+        }
+
+        // A released layer reaching over the gutter must go UNDER the side columns, never over
+        // them: the columns are later children of this screen than the player's host and every one
+        // of the three sits at the same depth, so child order is what decides — which is exactly
+        // what this pins down.
+        [Test]
+        public void ReleasedContentStillDrawsBehindTheSideColumns()
+        {
+            addRealVisuals();
+
+            Box probe = null!;
+
+            AddStep("release the storyboard and add a probe", () =>
+            {
+                config.SetValue(JukeBoxSetting.RemoveStoryboardMask, true);
+                visuals().StoryboardClip.Add(probe = outsideProbe());
+            });
+
+            // Aimed from live geometry rather than a guessed offset: the probe has to land ON the
+            // right column (outside the box, inside the panel) for "released content goes under the
+            // panel, not over it" to be a question at all.
+            AddStep("aim it at the middle of the right column", () =>
+            {
+                var box = screen.PlayerBox.ScreenSpaceDrawQuad;
+                var column = screen.RightColumn.ScreenSpaceDrawQuad;
+
+                float columnCentre = (column.TopLeft.X + column.TopRight.X) / 2;
+                float boxCentre = (box.TopLeft.X + box.TopRight.X) / 2;
+
+                probe.X = (columnCentre - boxCentre) / screen.SceneScale.X;
+            });
+
+            AddUntilStep("the probe is unclipped and really overlaps the column", () =>
+                !clippers(probe).Any()
+                && probe.ScreenSpaceDrawQuad.AABBFloat.IntersectsWith(screen.RightColumn.ScreenSpaceDrawQuad.AABBFloat));
+
+            AddAssert("but the player's host is drawn before both columns", () =>
+            {
+                var order = screen.ChildrenOfType<Drawable>().ToList();
+                var host = screen.PlayerBox.Parent!;
+
+                return order.IndexOf(host) >= 0
+                       && order.IndexOf(host) < order.IndexOf(screen.LeftColumn)
+                       && order.IndexOf(host) < order.IndexOf(screen.RightColumn)
+                       && host.Depth == screen.LeftColumn.Depth && host.Depth == screen.RightColumn.Depth;
+            });
+        }
+
+        // Releasing the content mask must not cost the player its card look: the rounding and the
+        // drop shadow live on a frame INSIDE the box for exactly this reason, and both radii still
+        // animate away together on the way into focus mode.
+        [Test]
+        public void TheCardKeepsItsRoundedShadowedFrameWhileTheBoxIsReleased()
+        {
+            AddAssert("card frame masks, rounds and casts the shadow", () =>
+                screen.BoxFrame.Masking && screen.BoxFrame.CornerRadius > 0
+                && screen.BoxFrame.EdgeEffect.Type == EdgeEffectType.Shadow && screen.BoxFrame.EdgeEffect.Radius > 0);
+
+            AddStep("release the chart mask", () => config.SetValue(JukeBoxSetting.RemoveChartMask, true));
+            AddUntilStep("the box stops clipping", () => !screen.PlayerBox.Masking);
+
+            AddAssert("the card is untouched", () =>
+                screen.BoxFrame.Masking && screen.BoxFrame.CornerRadius > 0
+                && screen.BoxFrame.EdgeEffect.Type == EdgeEffectType.Shadow && screen.BoxFrame.EdgeEffect.Radius > 0);
+            AddAssert("and it still covers exactly the box", () => coversTheSameRect(screen.BoxFrame, screen.PlayerBox));
+
+            AddStep("enter focus mode", () => InputManager.Key(Key.Tab));
+            AddUntilStep("both radii animate away together",
+                () => screen.PlayerBox.CornerRadius == 0 && screen.BoxFrame.CornerRadius == 0);
         }
 
         // Regression coverage for the content-scale tracking bug: updateSceneScale used to switch

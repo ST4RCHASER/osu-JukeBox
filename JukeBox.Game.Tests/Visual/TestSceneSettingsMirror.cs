@@ -50,6 +50,9 @@ namespace JukeBox.Game.Tests.Visual
             {
                 config.SetValue(JukeBoxSetting.BackgroundDim, 0.3);
                 config.SetValue(JukeBoxSetting.ChartMods, string.Empty);
+                config.SetValue(JukeBoxSetting.ChartOpacity, 1.0);
+                config.SetValue(JukeBoxSetting.RemoveChartMask, false);
+                config.SetValue(JukeBoxSetting.RemoveStoryboardMask, false);
                 lazerConfig.SetValue(OsuSetting.HitLighting, false);
                 osuRulesetConfig()?.SetValue(OsuRulesetSetting.SnakingInSliders, true);
                 maniaRulesetConfig()?.SetValue(ManiaRulesetSetting.ScrollSpeed, 8.0);
@@ -74,6 +77,13 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("covers our own config", () => mirror.Keys.Contains("jukebox:ChartMods")
                                                      && mirror.Keys.Contains("jukebox:HiddenPlayfieldElements")
                                                      && mirror.Keys.Contains("jukebox:ConvertToRuleset"));
+
+            // Every setting that changes what the player RENDERS has to be here or the detached
+            // window quietly disagrees with the main one — these three all do.
+            AddAssert("covers the chart opacity and both mask releases",
+                () => mirror.Keys.Contains("jukebox:ChartOpacity")
+                      && mirror.Keys.Contains("jukebox:RemoveChartMask")
+                      && mirror.Keys.Contains("jukebox:RemoveStoryboardMask"));
 
             AddAssert("covers lazer's game-wide config", () => mirror.Keys.Contains("lazer:HitLighting"));
 
@@ -138,9 +148,13 @@ namespace JukeBox.Game.Tests.Visual
                 ["lazer:HitLighting"] = "1",
                 ["ruleset:OsuRulesetSetting.SnakingInSliders"] = "0",
                 ["ruleset:ManiaRulesetSetting.ScrollSpeed"] = "21",
+                ["jukebox:ChartOpacity"] = "0.4",
+                ["jukebox:RemoveStoryboardMask"] = "1",
             }));
 
             AddAssert("ours took it", () => config.Get<double>(JukeBoxSetting.BackgroundDim) == 0.85);
+            AddAssert("so did the new render settings", () => config.Get<double>(JukeBoxSetting.ChartOpacity) == 0.4
+                                                              && config.Get<bool>(JukeBoxSetting.RemoveStoryboardMask));
             AddAssert("lazer's took it", () => lazerConfig.Get<bool>(OsuSetting.HitLighting));
             AddAssert("osu! ruleset took it", () => osuRulesetConfig()?.Get<bool>(OsuRulesetSetting.SnakingInSliders) == false);
             AddAssert("mania ruleset took it", () => maniaRulesetConfig()?.Get<double>(ManiaRulesetSetting.ScrollSpeed) == 21);

@@ -102,6 +102,9 @@ public partial class SettingsMirror : Component
         // storage, which does not exist under the viewer's.
         add<bool>(JukeBoxSetting.RenderChart);
         add<bool>(JukeBoxSetting.PlayHitSounds);
+        add<double>(JukeBoxSetting.ChartOpacity);
+        add<bool>(JukeBoxSetting.RemoveChartMask);
+        add<bool>(JukeBoxSetting.RemoveStoryboardMask);
         add<double>(JukeBoxSetting.BackgroundDim);
         add<double>(JukeBoxSetting.BackgroundBlur);
         add<bool>(JukeBoxSetting.ShowStoryboardVideo);
