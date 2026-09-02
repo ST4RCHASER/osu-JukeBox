@@ -105,31 +105,82 @@ namespace JukeBox.Game.Tests.Presence
         }
 
         /// <summary>
-        /// The point of dropping the prefixes: the body of the card is the same Spotify-shaped text
-        /// whatever is on screen, and ONLY the activity verb moves. This is what replaces the old
-        /// chart-versus-storyboard precedence test — with identical text there is no longer a
-        /// question of which one wins.
+        /// Every WATCHING source produces the same card — chart, storyboard, video, or several at
+        /// once. This is what replaces the old chart-versus-storyboard precedence test: they are one
+        /// answer, so there is no question of which wins.
         /// </summary>
         [Test]
-        public void TheTextIsIdenticalAcrossEveryHeader()
+        public void EveryWatchingSourceProducesTheSameCard()
         {
-            var listening = DiscordPresenceService.Build(inputs(difficulty: "Insane"))!;
-            var chart = DiscordPresenceService.Build(inputs(difficulty: "Insane", renderChart: true))!;
-            var storyboard = DiscordPresenceService.Build(inputs(difficulty: "Insane", hasStoryboard: true))!;
-            var video = DiscordPresenceService.Build(inputs(difficulty: "Insane", hasVideo: true))!;
-            var both = DiscordPresenceService.Build(inputs(difficulty: "Insane", renderChart: true, hasStoryboard: true))!;
+            var chart = DiscordPresenceService.Build(inputs(difficulty: "Insane", mapper: "ginkiha", renderChart: true))!;
+            var storyboard = DiscordPresenceService.Build(inputs(difficulty: "Insane", mapper: "ginkiha", hasStoryboard: true))!;
+            var video = DiscordPresenceService.Build(inputs(difficulty: "Insane", mapper: "ginkiha", hasVideo: true))!;
+            var several = DiscordPresenceService.Build(inputs(difficulty: "Insane", mapper: "ginkiha", renderChart: true, hasStoryboard: true))!;
 
-            foreach (var state in new[] { listening, chart, storyboard, video, both })
+            foreach (var state in new[] { chart, storyboard, video, several })
             {
-                Assert.That(state.Details, Is.EqualTo("FREEDOM DIVE"), "details line");
-                Assert.That(state.State, Is.EqualTo("xi"), "state line");
+                Assert.That(state.Activity, Is.EqualTo(PresenceActivity.Watching));
+                Assert.That(state.Details, Is.EqualTo("FREEDOM DIVE"));
+                Assert.That(state.State, Is.EqualTo("xi · Insane (by ginkiha)"));
             }
+        }
 
-            Assert.That(listening.Activity, Is.EqualTo(PresenceActivity.Listening));
-            Assert.That(chart.Activity, Is.EqualTo(PresenceActivity.Watching));
-            Assert.That(storyboard.Activity, Is.EqualTo(PresenceActivity.Watching));
-            Assert.That(video.Activity, Is.EqualTo(PresenceActivity.Watching));
-            Assert.That(both.Activity, Is.EqualTo(PresenceActivity.Watching));
+        /// <summary>
+        /// The per-activity row matrix, stated in one place. The difficulty describes what is on
+        /// SCREEN, so it appears only when something is being watched — that is the whole point of
+        /// the split, and the shape the user asked for after seeing it the wrong way round.
+        ///
+        /// <para>
+        /// WHY it rides the artist's line rather than a row of its own: a Listening card has a third
+        /// text row (Spotify's album slot) which renders the large image's text, and a Watching card
+        /// does not — there it is only a hover tooltip. So a third ROW is available exactly where it
+        /// is not wanted. Both cards therefore carry no image text at all, and Watching folds the
+        /// difficulty onto line two.
+        /// </para>
+        /// </summary>
+        [Test]
+        public void OnlyTheWatchingCardCarriesTheDifficulty()
+        {
+            var listening = DiscordPresenceService.Build(inputs(difficulty: "Insane", mapper: "ginkiha", onlineSetId: 1084287))!;
+            var watching = DiscordPresenceService.Build(inputs(difficulty: "Insane", mapper: "ginkiha", onlineSetId: 1084287, renderChart: true))!;
+
+            Assert.That(listening.Details, Is.EqualTo("FREEDOM DIVE"), "listening line 1");
+            Assert.That(listening.State, Is.EqualTo("xi"), "listening line 2 — artist alone");
+            Assert.That(listening.ImageText, Is.Null, "listening must not grow a third row");
+
+            Assert.That(watching.Details, Is.EqualTo("FREEDOM DIVE"), "watching line 1");
+            Assert.That(watching.State, Is.EqualTo("xi · Insane (by ginkiha)"), "watching line 2 carries the difficulty");
+            Assert.That(watching.ImageText, Is.Null, "and never as image text, which watching would not render anyway");
+        }
+
+        [Test]
+        public void TheDifficultyIsNowhereOnAListeningCard()
+        {
+            var listening = DiscordPresenceService.Build(inputs(difficulty: "Insane", mapper: "ginkiha", onlineSetId: 1084287))!;
+
+            foreach (string? line in new[] { listening.Details, listening.State, listening.ImageText })
+            {
+                Assert.That(line ?? string.Empty, Does.Not.Contain("Insane"));
+                Assert.That(line ?? string.Empty, Does.Not.Contain("by ginkiha"));
+            }
+        }
+
+        /// <summary>
+        /// The cover still rides along on both cards — only its TEXT is gone, because that text is
+        /// the Listening-only row this change exists to remove.
+        /// </summary>
+        [Test]
+        public void BothCardsKeepTheCoverAndDropItsText()
+        {
+            foreach (var state in new[]
+                     {
+                         DiscordPresenceService.Build(inputs(onlineSetId: 1084287, difficulty: "Insane", mapper: "ginkiha"))!,
+                         DiscordPresenceService.Build(inputs(onlineSetId: 1084287, difficulty: "Insane", mapper: "ginkiha", renderChart: true))!,
+                     })
+            {
+                Assert.That(state.ImageUrl, Is.EqualTo("https://b.ppy.sh/thumb/1084287l.jpg"));
+                Assert.That(state.ImageText, Is.Null);
+            }
         }
 
         [Test]
@@ -281,17 +332,17 @@ namespace JukeBox.Game.Tests.Presence
         /// has moved down to line three to sit with its creator.
         /// </summary>
         [Test]
-        public void TheCardStacksTitleThenArtistThenDifficultyByMapper()
+        public void TheWatchingCardStacksTitleThenArtistWithTheDifficulty()
         {
-            var state = DiscordPresenceService.Build(inputs(difficulty: "Stardust", mapper: "ginkiha", onlineSetId: 1084287))!;
+            var state = DiscordPresenceService.Build(inputs(difficulty: "Stardust", mapper: "ginkiha", onlineSetId: 1084287,
+                renderChart: true))!;
 
             Assert.That(state.Details, Is.EqualTo("FREEDOM DIVE"), "line 1");
-            Assert.That(state.State, Is.EqualTo("xi"), "line 2");
-            Assert.That(state.ImageText, Is.EqualTo("Stardust (by ginkiha)"), "line 3");
+            Assert.That(state.State, Is.EqualTo("xi · Stardust (by ginkiha)"), "line 2");
         }
 
         [Test]
-        public void TheDifficultyNoLongerRidesOnTheArtistLine()
+        public void TheListeningCardLeavesTheArtistLineToTheArtist()
         {
             var state = DiscordPresenceService.Build(inputs(difficulty: "FOUR DIMENSIONS", mapper: "Nathan"))!;
 
@@ -430,11 +481,10 @@ namespace JukeBox.Game.Tests.Presence
         [Test]
         public void SwitchingDifficultyRepublishes()
         {
-            var easy = DiscordPresenceService.Build(inputs(difficulty: "Easy", mapper: "ginkiha", onlineSetId: 1084287))!;
-            var insane = DiscordPresenceService.Build(inputs(difficulty: "Insane", mapper: "ginkiha", onlineSetId: 1084287))!;
+            var easy = DiscordPresenceService.Build(inputs(difficulty: "Easy", mapper: "ginkiha", onlineSetId: 1084287, renderChart: true))!;
+            var insane = DiscordPresenceService.Build(inputs(difficulty: "Insane", mapper: "ginkiha", onlineSetId: 1084287, renderChart: true))!;
 
             Assert.That(easy.Details, Is.EqualTo(insane.Details), "precondition: line 1 is unchanged");
-            Assert.That(easy.State, Is.EqualTo(insane.State), "precondition: line 2 is unchanged");
             Assert.That(DiscordPresenceService.NeedsRepublish(easy, insane), Is.True);
         }
 
@@ -444,8 +494,8 @@ namespace JukeBox.Game.Tests.Presence
         [Test]
         public void ADifferentMapperForTheSameDifficultyRepublishes()
         {
-            var mine = DiscordPresenceService.Build(inputs(difficulty: "Insane", mapper: "ginkiha", onlineSetId: 1084287))!;
-            var guest = DiscordPresenceService.Build(inputs(difficulty: "Insane", mapper: "Nathan", onlineSetId: 1084287))!;
+            var mine = DiscordPresenceService.Build(inputs(difficulty: "Insane", mapper: "ginkiha", onlineSetId: 1084287, renderChart: true))!;
+            var guest = DiscordPresenceService.Build(inputs(difficulty: "Insane", mapper: "Nathan", onlineSetId: 1084287, renderChart: true))!;
 
             Assert.That(DiscordPresenceService.NeedsRepublish(mine, guest), Is.True);
         }
@@ -528,16 +578,24 @@ namespace JukeBox.Game.Tests.Presence
         }
 
         [Test]
-        public void TheThreeLinesCrossOntoTheCard()
+        public void BothCardsCrossOntoTheWireWithTheRightRows()
         {
-            var presence = DiscordPresenceClient.BuildRichPresence(
+            var watching = DiscordPresenceClient.BuildRichPresence(
                 DiscordPresenceService.Build(inputs(hasStoryboard: true, difficulty: "Insane", mapper: "ginkiha",
                     onlineSetId: 1084287))!);
 
-            Assert.That(presence.Details, Is.EqualTo("FREEDOM DIVE"), "line 1");
-            Assert.That(presence.State, Is.EqualTo("xi"), "line 2");
-            // The large image's text, which the client renders as the visible third row.
-            Assert.That(presence.Assets!.LargeImageText, Is.EqualTo("Insane (by ginkiha)"), "line 3");
+            Assert.That(watching.Type, Is.EqualTo(ActivityType.Watching));
+            Assert.That(watching.Details, Is.EqualTo("FREEDOM DIVE"));
+            Assert.That(watching.State, Is.EqualTo("xi · Insane (by ginkiha)"));
+            Assert.That(watching.Assets!.LargeImageText, Is.Null);
+
+            var listening = DiscordPresenceClient.BuildRichPresence(
+                DiscordPresenceService.Build(inputs(difficulty: "Insane", mapper: "ginkiha", onlineSetId: 1084287))!);
+
+            Assert.That(listening.Type, Is.EqualTo(ActivityType.Listening));
+            Assert.That(listening.Details, Is.EqualTo("FREEDOM DIVE"));
+            Assert.That(listening.State, Is.EqualTo("xi"));
+            Assert.That(listening.Assets!.LargeImageText, Is.Null, "this is the row that must not come back");
         }
 
         [Test]
@@ -617,7 +675,6 @@ namespace JukeBox.Game.Tests.Presence
             var state = DiscordPresenceService.Build(inputs(onlineSetId: 1084287, difficulty: "Insane", mapper: "ginkiha"))!;
 
             Assert.That(state.ImageUrl, Is.EqualTo("https://b.ppy.sh/thumb/1084287l.jpg"));
-            Assert.That(state.ImageText, Is.EqualTo("Insane (by ginkiha)"));
         }
 
         /// <summary>
@@ -682,7 +739,7 @@ namespace JukeBox.Game.Tests.Presence
             // Sent as a plain URL. Discord rewrites it into its own signed mp:external/… proxy form
             // on the way in (verified live against a real client); nothing here has to do that.
             Assert.That(assets.LargeImageKey, Is.EqualTo("https://b.ppy.sh/thumb/1084287l.jpg"));
-            Assert.That(assets.LargeImageText, Is.EqualTo("Insane (by ginkiha)"));
+            Assert.That(assets.LargeImageText, Is.Null, "the Listening-only third row is deliberately not sent");
         }
 
         /// <summary>

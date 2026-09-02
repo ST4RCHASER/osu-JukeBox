@@ -351,9 +351,13 @@ public partial class DiscordPresenceService : Component
     /// What Discord should be showing, given the state of the app.
     ///
     /// <para>
-    /// The TEXT is the same in every case, and stacks on the card in three lines: the title, the
-    /// artist, then the difficulty and who mapped it. Only the activity verb changes, so the header
-    /// carries all of the "what is happening" and the body stays purely about the music.
+    /// The card's rows differ by activity, because the difficulty is a statement about what is on
+    /// SCREEN and only belongs where there is a screen to describe:
+    /// <list type="bullet">
+    /// <item>Listening → two rows: title, artist.</item>
+    /// <item>Watching → two rows: title, then artist with the difficulty and its mapper.</item>
+    /// <item>Idle → lazer's shape, no track at all.</item>
+    /// </list>
     /// </para>
     ///
     /// <para>
@@ -390,12 +394,23 @@ public partial class DiscordPresenceService : Component
 
         var activity = watching ? PresenceActivity.Watching : PresenceActivity.Listening;
 
-        // The artist now has the second line to itself; the difficulty moved down to the third,
-        // where it sits with its mapper — the pairing that actually means something together.
+        // The difficulty belongs to WATCHING and only to watching: it describes what is on screen,
+        // so it has no business on a card that is playing nothing but audio.
+        //
+        // WHERE it goes is forced by the client rather than chosen. A Listening card has a third
+        // text row — Spotify's album slot — and that row is what renders the large image's text.
+        // A Watching card has only two text rows, with that same field demoted to a hover tooltip.
+        // So the difficulty cannot ride one field in both: on Watching it has to join the artist on
+        // line two, and on Listening the field has to be left empty or the card grows back the row
+        // that prompted this.
+        string? difficultyLine = DifficultyLine(inputs.Difficulty, inputs.Mapper);
+
         string state = artist;
 
+        if (watching && difficultyLine != null)
+            state = state.Length > 0 ? $"{state} · {difficultyLine}" : difficultyLine;
+
         string? imageUrl = CoverUrl(inputs.OnlineSetId);
-        string? imageText = imageUrl == null ? null : DifficultyLine(inputs.Difficulty, inputs.Mapper);
 
         DateTime? start = null;
         DateTime? end = null;
@@ -411,7 +426,9 @@ public partial class DiscordPresenceService : Component
             end = inputs.NowUtc + TimeSpan.FromMilliseconds((inputs.LengthMs - position) / inputs.Rate);
         }
 
-        return new PresenceState(activity, title, state, start, end, imageUrl, imageText);
+        // No image text on either card. It is the Listening-only third row, and that row is exactly
+        // what the user asked to lose; a Watching card would render it as nothing but a tooltip.
+        return new PresenceState(activity, title, state, start, end, imageUrl);
     }
 
     /// <summary>
