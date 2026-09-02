@@ -7,6 +7,7 @@ using System.Security.Cryptography;
 using System.Threading.Tasks;
 using JukeBox.Game.Beatmaps;
 using JukeBox.Game.Configuration;
+using JukeBox.Game.LazerPlayer;
 using JukeBox.Game.Online;
 using JukeBox.Game.Playback;
 using JukeBox.Game.Replays;
@@ -57,6 +58,9 @@ public partial class DroppedFileImporter : Component
 
     [Resolved]
     private IBeatmapMirror mirror { get; set; } = null!;
+
+    [Resolved]
+    private SkinLibrary skinLibrary { get; set; } = null!;
 
     [Resolved]
     private ReplayStore replays { get; set; } = null!;
@@ -146,24 +150,39 @@ public partial class DroppedFileImporter : Component
     /// <see cref="JukeBoxSkin.Custom"/> — which persist like any other setting, so the skin is
     /// still active after a restart. <see cref="LazerPlayer.SkinSelection"/> turns those into a
     /// live chart-layer rebuild.
+    ///
+    /// <para>
+    /// Imports ACCUMULATE. The folder is named after the archive, so each distinct .osk lands
+    /// beside the others and joins the library (<see cref="SkinLibrary"/>), while re-importing the
+    /// same archive replaces that one folder in place — see <see cref="SkinArchive.Extract"/>.
+    /// </para>
     /// </summary>
     private async Task importSkinArchiveAsync(string path)
     {
-        string name = SkinArchive.SanitiseName(Path.GetFileNameWithoutExtension(path));
-        string skinsRoot = host.Storage.GetFullPath("skins");
+        string folder = SkinArchive.SanitiseName(Path.GetFileNameWithoutExtension(path));
+        string skinsRoot = host.Storage.GetFullPath(SkinLibrary.STORAGE_DIRECTORY);
 
-        await Task.Run(() => SkinArchive.Extract(path, skinsRoot, name)).ConfigureAwait(false);
+        string extracted = await Task.Run(() => SkinArchive.Extract(path, skinsRoot, folder)).ConfigureAwait(false);
+
+        // The name the skin calls itself, which is what the dropdown will show — not necessarily
+        // the archive's filename that the folder is named after.
+        string displayName = SkinLibrary.ReadDisplayName(extracted);
 
         await onUpdateThread(() =>
         {
             // Folder name first: writing Skin=Custom while CustomSkinPath still points at the
             // PREVIOUS import would briefly build the old skin.
-            config.SetValue(JukeBoxSetting.CustomSkinPath, name);
+            config.SetValue(JukeBoxSetting.CustomSkinPath, folder);
             config.SetValue(JukeBoxSetting.Skin, JukeBoxSkin.Custom);
+
+            // Re-list, so the new skin is in the dropdown straight away. Needed even when the
+            // config writes above changed nothing (re-importing the skin already selected): the
+            // library is read off disk, and the disk is what just moved.
+            skinLibrary.Refresh();
             return Task.CompletedTask;
         }).ConfigureAwait(false);
 
-        Notify($"Skin applied: {name}", isError: false);
+        Notify($"Skin applied: {displayName}", isError: false);
     }
 
     /// <summary>

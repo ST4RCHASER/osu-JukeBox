@@ -1,9 +1,13 @@
 #nullable enable
 
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 using JukeBox.Game.Configuration;
 using JukeBox.Game.LazerPlayer;
 using NUnit.Framework;
 using osu.Framework.Allocation;
+using osu.Framework.Platform;
 using osu.Game.IO;
 using osu.Game.Skinning;
 
@@ -47,20 +51,100 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("effective is concrete", () => skins.Effective.Value != JukeBoxSkin.Random);
 
             // The re-roll deliberately never repeats the current skin, so every simulated song
-            // change must land on a different concrete entry.
+            // change must land on a different entry. Compared as a (skin, folder) PAIR, since two
+            // different imported skins are both Custom and only the folder tells them apart.
             for (int i = 0; i < 5; i++)
             {
-                JukeBoxSkin before = default;
+                (JukeBoxSkin skin, string folder) before = default;
                 AddStep("song change", () =>
                 {
-                    before = skins.Effective.Value;
+                    before = (skins.Effective.Value, skins.EffectiveCustomFolder.Value);
                     skins.OnSongChanged();
                 });
                 AddAssert("re-rolled to a different concrete skin", () =>
-                    skins.Effective.Value != JukeBoxSkin.Random && skins.Effective.Value != before);
+                    skins.Effective.Value != JukeBoxSkin.Random
+                    && (skins.Effective.Value, skins.EffectiveCustomFolder.Value) != before);
             }
 
             AddStep("restore Argon", () => config.SetValue(JukeBoxSetting.Skin, JukeBoxSkin.Argon));
+        }
+
+        /// <summary>
+        /// Random draws from the whole library — the bundled skins AND every import — rather than
+        /// only the four that shipped. Statistical, but not flaky: with four imports the pool is
+        /// half bundled and half imported, so 40 rolls missing either side entirely is a ~1-in-10^12
+        /// event.
+        /// </summary>
+        [Test]
+        public void RandomAlsoRollsImportedSkins()
+        {
+            AddStep("install four skins", () =>
+            {
+                foreach (string folder in installed)
+                {
+                    string directory = Path.Combine(skinsRoot, folder);
+                    Directory.CreateDirectory(directory);
+                    File.WriteAllText(Path.Combine(directory, "skin.ini"), $"[General]\nName: {folder}\nVersion: 2.5\n");
+                }
+
+                installedAny = true;
+            });
+
+            var rolled = new List<(JukeBoxSkin skin, string folder)>();
+
+            AddStep("choose Random and roll 40 songs", () =>
+            {
+                config.SetValue(JukeBoxSetting.Skin, JukeBoxSkin.Random);
+                rolled.Add((skins.Effective.Value, skins.EffectiveCustomFolder.Value));
+
+                for (int i = 0; i < 40; i++)
+                {
+                    skins.OnSongChanged();
+                    rolled.Add((skins.Effective.Value, skins.EffectiveCustomFolder.Value));
+                }
+            });
+
+            AddAssert("imported skins came up", () => rolled.Any(r => r.skin == JukeBoxSkin.Custom));
+            AddAssert("bundled skins came up too", () => rolled.Any(r => r.skin != JukeBoxSkin.Custom));
+            AddAssert("every imported roll names an installed skin", () => rolled
+                .Where(r => r.skin == JukeBoxSkin.Custom)
+                .All(r => installed.Contains(r.folder)));
+            AddAssert("and a bundled roll never carries a folder", () => rolled
+                .Where(r => r.skin != JukeBoxSkin.Custom)
+                .All(r => r.folder.Length == 0));
+
+            AddStep("restore Argon", () => config.SetValue(JukeBoxSetting.Skin, JukeBoxSkin.Argon));
+        }
+
+        private static readonly string[] installed = { "roll-a", "roll-b", "roll-c", "roll-d" };
+
+        [Resolved]
+        private GameHost host { get; set; } = null!;
+
+        private string skinsRoot => host.Storage.GetFullPath(SkinLibrary.STORAGE_DIRECTORY);
+
+        private bool installedAny;
+
+        // The skins directory is the runner game's real storage, shared with every other test in
+        // this assembly — so the installs above are torn down whatever the test did, rather than
+        // left to widen some other fixture's random pool. Skipped when nothing was installed:
+        // TearDown also runs for TestConstructor, which never loads the scene and so never gets a
+        // host to ask for the storage path.
+        [TearDown]
+        public void RemoveInstalledSkins()
+        {
+            if (!installedAny)
+                return;
+
+            installedAny = false;
+
+            foreach (string folder in installed)
+            {
+                string directory = Path.Combine(skinsRoot, folder);
+
+                if (Directory.Exists(directory))
+                    Directory.Delete(directory, true);
+            }
         }
 
         [Test]

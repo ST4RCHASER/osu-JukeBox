@@ -4,8 +4,10 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using JukeBox.Game.Configuration;
+using JukeBox.Game.LazerPlayer;
 using JukeBox.Game.Online;
 using osu.Framework.Allocation;
+using osu.Framework.Extensions;
 using osu.Framework.Audio;
 using osu.Framework.Bindables;
 using osu.Framework.Configuration;
@@ -90,6 +92,14 @@ public partial class SettingsOverlay : FocusedOverlayContainer
 
     [Resolved(canBeNull: true)]
     private OsuConfigManager? lazerConfig { get; set; }
+
+    /// <summary>
+    /// The imported-skin listing behind the gameplay-skin dropdown. Optional for the same reason
+    /// <see cref="lazerConfig"/> is: settings test scenes cache a config manager and little else,
+    /// and the dropdown degrades to just the bundled skins without one.
+    /// </summary>
+    [Resolved(canBeNull: true)]
+    private SkinLibrary? skinLibrary { get; set; }
 
     // Only ever assigned (and used) in the floating branch of load() — a docked instance has no
     // card to pop, and its PopIn/PopOut are both guarded no-ops (see their own comments below).
@@ -204,7 +214,7 @@ public partial class SettingsOverlay : FocusedOverlayContainer
 
     internal SettingsSlider<double> BackgroundDimSlider => backgroundDimRow;
     internal SettingsSlider<double> PlayfieldZoomSlider => playfieldZoomRow;
-    internal SettingsDropdown<JukeBoxSkin> SkinDropdown => skinDropdown;
+    internal SettingsDropdown<SkinChoice> SkinDropdown => skinDropdown;
     internal SettingsDropdown<string> AudioDeviceDropdown => audioDeviceDropdown;
     internal SettingsSlider<double> MasterVolumeSlider => masterVolumeRow;
     internal SettingsCheckbox DetachPlayerCheckbox => detachPlayerCheckbox;
@@ -482,17 +492,73 @@ public partial class SettingsOverlay : FocusedOverlayContainer
         };
     }
 
+    /// <summary>
+    /// Joins the skin dropdown to the two config keys that between them hold the choice:
+    /// <see cref="JukeBoxSetting.Skin"/>, plus <see cref="JukeBoxSetting.CustomSkinPath"/> naming
+    /// which import is meant when the former is <see cref="JukeBoxSkin.Custom"/>. Both directions
+    /// are wired, because either key can move without the dropdown — importing a .osk selects it,
+    /// and the detached viewer writes the skin it was told to show.
+    ///
+    /// <para>
+    /// Picking a BUNDLED skin deliberately leaves CustomSkinPath alone, so switching to Argon and
+    /// back to the library returns to the import that was selected rather than to no import at
+    /// all. And an imported pick writes the folder first: Skin=Custom against a stale folder would
+    /// briefly build the previously-selected skin, the same ordering the importer follows.
+    /// </para>
+    /// </summary>
+    private void bindSkinDropdown()
+    {
+        var selected = config.GetBindable<JukeBoxSkin>(JukeBoxSetting.Skin);
+        var selectedFolder = config.GetBindable<string>(JukeBoxSetting.CustomSkinPath);
+
+        // Null in test scenes that cache a config manager but no skin library; the dropdown then
+        // simply lists the bundled skins. BindTo through the interface because that is the
+        // overload IBindableList exposes — BindableList's own public one wants a concrete list.
+        if (skinLibrary != null)
+        {
+            IBindableList<ImportedSkin> library = skinDropdown.Library;
+            library.BindTo(skinLibrary.Skins);
+        }
+
+        bool syncing = false;
+
+        void pullFromConfig()
+        {
+            if (syncing)
+                return;
+
+            syncing = true;
+            skinDropdown.Current.Value = selected.Value == JukeBoxSkin.Custom
+                ? SkinChoice.Imported(selectedFolder.Value)
+                : SkinChoice.Bundled(selected.Value);
+            syncing = false;
+        }
+
+        selected.BindValueChanged(_ => pullFromConfig());
+        selectedFolder.BindValueChanged(_ => pullFromConfig());
+        pullFromConfig();
+
+        skinDropdown.Current.BindValueChanged(e =>
+        {
+            if (syncing)
+                return;
+
+            syncing = true;
+
+            if (e.NewValue.IsImported)
+                selectedFolder.Value = e.NewValue.Folder;
+
+            selected.Value = e.NewValue.Builtin;
+            syncing = false;
+        });
+    }
+
     protected override void LoadComplete()
     {
         base.LoadComplete();
 
         // ---- ours ----
-        skinDropdown.Current = config.GetBindable<JukeBoxSkin>(JukeBoxSetting.Skin);
-
-        // Names the imported .osk in the Custom entry ("Custom: Aristia" rather than a bare
-        // "Custom (imported)"). Bound to the config value rather than SkinSelection so this works
-        // in test scenes that cache a config manager but no skin service.
-        skinDropdown.CustomSkinName.BindTo(config.GetBindable<string>(JukeBoxSetting.CustomSkinPath));
+        bindSkinDropdown();
         fpsDisplayDropdown.Current = config.GetBindable<FpsDisplayMode>(JukeBoxSetting.FpsDisplayMode);
         showStoryboardVideoCheckbox.Current = config.GetBindable<bool>(JukeBoxSetting.ShowStoryboardVideo);
         backgroundDimRow.Current = config.GetBindable<double>(JukeBoxSetting.BackgroundDim);
@@ -672,40 +738,111 @@ public partial class SettingsOverlay : FocusedOverlayContainer
     }
 
     /// <summary>
-    /// The gameplay-skin dropdown, identical to a plain <see cref="SettingsEnumDropdown{T}"/>
-    /// except that <see cref="JukeBoxSkin.Custom"/> is labelled with the imported skin's own name
-    /// ("Custom: Aristia") once there is one — the enum's <c>[Description]</c> alone can only say
-    /// something generic, and a user with a skin imported wants to see WHICH one this entry means.
+    /// The gameplay-skin dropdown. Unlike every other dropdown here it is NOT a
+    /// <see cref="SettingsEnumDropdown{T}"/>, because its rows are not an enum: the bundled skins
+    /// are, but each imported skin is its own row too, listed under the name it declares for
+    /// itself the way osu! lists a skin library. A row is therefore a <see cref="SkinChoice"/> —
+    /// a bundled skin, or Custom paired with the specific folder it means.
     /// </summary>
-    internal partial class SkinSettingsDropdown : SettingsEnumDropdown<JukeBoxSkin>
+    internal partial class SkinSettingsDropdown : SettingsDropdown<SkinChoice>
     {
-        public readonly Bindable<string> CustomSkinName = new Bindable<string>(string.Empty);
+        /// <summary>The bundled rows, in the order they are listed. Imported skins follow them.</summary>
+        private static readonly JukeBoxSkin[] bundled =
+        {
+            JukeBoxSkin.Argon,
+            JukeBoxSkin.ArgonPro,
+            JukeBoxSkin.Triangles,
+            JukeBoxSkin.Classic,
+            JukeBoxSkin.Random,
+        };
 
-        protected override OsuDropdown<JukeBoxSkin> CreateDropdown() => new SkinDropdownControl(CustomSkinName);
+        /// <summary>
+        /// The imported skins to list, already ordered and labelled by <see cref="SkinLibrary"/>.
+        /// Left empty in test scenes that cache a config manager but no skin library, which then
+        /// simply get the bundled rows.
+        /// </summary>
+        public readonly BindableList<ImportedSkin> Library = new BindableList<ImportedSkin>();
+
+        /// <summary>
+        /// Folder name to dropdown label, rebuilt alongside the item list. The control below reads
+        /// it to render each imported row; a folder is all a <see cref="SkinChoice"/> carries, and
+        /// the label is a property of the library listing rather than of the choice itself.
+        /// </summary>
+        private readonly Dictionary<string, string> importedLabels = new Dictionary<string, string>();
+
+        /// <summary>Guards the item rebuild against the Current change its own assignment can cause.</summary>
+        private bool rebuilding;
+
+        protected override OsuDropdown<SkinChoice> CreateDropdown() => new SkinDropdownControl(importedLabels);
 
         protected override void LoadComplete()
         {
             base.LoadComplete();
 
-            // Item text is generated when the item list is assigned, so a name arriving later
-            // (a .osk dropped mid-session) needs the list re-assigned to take effect. Dropdown
-            // keeps its Current across the reassignment, since the same values are still present.
-            CustomSkinName.BindValueChanged(_ => Items = Items.ToArray());
+            Library.BindCollectionChanged((_, _) => rebuildItems(), true);
+
+            // A selection can arrive naming a skin the library does not (yet) list — the config
+            // value is read at startup before anything has scanned, and a folder can be deleted
+            // from disk by hand. rebuildItems keeps such a row present rather than letting the
+            // control fall back onto some other value and overwrite the user's choice.
+            Current.BindValueChanged(_ => rebuildItems(), true);
+        }
+
+        private void rebuildItems()
+        {
+            if (rebuilding)
+                return;
+
+            rebuilding = true;
+
+            try
+            {
+                importedLabels.Clear();
+
+                var items = bundled.Select(SkinChoice.Bundled).ToList();
+
+                foreach (var skin in Library)
+                {
+                    importedLabels[skin.Folder] = skin.Label;
+                    items.Add(SkinChoice.Imported(skin.Folder));
+                }
+
+                // The selected import is missing from the library — deleted from app storage by
+                // hand, or simply not scanned yet. Keep the row so the selection stays visible and
+                // stays put; dropping it would leave Current pointing at nothing and the control
+                // would write some other value back over a choice the user never changed.
+                if (Current.Value.IsImported && !items.Contains(Current.Value))
+                {
+                    importedLabels[Current.Value.Folder] = Current.Value.Folder;
+                    items.Add(SkinChoice.Imported(Current.Value.Folder));
+                }
+
+                Items = items;
+            }
+            finally
+            {
+                rebuilding = false;
+            }
         }
 
         private partial class SkinDropdownControl : DropdownControl
         {
-            private readonly IBindable<string> customSkinName;
+            private readonly IReadOnlyDictionary<string, string> importedLabels;
 
-            public SkinDropdownControl(IBindable<string> customSkinName)
+            public SkinDropdownControl(IReadOnlyDictionary<string, string> importedLabels)
             {
-                this.customSkinName = customSkinName;
+                this.importedLabels = importedLabels;
             }
 
-            protected override LocalisableString GenerateItemText(JukeBoxSkin item)
-                => item == JukeBoxSkin.Custom && customSkinName.Value.Length > 0
-                    ? $"Custom: {customSkinName.Value}"
-                    : base.GenerateItemText(item);
+            protected override LocalisableString GenerateItemText(SkinChoice item)
+            {
+                if (!item.IsImported)
+                    return item.Builtin.GetDescription();
+
+                // Falling back to the raw folder covers the window between an item being added and
+                // its label being known; the folder name is a usable name in its own right.
+                return importedLabels.TryGetValue(item.Folder, out string? label) ? label : item.Folder;
+            }
         }
     }
 
@@ -784,4 +921,26 @@ public partial class SettingsOverlay : FocusedOverlayContainer
             return hash.ToHashCode();
         }
     }
+}
+
+/// <summary>
+/// One selectable row of the gameplay-skin dropdown: either a bundled skin (or
+/// <see cref="JukeBoxSkin.Random"/>), or a specific imported skin.
+///
+/// <para>
+/// Two values rather than one because that is what the setting actually is. Config stores the
+/// choice across two keys — <see cref="JukeBoxSetting.Skin"/> and, when that is
+/// <see cref="JukeBoxSkin.Custom"/>, the <see cref="JukeBoxSetting.CustomSkinPath"/> folder naming
+/// WHICH import is meant — and a dropdown row has to carry both halves or it cannot tell one
+/// imported skin from another. The folder, not the display name, is the identity: names come from
+/// each skin's own skin.ini and two skins may well declare the same one.
+/// </para>
+/// </summary>
+internal readonly record struct SkinChoice(JukeBoxSkin Builtin, string Folder)
+{
+    public static SkinChoice Bundled(JukeBoxSkin skin) => new SkinChoice(skin, string.Empty);
+
+    public static SkinChoice Imported(string folder) => new SkinChoice(JukeBoxSkin.Custom, folder);
+
+    public bool IsImported => Builtin == JukeBoxSkin.Custom;
 }

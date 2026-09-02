@@ -147,6 +147,7 @@ namespace JukeBox.Game
         private OsuConfigManager lazerConfig = null!;
         private LazerRulesetConfigCache lazerRulesetConfigs = null!;
         private SkinSelection skinSelection = null!;
+        private SkinLibrary skinLibrary = null!;
         private ChartModSelection chartMods = null!;
         private PlayfieldElementVisibility playfieldElements = null!;
         private ChartConversion chartConversion = null!;
@@ -344,6 +345,14 @@ namespace JukeBox.Game
                 config.SetValue(JukeBoxSetting.FpsDisplayMode, MigrateLegacyFpsDisplay(config.Get<LegacyFpsDisplayMode>(JukeBoxSetting.FpsDisplay)));
                 config.SetValue(JukeBoxSetting.FpsDisplayModeMigrated, true);
             }
+
+            // The imported-skin listing behind the settings dropdown. Added before the file
+            // importer further down, which refreshes it after extracting a .osk. SkinSelection
+            // deliberately does NOT resolve this — it reads the same directory through
+            // SkinLibrary's static scan — so the library is purely the UI's view of what is
+            // installed and neither has to wait on the other.
+            Add(skinLibrary = new SkinLibrary());
+            dependencies.Cache(skinLibrary);
 
             Add(skinSelection = new SkinSelection());
             dependencies.Cache(skinSelection);

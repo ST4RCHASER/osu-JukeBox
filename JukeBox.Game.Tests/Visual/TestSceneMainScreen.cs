@@ -385,7 +385,10 @@ namespace JukeBox.Game.Tests.Visual
             => labelsOf<bool>(panel)
                .Concat(labelsOf<double>(panel))
                .Concat(labelsOf<int>(panel))
-               .Concat(labelsOf<JukeBoxSkin>(panel))
+               // SkinChoice, not JukeBoxSkin: the gameplay-skin row lists imported skins
+               // individually, so a row is a bundled skin OR a specific import, which no enum can
+               // express on its own.
+               .Concat(labelsOf<SkinChoice>(panel))
                .Concat(labelsOf<PlayfieldBorderStyle>(panel))
                .Concat(labelsOf<ManiaScrollingDirection>(panel))
                .ToList();

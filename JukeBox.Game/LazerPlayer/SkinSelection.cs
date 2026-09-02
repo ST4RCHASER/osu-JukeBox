@@ -1,6 +1,7 @@
 #nullable enable
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using JukeBox.Game.Beatmaps;
 using JukeBox.Game.Configuration;
@@ -17,12 +18,14 @@ namespace JukeBox.Game.LazerPlayer;
 
 /// <summary>
 /// Game-lifetime service resolving the user's <see cref="JukeBoxSetting.Skin"/> choice into the
-/// concrete bundled skin the chart renderer should build. For the concrete choices
-/// <see cref="Effective"/> simply mirrors the config value; for <see cref="JukeBoxSkin.Random"/>
-/// it re-rolls one of the four concrete skins on every song change
+/// concrete skin the chart renderer should build. A resolved skin is a PAIR — see
+/// <see cref="Effective"/> and <see cref="EffectiveCustomFolder"/> — because
+/// <see cref="JukeBoxSkin.Custom"/> alone does not say which imported skin is meant. For the
+/// concrete choices the pair mirrors config; for <see cref="JukeBoxSkin.Random"/> it re-rolls the
+/// whole library (bundled skins plus every import) on every song change
 /// (<see cref="PlaybackController.Current"/>) and immediately when Random is first selected.
-/// Consumers (BeatmapVisuals) react to <see cref="Effective"/> changes by rebuilding the chart
-/// layer, so a dropdown flip applies live and Random applies per song.
+/// Consumers (BeatmapVisuals) rebuild the chart layer on <see cref="Effective"/> and
+/// <see cref="Revision"/> changes, so a dropdown flip applies live and Random applies per song.
 /// </summary>
 public partial class SkinSelection : Component
 {
@@ -47,9 +50,22 @@ public partial class SkinSelection : Component
 
     private readonly Bindable<int> revision = new Bindable<int>();
 
-    /// <summary>The imported skin's folder name, or empty when nothing has been imported. Drives
-    /// the settings dropdown's "Custom: &lt;name&gt;" label.</summary>
+    /// <summary>The SELECTED imported skin's folder name, straight off
+    /// <see cref="JukeBoxSetting.CustomSkinPath"/>, or empty when none is selected. This is the
+    /// user's choice, which is not the same thing as what is being rendered — see
+    /// <see cref="EffectiveCustomFolder"/>.</summary>
     public IBindable<string> CustomSkinName => customSkinName;
+
+    /// <summary>
+    /// The RESOLVED imported skin's folder name — what <see cref="CustomSkinDirectory"/> points at
+    /// and what the chart is actually built from — or empty when the effective skin is a bundled
+    /// one. Distinct from <see cref="CustomSkinName"/> because <see cref="JukeBoxSkin.Random"/>
+    /// rolls the whole library, so the imported skin on screen is frequently not the imported skin
+    /// the user last selected.
+    /// </summary>
+    public IBindable<string> EffectiveCustomFolder => effectiveCustomFolder;
+
+    private readonly Bindable<string> effectiveCustomFolder = new Bindable<string>(string.Empty);
 
     [Resolved]
     private JukeBoxConfigManager config { get; set; } = null!;
@@ -68,21 +84,30 @@ public partial class SkinSelection : Component
         config.BindWith(JukeBoxSetting.CustomSkinPath, customSkinName);
         currentSong.BindTo(playback.Current);
 
-        choice.BindValueChanged(e => effective.Value = resolve(e.NewValue), true);
+        choice.BindValueChanged(e => apply(resolve(e.NewValue)), true);
         currentSong.BindValueChanged(_ => OnSongChanged());
 
-        // Only meaningful while Custom is what's being built; for any other selection the imported
-        // skin isn't in the chain, so there is nothing to rebuild.
+        // A different imported skin selected out of the library. Only meaningful while the user's
+        // own choice is what's being built: under Random the roll owns the effective folder, and
+        // re-resolving here would swap the rolled skin for the selected one mid-song.
         customSkinName.BindValueChanged(_ =>
         {
-            if (effective.Value == JukeBoxSkin.Custom)
-                revision.Value++;
+            if (choice.Value == JukeBoxSkin.Custom)
+                apply(resolve(JukeBoxSkin.Custom));
         });
     }
 
     /// <summary>
-    /// Absolute path of the imported skin folder, or null when nothing has been imported or the
-    /// folder has since been deleted from under us (a user tidying up app storage by hand).
+    /// Absolute path of the imported skin folder currently being built, or null when the effective
+    /// skin is a bundled one, nothing has been imported, or the folder has since been deleted from
+    /// under us (a user tidying up app storage by hand).
+    ///
+    /// <para>
+    /// Resolved from <see cref="EffectiveCustomFolder"/>, not <see cref="CustomSkinName"/>: under
+    /// <see cref="JukeBoxSkin.Random"/> the rolled skin is the one on screen, and this is what the
+    /// detached viewer is told to load (see <c>DetachedViewerManager.BuildState</c>), so pointing
+    /// it at the user's selection instead would show the two windows different skins.
+    /// </para>
     /// </summary>
     public string? CustomSkinDirectory
     {
@@ -91,13 +116,15 @@ public partial class SkinSelection : Component
             if (externalCustomSkinDirectory != null)
                 return Directory.Exists(externalCustomSkinDirectory) ? externalCustomSkinDirectory : null;
 
-            if (customSkinName.Value.Length == 0)
+            if (effectiveCustomFolder.Value.Length == 0)
                 return null;
 
-            string path = Path.Combine(host.Storage.GetFullPath("skins"), customSkinName.Value);
+            string path = Path.Combine(skinsRoot, effectiveCustomFolder.Value);
             return Directory.Exists(path) ? path : null;
         }
     }
+
+    private string skinsRoot => host.Storage.GetFullPath(SkinLibrary.STORAGE_DIRECTORY);
 
     private string? externalCustomSkinDirectory;
 
@@ -128,22 +155,62 @@ public partial class SkinSelection : Component
     internal void OnSongChanged()
     {
         if (choice.Value == JukeBoxSkin.Random)
-            effective.Value = resolve(JukeBoxSkin.Random);
+            apply(resolve(JukeBoxSkin.Random));
     }
 
-    private JukeBoxSkin resolve(JukeBoxSkin value)
+    /// <summary>
+    /// Publishes a resolved (skin, imported-folder) pair. Both halves move together, and the
+    /// folder is set FIRST so anything rebuilding off <see cref="Effective"/> already sees the
+    /// folder that goes with it. When only the folder moved — Random rolling from one imported
+    /// skin straight to another, both of which are <see cref="JukeBoxSkin.Custom"/> —
+    /// <see cref="Effective"/> does not fire at all, so the rebuild has to come from
+    /// <see cref="Revision"/> instead.
+    /// </summary>
+    private void apply((JukeBoxSkin skin, string folder) resolved)
     {
-        if (value != JukeBoxSkin.Random)
-            return value;
+        bool folderChanged = effectiveCustomFolder.Value != resolved.folder;
 
-        // Roll among the four concrete skins, avoiding an immediate repeat so "random per song"
-        // visibly changes the chart (a 1-in-4 silent no-op reads as the feature not working).
-        JukeBoxSkin[] pool = { JukeBoxSkin.Argon, JukeBoxSkin.ArgonPro, JukeBoxSkin.Triangles, JukeBoxSkin.Classic };
-        JukeBoxSkin next;
+        effectiveCustomFolder.Value = resolved.folder;
+
+        if (effective.Value != resolved.skin)
+            effective.Value = resolved.skin;
+        else if (folderChanged)
+            revision.Value++;
+    }
+
+    private (JukeBoxSkin skin, string folder) resolve(JukeBoxSkin value)
+    {
+        if (value == JukeBoxSkin.Custom)
+            return (JukeBoxSkin.Custom, customSkinName.Value);
+
+        if (value != JukeBoxSkin.Random)
+            return (value, string.Empty);
+
+        // Random draws from the whole library — the four bundled skins plus every imported one, so
+        // a user who imported skins sees them come up too rather than Random quietly meaning "one
+        // of the four that shipped". Read off disk (rather than through the SkinLibrary component)
+        // so the pool is whatever is installed right now and this service needs no dependency on
+        // the settings UI's listing.
+        var pool = new List<(JukeBoxSkin skin, string folder)>
+        {
+            (JukeBoxSkin.Argon, string.Empty),
+            (JukeBoxSkin.ArgonPro, string.Empty),
+            (JukeBoxSkin.Triangles, string.Empty),
+            (JukeBoxSkin.Classic, string.Empty),
+        };
+
+        foreach (var imported in SkinLibrary.Scan(skinsRoot))
+            pool.Add((JukeBoxSkin.Custom, imported.Folder));
+
+        // Avoid an immediate repeat so "random per song" visibly changes the chart (a silent
+        // no-op reads as the feature not working). Compared on the PAIR, so rolling the same
+        // imported skin twice running counts as a repeat too.
+        var current = (effective.Value, effectiveCustomFolder.Value);
+        (JukeBoxSkin skin, string folder) next;
 
         do
-            next = pool[random.Next(pool.Length)];
-        while (next == effective.Value && pool.Length > 1);
+            next = pool[random.Next(pool.Count)];
+        while (next == current && pool.Count > 1);
 
         return next;
     }

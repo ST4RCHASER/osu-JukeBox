@@ -95,12 +95,21 @@ public enum JukeBoxSetting
     /// </summary>
     LastImportDirectory,
     /// <summary>
-    /// Folder NAME (not a full path) of the user-imported legacy skin under the app storage's
+    /// Folder NAME (not a full path) of the SELECTED imported skin under the app storage's
     /// <c>skins/</c> directory — written when a .osk is dragged onto the window (see
-    /// <see cref="Import.SkinArchive"/>), read by <see cref="LazerPlayer.SkinSelection"/> whenever
-    /// <see cref="Skin"/> is <see cref="JukeBoxSkin.Custom"/>. A name rather than an absolute path
-    /// so the choice survives the storage directory itself moving (a different OS user, a portable
-    /// install). Empty means nothing has been imported, in which case Custom degrades to Argon.
+    /// <see cref="Import.SkinArchive"/>) or when one is picked out of the settings dropdown, read
+    /// by <see cref="LazerPlayer.SkinSelection"/> whenever <see cref="Skin"/> is
+    /// <see cref="JukeBoxSkin.Custom"/>. A name rather than an absolute path so the choice survives
+    /// the storage directory itself moving (a different OS user, a portable install). Empty means
+    /// nothing has been imported, in which case Custom degrades to Argon.
+    ///
+    /// <para>
+    /// This names ONE skin out of however many are installed. The library itself is not stored
+    /// here, because the <c>skins/</c> directory already is the library (see
+    /// <see cref="LazerPlayer.SkinLibrary"/>) — which is also why the persisted identity is the
+    /// folder rather than the skin's display name: names come out of each skin's own skin.ini, and
+    /// two installed skins can perfectly well declare the same one.
+    /// </para>
     /// </summary>
     CustomSkinPath,
 
@@ -208,12 +217,20 @@ public enum FpsDisplayMode
 }
 
 /// <summary>
-/// The bundled lazer skin driving the gameplay chart renderer. All four concrete entries are the
-/// skins constructible without a realm-backed SkinManager in ppy.osu.Game 2026.730.0 (each has an
+/// The KIND of skin driving the gameplay chart renderer. The four bundled entries are the skins
+/// constructible without a realm-backed SkinManager in ppy.osu.Game 2026.730.0 (each has an
 /// IStorageResourceProvider-only constructor); there is no bundled "retro" skin in that package.
-/// <see cref="Random"/> re-rolls one of the four concrete skins on every song change, and
-/// <see cref="Custom"/> selects whatever legacy skin the user last imported by dropping a .osk
-/// (see <see cref="JukeBoxSetting.CustomSkinPath"/>).
+/// <see cref="Random"/> re-rolls on every song change, and <see cref="Custom"/> means an imported
+/// skin — WHICH one is <see cref="JukeBoxSetting.CustomSkinPath"/>'s job, so this enum on its own
+/// never fully identifies a skin.
+///
+/// <para>
+/// Deliberately still an enum, and deliberately unchanged, even though the user now picks from a
+/// library of imported skins rather than a single Custom slot: the value persists into the ini by
+/// MEMBER NAME (see the <see cref="JukeBoxSetting"/> notes on enum persistence) and rides the
+/// viewer-sync protocol the same way, so every existing <c>Skin=Custom</c> keeps meaning what it
+/// always did. The library is expressed in the second key instead.
+/// </para>
 /// </summary>
 public enum JukeBoxSkin
 {
@@ -229,11 +246,18 @@ public enum JukeBoxSkin
     Random,
 
     /// <summary>
-    /// The user's imported .osk, resolved through <see cref="JukeBoxSetting.CustomSkinPath"/>.
-    /// Selectable with nothing imported (the dropdown lists every enum member), in which case it
-    /// degrades to <see cref="Argon"/> rather than rendering nothing — see
-    /// <c>SkinSelection.CreateEffectiveSkin</c>. Never rolled by <see cref="Random"/>: a random
-    /// skin should stay predictable across machines, and it may not resolve at all.
+    /// An imported .osk — the one named by <see cref="JukeBoxSetting.CustomSkinPath"/>. Unlike the
+    /// bundled members this is never a dropdown row by itself: the settings list shows one row per
+    /// installed skin, each pairing this with its own folder (see <c>SkinChoice</c>), so the
+    /// generic description below is only ever a fallback for a folder that has gone missing.
+    /// With nothing imported it degrades to <see cref="Argon"/> rather than rendering nothing —
+    /// see <c>SkinSelection.CreateEffectiveSkin</c>.
+    ///
+    /// <para>
+    /// Rolled by <see cref="Random"/> alongside the bundled skins: a library the user assembled
+    /// themselves is exactly what they want a random skin drawn from, and an entry that fails to
+    /// resolve degrades to Argon like any other.
+    /// </para>
     /// </summary>
     [System.ComponentModel.Description("Custom (imported)")]
     Custom,

@@ -39,6 +39,14 @@ public static class SkinArchive
     }
 
     /// <summary>
+    /// Suffix marking a half-extracted staging folder. An import materialises under this name and
+    /// is renamed into place only once the archive proves usable, so anything still carrying it is
+    /// either an import in flight or the wreckage of a failed one — never an installed skin. See
+    /// <see cref="LazerPlayer.SkinLibrary.Scan"/>, which skips these when listing the library.
+    /// </summary>
+    public const string STAGING_SUFFIX = ".extracting";
+
+    /// <summary>
     /// Extracts <paramref name="archivePath"/> into <c>{skinsRoot}/{name}</c>, replacing any
     /// existing folder of that name (re-dropping a skin is the natural way to update it), and
     /// returns the absolute path of the extracted folder.
@@ -48,7 +56,7 @@ public static class SkinArchive
     {
         Directory.CreateDirectory(skinsRoot);
 
-        string staging = Path.Combine(skinsRoot, $"import-{Guid.NewGuid():N}.extracting");
+        string staging = Path.Combine(skinsRoot, $"import-{Guid.NewGuid():N}{STAGING_SUFFIX}");
 
         try
         {

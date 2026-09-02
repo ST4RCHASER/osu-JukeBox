@@ -1,8 +1,10 @@
 #nullable enable
 
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using JukeBox.Game.Configuration;
+using JukeBox.Game.LazerPlayer;
 using JukeBox.Game.Online;
 using JukeBox.Game.UI;
 using NUnit.Framework;
@@ -55,6 +57,12 @@ namespace JukeBox.Game.Tests.Visual
                 config.SetValue(JukeBoxSetting.SearchApi, SearchApi.Mirror);
                 config.SetValue(JukeBoxSetting.OsuClientId, string.Empty);
                 config.SetValue(JukeBoxSetting.OsuClientSecret, string.Empty);
+
+                // Reset the skin choice too: the library tests below select imported skins, and a
+                // leftover Skin=Custom would otherwise be the starting state of whatever runs next.
+                config.SetValue(JukeBoxSetting.Skin, JukeBoxSkin.Argon);
+                config.SetValue(JukeBoxSetting.CustomSkinPath, string.Empty);
+
                 Child = overlay = new SettingsOverlay();
             });
         }
@@ -351,19 +359,194 @@ namespace JukeBox.Game.Tests.Visual
 
             AddStep("click dropdown header", () =>
             {
-                InputManager.MoveMouseTo(overlay.SkinDropdown.ChildrenOfType<osu.Game.Graphics.UserInterface.OsuDropdown<JukeBoxSkin>.OsuDropdownHeader>().First());
+                InputManager.MoveMouseTo(overlay.SkinDropdown.ChildrenOfType<osu.Game.Graphics.UserInterface.OsuDropdown<SkinChoice>.OsuDropdownHeader>().First());
                 InputManager.Click(MouseButton.Left);
             });
 
-            // Counted off the enum rather than hardcoded, so adding a skin (e.g. Custom) doesn't
-            // silently turn this into a timeout with no hint of why.
-            int skinCount = System.Enum.GetValues<JukeBoxSkin>().Length;
-
+            // Five bundled rows (every enum member except Custom, which is no longer a row of its
+            // own now that each import is listed individually), plus one row per installed skin.
+            // Counted rather than hardcoded so this cannot silently become a timeout, and counted
+            // when the assert RUNS rather than when the steps are built, so it reflects the
+            // library as it actually is by then.
             AddUntilStep("menu open with all skin entries", () => overlay.SkinDropdown
                 .ChildrenOfType<osu.Framework.Graphics.UserInterface.Menu>().Any(m =>
-                    m.State == osu.Framework.Graphics.UserInterface.MenuState.Open && m.Items.Count == skinCount));
+                    m.State == osu.Framework.Graphics.UserInterface.MenuState.Open
+                    && m.Items.Count == System.Enum.GetValues<JukeBoxSkin>().Length - 1 + skinLibrary.Skins.Count));
 
             AddStep("close menu", () => InputManager.Key(Key.Escape));
+        }
+
+        /// <summary>
+        /// The user's request, in short: imported skins are listed the way osu! lists them — by the
+        /// name each one declares for itself, one row each — rather than as a single generic
+        /// "Custom (imported)" slot.
+        /// </summary>
+        [Test]
+        public void ImportedSkinsAreListedByTheirRealNames()
+        {
+            AddStep("install two skins", () =>
+            {
+                installSkin("first-archive", "Rafis");
+                installSkin("second-archive", "Aristia");
+                skinLibrary.Refresh();
+            });
+
+            AddStep("show overlay", () => overlay.Show());
+
+            AddAssert("the bundled rows still come first, in their own order", () => menuItems()
+                .TakeWhile(i => !i.Value.IsImported)
+                .Select(i => i.Value.Builtin)
+                .SequenceEqual(new[] { JukeBoxSkin.Argon, JukeBoxSkin.ArgonPro, JukeBoxSkin.Triangles, JukeBoxSkin.Classic, JukeBoxSkin.Random }));
+
+            AddAssert("both are listed, after the bundled rows, alphabetically", () =>
+                importedLabels().SequenceEqual(new[] { "Aristia", "Rafis" }));
+
+            AddAssert("and no generic Custom row is offered", () => !overlay.SkinDropdown.Items
+                .Any(i => !i.IsImported && i.Builtin == JukeBoxSkin.Custom));
+        }
+
+        [Test]
+        public void SkinsSharingANameStayTellableApartAndSeparatelySelectable()
+        {
+            AddStep("install two skins both called Aristia", () =>
+            {
+                installSkin("aristia-2016", "Aristia");
+                installSkin("aristia-2019", "Aristia");
+                skinLibrary.Refresh();
+            });
+
+            AddStep("show overlay", () => overlay.Show());
+
+            AddAssert("the second is suffixed", () => importedLabels().SequenceEqual(new[] { "Aristia", "Aristia (2)" }));
+
+            AddStep("pick the second one", () => overlay.SkinDropdown.Current.Value = SkinChoice.Imported("aristia-2019"));
+            AddAssert("the folder is what persists, not the shared name",
+                () => config.Get<string>(JukeBoxSetting.CustomSkinPath) == "aristia-2019");
+        }
+
+        [Test]
+        public void PickingAnImportedSkinRoundTripsThroughConfig()
+        {
+            AddStep("install a skin", () =>
+            {
+                installSkin("aristia-archive", "Aristia");
+                skinLibrary.Refresh();
+            });
+
+            AddStep("show overlay", () => overlay.Show());
+            AddStep("pick it", () => overlay.SkinDropdown.Current.Value = SkinChoice.Imported("aristia-archive"));
+
+            AddAssert("the kind persists as Custom", () => config.Get<JukeBoxSkin>(JukeBoxSetting.Skin) == JukeBoxSkin.Custom);
+            AddAssert("and the folder names which one", () => config.Get<string>(JukeBoxSetting.CustomSkinPath) == "aristia-archive");
+
+            AddStep("recreate overlay", () => Child = overlay = new SettingsOverlay());
+            AddAssert("it comes back selected", () => overlay.SkinDropdown.Current.Value == SkinChoice.Imported("aristia-archive"));
+
+            // Switching away deliberately leaves CustomSkinPath alone, so the library selection is
+            // still remembered rather than reset to "no import".
+            AddStep("switch to a bundled skin", () => overlay.SkinDropdown.Current.Value = SkinChoice.Bundled(JukeBoxSkin.Triangles));
+            AddAssert("the kind moved", () => config.Get<JukeBoxSkin>(JukeBoxSetting.Skin) == JukeBoxSkin.Triangles);
+            AddAssert("the remembered import did not", () => config.Get<string>(JukeBoxSetting.CustomSkinPath) == "aristia-archive");
+        }
+
+        /// <summary>
+        /// The upgrade path: a config written before skins had a library — Skin=Custom plus a
+        /// CustomSkinPath folder — must come up with that skin still selected, now under its real
+        /// name. Nobody's selection quietly reverts to Argon.
+        /// </summary>
+        [Test]
+        public void AnExistingCustomSkinPathStaysSelectedUnderItsRealName()
+        {
+            AddStep("write a pre-library config and install its skin", () =>
+            {
+                installSkin("Aristia v2", "Aristia");
+                skinLibrary.Refresh();
+
+                config.SetValue(JukeBoxSetting.CustomSkinPath, "Aristia v2");
+                config.SetValue(JukeBoxSetting.Skin, JukeBoxSkin.Custom);
+            });
+
+            AddStep("recreate overlay as if freshly launched", () => Child = overlay = new SettingsOverlay());
+            AddStep("show overlay", () => overlay.Show());
+
+            AddAssert("the imported skin is still selected",
+                () => overlay.SkinDropdown.Current.Value == SkinChoice.Imported("Aristia v2"));
+            AddAssert("under the name it declares", () => labelOf(SkinChoice.Imported("Aristia v2")) == "Aristia");
+            AddAssert("and config was not rewritten", () => config.Get<JukeBoxSkin>(JukeBoxSetting.Skin) == JukeBoxSkin.Custom
+                                                            && config.Get<string>(JukeBoxSetting.CustomSkinPath) == "Aristia v2");
+        }
+
+        // A skin the user deleted from app storage by hand. The row has to survive, or the control
+        // falls back onto some other value and overwrites a choice they never changed.
+        [Test]
+        public void ASelectedSkinMissingFromDiskKeepsItsRowAndItsSelection()
+        {
+            AddStep("select a skin that is not installed", () =>
+            {
+                config.SetValue(JukeBoxSetting.CustomSkinPath, "deleted-by-hand");
+                config.SetValue(JukeBoxSetting.Skin, JukeBoxSkin.Custom);
+            });
+
+            AddStep("recreate overlay", () => Child = overlay = new SettingsOverlay());
+            AddStep("show overlay", () => overlay.Show());
+
+            AddAssert("the selection stands", () => overlay.SkinDropdown.Current.Value == SkinChoice.Imported("deleted-by-hand"));
+            AddAssert("shown under its folder name", () => labelOf(SkinChoice.Imported("deleted-by-hand")) == "deleted-by-hand");
+            AddAssert("config untouched", () => config.Get<string>(JukeBoxSetting.CustomSkinPath) == "deleted-by-hand");
+        }
+
+        [Resolved]
+        private SkinLibrary skinLibrary { get; set; } = null!;
+
+        private string skinsRoot => host.Storage.GetFullPath(SkinLibrary.STORAGE_DIRECTORY);
+
+        private readonly List<string> installedSkins = new List<string>();
+
+        private void installSkin(string folder, string declaredName)
+        {
+            string directory = Path.Combine(skinsRoot, folder);
+            Directory.CreateDirectory(directory);
+            File.WriteAllText(Path.Combine(directory, "skin.ini"), $"[General]\nName: {declaredName}\nVersion: 2.5\n");
+            installedSkins.Add(folder);
+        }
+
+        /// <summary>
+        /// The dropdown's rows as the user actually reads them — the menu's own item drawables'
+        /// text, not the values behind them, since rendering the right NAME is the whole point.
+        /// </summary>
+        private List<osu.Framework.Graphics.UserInterface.DropdownMenuItem<SkinChoice>> menuItems()
+            => overlay.SkinDropdown
+                      .ChildrenOfType<osu.Framework.Graphics.UserInterface.Menu>()
+                      .First().Items
+                      .OfType<osu.Framework.Graphics.UserInterface.DropdownMenuItem<SkinChoice>>()
+                      .ToList();
+
+        /// <summary>The imported rows only, in listed order.</summary>
+        private List<string> importedLabels()
+            => menuItems().Where(i => i.Value.IsImported).Select(i => i.Text.Value.ToString()).ToList();
+
+        private string labelOf(SkinChoice choice)
+            => menuItems().First(i => i.Value.Equals(choice)).Text.Value.ToString();
+
+        // The skins directory belongs to the runner game's real storage, shared with every other
+        // fixture in this assembly, so installs are undone however the test ended. Skipped
+        // entirely when nothing was installed — TearDown also runs for TestConstructor, which
+        // never loads the scene and so never gets a host to ask for the storage path.
+        [TearDown]
+        public void RemoveInstalledSkins()
+        {
+            if (installedSkins.Count == 0)
+                return;
+
+            foreach (string folder in installedSkins)
+            {
+                string directory = Path.Combine(skinsRoot, folder);
+
+                if (Directory.Exists(directory))
+                    Directory.Delete(directory, true);
+            }
+
+            installedSkins.Clear();
         }
 
         [Test]
@@ -372,11 +555,11 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("show overlay", () => overlay.Show());
             AddAssert("config starts Argon", () => config.Get<JukeBoxSkin>(JukeBoxSetting.Skin) == JukeBoxSkin.Argon);
 
-            AddStep("select Triangles", () => overlay.SkinDropdown.Current.Value = JukeBoxSkin.Triangles);
+            AddStep("select Triangles", () => overlay.SkinDropdown.Current.Value = SkinChoice.Bundled(JukeBoxSkin.Triangles));
             AddAssert("config updated to Triangles", () => config.Get<JukeBoxSkin>(JukeBoxSetting.Skin) == JukeBoxSkin.Triangles);
 
             AddStep("recreate overlay", () => Child = overlay = new SettingsOverlay());
-            AddAssert("dropdown starts Triangles", () => overlay.SkinDropdown.Current.Value == JukeBoxSkin.Triangles);
+            AddAssert("dropdown starts Triangles", () => overlay.SkinDropdown.Current.Value == SkinChoice.Bundled(JukeBoxSkin.Triangles));
         }
 
         [Test]
