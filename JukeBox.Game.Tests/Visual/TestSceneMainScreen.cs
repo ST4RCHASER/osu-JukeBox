@@ -580,6 +580,111 @@ namespace JukeBox.Game.Tests.Visual
             AddUntilStep("visuals loaded into the box", () => screen.ChildrenOfType<BeatmapVisuals>().Any(v => v.IsLoaded));
         }
 
+        private CachedBeatmapSet? catchFixtureSet;
+
+        /// <summary>
+        /// The same as <see cref="addRealVisuals"/>, in osu!catch. Catch is the ruleset whose own
+        /// playfield container clips its contents (see LazerChartLayer's mask release), so it is the
+        /// one that can tell whether releasing the chart mask really frees the chart.
+        /// </summary>
+        private void addRealCatchVisuals()
+        {
+            AddStep("put a real catch beatmap on screen", () =>
+            {
+                if (catchFixtureSet == null)
+                {
+                    string dir = Path.Combine(tmp, "catch-fixture");
+                    Directory.CreateDirectory(dir);
+                    File.WriteAllText(Path.Combine(dir, "catch [Salad].osu"),
+                        "osu file format v14\n\n[General]\nAudioFilename: audio.wav\nMode: 2\n\n[Metadata]\nVersion:Salad\n\n"
+                        + "[Difficulty]\nCircleSize:4\n\n[TimingPoints]\n0,500,4,1,0,100,1,0\n\n[HitObjects]\n"
+                        + string.Join(string.Empty, Enumerable.Range(0, 40).Select(i =>
+                            $"{(i % 2 == 0 ? 0 : 512)},192,{500 + i * 250},1,0\n")));
+
+                    catchFixtureSet = cache.LoadFromDirectory(424243, dir);
+                }
+
+                playback.Current.Value = catchFixtureSet;
+                playback.SelectedOsuFile.Value = catchFixtureSet.PreferredOsuFile;
+            });
+
+            AddUntilStep("visuals loaded into the box", () => screen.ChildrenOfType<BeatmapVisuals>().Any(v => v.IsLoaded));
+        }
+
+        /// <summary>
+        /// Every masking container between <paramref name="d"/> and the screen, ours and lazer's
+        /// alike — a superset of <see cref="clippers"/>, which only sees <see cref="Container"/>s.
+        /// A ruleset clips its own playfield with whatever composite it likes.
+        /// </summary>
+        private List<CompositeDrawable> maskingAncestors(Drawable d)
+        {
+            var found = new List<CompositeDrawable>();
+
+            for (CompositeDrawable? p = d.Parent; p != null; p = p.Parent)
+            {
+                if (p.Masking)
+                    found.Add(p);
+
+                if (ReferenceEquals(p, screen))
+                    break;
+            }
+
+            return found;
+        }
+
+        /// <summary>Whatever is clipping <paramref name="d"/> that is NOT one of ours — i.e. the
+        /// ruleset's own clipping of its playfield.</summary>
+        private List<CompositeDrawable> lazersOwnClips(Drawable d)
+            => maskingAncestors(d)
+               .Where(m => !ReferenceEquals(m, visuals().ChartClip) && !ReferenceEquals(m, screen.PlayerBox))
+               .ToList();
+
+        /// <summary>
+        /// The user's report against osu!catch: with the chart mask released the fruits still got
+        /// cut in half along a horizontal line above the frame. Everything of OURS was already
+        /// released by then — what was left is the RULESET's own clip (catch's playfield adjustment
+        /// container holds a "visible area" that clips the whole playfield), and a child can never
+        /// escape an ancestor's mask. Releasing means releasing those too, and putting them back
+        /// when the setting goes off.
+        /// </summary>
+        [Test]
+        public void NothingMasksAChartObjectOnceReleased()
+        {
+            AddStep("render the chart, zoomed out", () =>
+            {
+                config.SetValue(JukeBoxSetting.RenderChart, true);
+                config.SetValue(JukeBoxSetting.PlayfieldZoom, 0.5);
+            });
+
+            addRealCatchVisuals();
+            AddUntilStep("the chart is drawing something", () => chartDrawables().Any());
+
+            // The condition that makes this test mean anything: catch really does clip its own
+            // playfield, over and above our clip and the box.
+            AddAssert("lazer clips its own playfield to begin with",
+                () => lazersOwnClips(chartDrawables().First()).Any());
+
+            AddStep("release the chart mask", () => config.SetValue(JukeBoxSetting.RemoveChartMask, true));
+
+            AddUntilStep("nothing masks a hit object any more",
+                () => !maskingAncestors(chartDrawables().First()).Any());
+            AddAssert("and the chart really does draw outside the scene now",
+                () => chartDrawables().Any(d => !insideOf(d, screen.VisualsStack)));
+
+            AddStep("put the chart mask back", () => config.SetValue(JukeBoxSetting.RemoveChartMask, false));
+
+            AddUntilStep("lazer's own clip is back, exactly as it built it",
+                () => lazersOwnClips(chartDrawables().First()).Any() && visuals().ChartClip.Masking);
+            AddAssert("and the release is holding nothing open any more",
+                () => visuals().ChartRenderer!.ReleasedMaskCount == 0);
+
+            AddStep("restore", () =>
+            {
+                config.SetValue(JukeBoxSetting.RenderChart, false);
+                config.SetValue(JukeBoxSetting.PlayfieldZoom, 1.0);
+            });
+        }
+
         private BeatmapVisuals visuals() => screen.ChildrenOfType<BeatmapVisuals>().First(v => v.IsLoaded);
 
         /// <summary>

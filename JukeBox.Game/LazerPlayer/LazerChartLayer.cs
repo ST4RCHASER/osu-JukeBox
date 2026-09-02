@@ -11,6 +11,7 @@ using osu.Framework.Audio.Track;
 using osu.Framework.Bindables;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
+using osu.Framework.Graphics.Effects;
 using osu.Framework.IO.Stores;
 using osu.Framework.Platform;
 using osu.Framework.Testing;
@@ -74,6 +75,15 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
     /// object skipped over during the catch-up would fire its hitsound.
     /// </summary>
     public readonly BindableBool HitSoundsEnabled = new BindableBool();
+
+    /// <summary>
+    /// Whether the chart has been released from its mask
+    /// (<see cref="Configuration.JukeBoxSetting.RemoveChartMask"/>), set by
+    /// <see cref="Screens.BeatmapVisuals"/>. Our own clips stopping is only half of a release: the
+    /// RULESET clips its own playfield too (see <see cref="releaseRulesetMasking"/>), and a child can
+    /// never escape an ancestor's mask.
+    /// </summary>
+    public readonly BindableBool ChartReleased = new BindableBool();
 
     private readonly BindableBool samplePlaybackDisabled = new BindableBool(true);
 
@@ -561,6 +571,110 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
 
         samplePlaybackDisabled.Value =
             !HitSoundsEnabled.Value || drawableRuleset?.FrameStableClock.IsCatchingUp.Value == true;
+
+        releaseRulesetMasking();
+    }
+
+    /// <summary>
+    /// osu!framework's <c>Masking</c> setter, reached the same way (and for the same reason)
+    /// LazerStoryboardLayer reaches it: the containers lazer clips its playfield with are internal
+    /// to osu.Game and expose no public setter. If upstream renames the property we simply leave
+    /// lazer's own masking alone — the pre-release behaviour, not a crash.
+    /// </summary>
+    private static readonly System.Reflection.PropertyInfo? masking_property =
+        typeof(CompositeDrawable).GetProperty("Masking",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
+
+    // Same lookup for the two things that are only legal WHILE masking, so a container carrying
+    // either can be left alone instead of crashed (see canRelease).
+    private static readonly System.Reflection.PropertyInfo? border_thickness_property =
+        typeof(CompositeDrawable).GetProperty("BorderThickness",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
+
+    private static readonly System.Reflection.PropertyInfo? edge_effect_property =
+        typeof(CompositeDrawable).GetProperty("EdgeEffect",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
+
+    /// <summary>Everything we have switched masking off on, to switch back on when the release ends.
+    /// Each entry was masking when we found it, so restoring is putting back what lazer built.</summary>
+    private readonly List<CompositeDrawable> releasedMasks = new List<CompositeDrawable>();
+
+    /// <summary>Test hook: how many of lazer's own masks the release is currently holding open.</summary>
+    internal int ReleasedMaskCount => releasedMasks.Count;
+
+    /// <summary>
+    /// Releases (or restores) every mask lazer puts between the playfield's contents and us.
+    ///
+    /// <para>
+    /// Our own clips stopping is only half the job: the rulesets clip their playfields themselves —
+    /// osu!catch is the visible case, whose PlayfieldAdjustmentContainer holds a "visible area"
+    /// container that cut fruits in half along a horizontal line above the frame even with the
+    /// chart mask released — and a child can never escape an ancestor's mask. Walking up from each
+    /// playfield's hit object container finds exactly the containers that form that frame, whatever
+    /// the ruleset builds (mania's per-column stages included), without naming a lazer-internal
+    /// type.
+    /// </para>
+    ///
+    /// <para>
+    /// Re-scanned every frame rather than cached: playfields (and, in mania, columns) appear a frame
+    /// or more after the ruleset does, and a set collected too early would leave the mask that was
+    /// not built yet clipping forever. A released container drops out of the scan by construction —
+    /// it is no longer masking — so the walk stays a handful of pointer hops per frame.
+    /// </para>
+    /// </summary>
+    private void releaseRulesetMasking()
+    {
+        if (masking_property == null || drawableRuleset == null)
+            return;
+
+        if (!ChartReleased.Value)
+        {
+            foreach (var target in releasedMasks)
+                masking_property.SetValue(target, true);
+
+            releasedMasks.Clear();
+            return;
+        }
+
+        foreach (var playfield in playfields(drawableRuleset.Playfield))
+        {
+            for (CompositeDrawable? p = playfield.HitObjectContainer; p != null && !ReferenceEquals(p, this); p = p.Parent)
+            {
+                if (!p.Masking || !canRelease(p))
+                    continue;
+
+                masking_property.SetValue(p, false);
+                releasedMasks.Add(p);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Whether switching this container's mask off is safe: a border or an edge effect is only legal
+    /// WHILE masking (osu!framework refuses the combination outright, at draw time), so a container
+    /// carrying either keeps its mask instead of taking the whole scene down with it.
+    /// </summary>
+    private static bool canRelease(CompositeDrawable target)
+    {
+        if (border_thickness_property?.GetValue(target) is float thickness && thickness != 0)
+            return false;
+
+        if (edge_effect_property?.GetValue(target) is EdgeEffectParameters edge && edge.Type != EdgeEffectType.None)
+            return false;
+
+        return true;
+    }
+
+    /// <summary>A playfield and every playfield nested inside it (mania's columns, taiko's swells).</summary>
+    private static IEnumerable<Playfield> playfields(Playfield playfield)
+    {
+        yield return playfield;
+
+        foreach (var nested in playfield.NestedPlayfields)
+        {
+            foreach (var inner in playfields(nested))
+                yield return inner;
+        }
     }
 
     /// <summary>

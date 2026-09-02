@@ -958,6 +958,12 @@ public partial class BeatmapVisuals : CompositeDrawable
         // "chart outside the screen" being complained about, and the release toggle is how someone
         // who wants lazer's off-screen-spawn look asks for it.
         applyClip(chartClip, !removeChartMask.Value, canvas, 0);
+
+        // And the other half of the same release: the ruleset masks its own playfield (osu!catch cut
+        // fruits in half along a line above the frame with everything of OURS already released), so
+        // the layer switches lazer's own masks off for as long as the setting is on.
+        if (chartLayer != null)
+            chartLayer.ChartReleased.Value = removeChartMask.Value;
     }
 
     private static void applyClip(Container clip, bool masking, Vector2 size, float cornerRadius)
