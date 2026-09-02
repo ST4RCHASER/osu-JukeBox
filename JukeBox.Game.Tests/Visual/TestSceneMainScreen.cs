@@ -17,6 +17,7 @@ using osu.Framework.Allocation;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Primitives;
+using osu.Framework.Graphics.Shapes;
 using osu.Framework.Graphics.Sprites;
 using osu.Framework.Graphics.UserInterface;
 using osu.Framework.Screens;
@@ -118,6 +119,80 @@ namespace JukeBox.Game.Tests.Visual
                 var buttons = tabButtons();
                 return buttons[0].ScreenSpaceDrawQuad.TopLeft.X < buttons[1].ScreenSpaceDrawQuad.TopLeft.X
                        && buttons[1].ScreenSpaceDrawQuad.TopLeft.X < buttons[2].ScreenSpaceDrawQuad.TopLeft.X;
+            });
+        }
+
+        // The strip's spacing, measured off the buttons' actual on-screen rectangles rather than off
+        // the values handed to the layout. The bug this guards was invisible in the source — three
+        // symmetric-looking 3px margins — and existed only in the rendered geometry, because Margin
+        // does not shrink a RelativeSizeAxes child: it left a gap on one side of Chart, none on the
+        // other, and pushed Settings past the panel's padding.
+        //
+        // Two panel widths because the strip divides the panel's inner width by three and neither
+        // width divides evenly; evenness at 340 alone would be arithmetic luck rather than layout.
+        [TestCase(340f)]
+        [TestCase(299f)]
+        public void TabStripHasEvenGapsAndEvenOuterPadding(float panelWidth)
+        {
+            AddStep($"set the right column to {panelWidth}px", () => screen.RightColumn.Width = panelWidth);
+            AddWaitStep("let the strip settle", 3);
+
+            AddAssert("the three buttons are equal width", () =>
+            {
+                var r = tabButtonRects();
+                return Math.Abs(r[0].Width - r[1].Width) < 0.5f && Math.Abs(r[1].Width - r[2].Width) < 0.5f;
+            });
+
+            AddAssert("Chart has the same gap on both sides", () =>
+            {
+                var r = tabButtonRects();
+                return Math.Abs((r[1].Left - r[0].Right) - (r[2].Left - r[1].Right)) < 0.5f;
+            });
+
+            AddAssert("the strip is inset by the same amount at both ends of the panel", () =>
+            {
+                var r = tabButtonRects();
+                var panel = screen.RightColumn.ScreenSpaceDrawQuad.AABBFloat;
+                return Math.Abs((r[0].Left - panel.Left) - (panel.Right - r[2].Right)) < 0.5f;
+            });
+
+            // The outer inset is deliberately NOT the inter-button gap. It is the right column's own
+            // PanelPadding, shared with every tab body below the strip, so the buttons line up with
+            // the content they switch between; the gap is the narrower sibling-control spacing.
+            AddAssert("outer inset is the panel padding, gap is the row spacing", () =>
+            {
+                var r = tabButtonRects();
+                var panel = screen.RightColumn.ScreenSpaceDrawQuad.AABBFloat;
+                return Math.Abs((r[0].Left - panel.Left) - Theme.PanelPadding) < 0.5f
+                       && Math.Abs((r[1].Left - r[0].Right) - Theme.RowSpacing) < 0.5f;
+            });
+        }
+
+        // The accent underline is a child of its button, so it can only sit right if the button
+        // itself does. That is precisely what the margin bug broke for Settings, whose button — and
+        // with it the underline — hung past the panel's padded content box.
+        [TestCase(RightPanelTabName.Playback)]
+        [TestCase(RightPanelTabName.Chart)]
+        [TestCase(RightPanelTabName.Settings)]
+        public void ActiveTabUnderlineSpansItsButtonAndStaysInsideThePanel(RightPanelTabName tab)
+        {
+            AddStep($"select {tab}", () => clickTab(tab));
+            AddUntilStep("underline fully shown", () => activeTabUnderline() != null);
+            AddWaitStep("let the strip settle", 3);
+
+            AddAssert("underline spans exactly its own button", () =>
+            {
+                var button = tabButtons()[(int)tab].ScreenSpaceDrawQuad.AABBFloat;
+                var line = activeTabUnderline()!.ScreenSpaceDrawQuad.AABBFloat;
+                return Math.Abs(line.Left - button.Left) < 0.5f && Math.Abs(line.Right - button.Right) < 0.5f;
+            });
+
+            AddAssert("underline sits inside the panel's padded content box", () =>
+            {
+                var panel = screen.RightColumn.ScreenSpaceDrawQuad.AABBFloat;
+                var line = activeTabUnderline()!.ScreenSpaceDrawQuad.AABBFloat;
+                return line.Left >= panel.Left + Theme.PanelPadding - 0.5f
+                       && line.Right <= panel.Right - Theme.PanelPadding + 0.5f;
             });
         }
 
@@ -368,6 +443,15 @@ namespace JukeBox.Game.Tests.Visual
 
         private List<string> tabButtonLabels()
             => tabButtons().Select(c => c.ChildrenOfType<SpriteText>().First().Text.ToString()).ToList();
+
+        private List<RectangleF> tabButtonRects()
+            => tabButtons().Select(c => c.ScreenSpaceDrawQuad.AABBFloat).OrderBy(r => r.Left).ToList();
+
+        // A tab button holds two Boxes in declaration order — the full-bleed background first, then
+        // the accent underline at its foot (see RightPanelTabButton's constructor) — and only the
+        // active tab's underline is opaque. Null while a switch is still crossfading.
+        private Box? activeTabUnderline()
+            => tabButtons().Select(c => c.ChildrenOfType<Box>().Last()).SingleOrDefault(u => u.Alpha == 1);
 
         // Regression coverage for a true contained player: the video/storyboard/background
         // visuals must never render outside the boxed centre panel, and never behind either side

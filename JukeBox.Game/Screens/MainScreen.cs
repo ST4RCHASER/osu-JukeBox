@@ -792,30 +792,47 @@ public partial class MainScreen : Screen
         {
             RelativeSizeAxes = Axes.X,
             Height = tab_header_height,
-            // Three equal columns; Chart sits in the middle, between the two tabs that were here
-            // before it. The 3px margins keep the same 6px gap between neighbouring buttons the
-            // two-tab strip had.
-            ColumnDimensions = new[] { new Dimension(), new Dimension(), new Dimension() },
+            // Five columns, not three: the buttons take the three flexible ones and the gaps between
+            // them are real absolute-width columns. Spacing a fill-width row this way is lazer's own
+            // idiom (see its RotationPresetButtons and MultiplayerMatchFooter), and here it is the
+            // only thing that works — Margin cannot do it. Margin does not shrink a drawable with
+            // RelativeSizeAxes; the child still fills its whole cell, and only Left/Top shift it. So
+            // the 3px margins this used to carry rendered as a 3px gap on Chart's left, NO gap on its
+            // right, and a Settings button hanging 3px past the column's padding — three different
+            // spacings where the code read as symmetric.
+            //
+            // The gap is RowSpacing, the spacing between sibling controls (the transport strip uses
+            // the same). It is deliberately narrower than the outer inset, which is not set here at
+            // all: that comes from the right column's own PanelPadding, wrapping the strip and every
+            // tab body below it alike, so the buttons stay flush with the content they switch
+            // between. Carving an extra inset here would break that alignment.
+            ColumnDimensions = new[]
+            {
+                new Dimension(),
+                new Dimension(GridSizeMode.Absolute, Theme.RowSpacing),
+                new Dimension(),
+                new Dimension(GridSizeMode.Absolute, Theme.RowSpacing),
+                new Dimension(),
+            },
             Content = new[]
             {
-                new Drawable[]
+                new Drawable?[]
                 {
                     playbackTabButton = new RightPanelTabButton("Playback")
                     {
                         RelativeSizeAxes = Axes.Both,
-                        Margin = new MarginPadding { Right = 3 },
                         Action = () => selectTab(RightPanelTab.Playback),
                     },
+                    null,
                     chartTabButton = new RightPanelTabButton("Chart")
                     {
                         RelativeSizeAxes = Axes.Both,
-                        Margin = new MarginPadding { Horizontal = 3 },
                         Action = () => selectTab(RightPanelTab.Chart),
                     },
+                    null,
                     settingsTabButton = new RightPanelTabButton("Settings")
                     {
                         RelativeSizeAxes = Axes.Both,
-                        Margin = new MarginPadding { Left = 3 },
                         Action = () => selectTab(RightPanelTab.Settings),
                     },
                 },
