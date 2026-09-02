@@ -156,6 +156,18 @@ public enum JukeBoxSetting
     /// property of any one map (see <see cref="LazerPlayer.ChartConversion"/>).
     /// </summary>
     ConvertToRuleset,
+
+    /// <summary>
+    /// Show what's playing on the user's Discord profile (see
+    /// <see cref="Presence.DiscordPresenceService"/>). On by default — it publishes only beatmap
+    /// metadata that is already public, and with no Discord running it does nothing at all.
+    ///
+    /// Deliberately absent from <see cref="Detach.SettingsMirror"/>: that registry exists for
+    /// settings that change what the player RENDERS, and presence is published by the main process
+    /// alone (the viewer must never open a second Discord connection), so mirroring it would send
+    /// the viewer a setting it has no use for.
+    /// </summary>
+    DiscordRichPresence,
 }
 
 /// <summary>
@@ -290,5 +302,6 @@ public class JukeBoxConfigManager : IniConfigManager<JukeBoxSetting>
         SetDefault(JukeBoxSetting.ChartMods, string.Empty);
         SetDefault(JukeBoxSetting.HiddenPlayfieldElements, string.Empty);
         SetDefault(JukeBoxSetting.ConvertToRuleset, LazerPlayer.ChartConversionTarget.Off);
+        SetDefault(JukeBoxSetting.DiscordRichPresence, true);
     }
 }

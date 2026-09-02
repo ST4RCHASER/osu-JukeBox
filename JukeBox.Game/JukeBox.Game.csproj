@@ -17,6 +17,11 @@
     <PackageReference Include="ppy.osu.Game.Rulesets.Mania" Version="2026.730.0" />
     <!-- Default skin assets (textures/samples/fonts). CC-BY-NC licensed — see docs/ATTRIBUTION.md. -->
     <PackageReference Include="ppy.osu.Game.Resources" Version="2026.710.0" />
+    <!-- Discord rich presence (Lachee's discord-rpc-csharp), MIT. Pinned to the same version
+         osu!lazer's own osu.Desktop uses; 1.6.x carries the join-invite bug ppy flagged, and we
+         want no part of the invite surface regardless. ActivityType (Listening/Watching) is
+         already present in this version — see JukeBox.Game/Presence. -->
+    <PackageReference Include="DiscordRichPresence" Version="1.5.0.51" />
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="JukeBox.Game.Tests" />

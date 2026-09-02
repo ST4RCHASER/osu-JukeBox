@@ -1,5 +1,6 @@
 ﻿using JukeBox.Game.Detach;
 using JukeBox.Game.Online;
+using JukeBox.Game.Presence;
 using JukeBox.Game.Screens;
 using osu.Framework.Allocation;
 using osu.Framework.Graphics;
@@ -25,6 +26,12 @@ namespace JukeBox.Game
             // Wired here rather than in JukeBoxGameBase.load() so no test host ever tries to
             // spawn a real OS process off the DetachPlayer setting.
             Add(new DetachedViewerManager());
+
+            // Same reasoning, and the same placement, as DetachedViewerManager above: the detached
+            // viewer process and every test scene run on JukeBoxGameBase, and a second process
+            // publishing its own presence would fight this one over the user's single activity slot.
+            // The main window is the one that knows what's playing, so it is the one that reports it.
+            Add(new DiscordPresenceService());
 
             // Single online TextureStore for beatmap set cover thumbnails
             // (https://b.ppy.sh/thumb/{setId}l.jpg), shared by every BeatmapCard/NowPlayingPanel

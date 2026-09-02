@@ -130,6 +130,7 @@ public partial class SettingsOverlay : FocusedOverlayContainer
     private Container officialCredentials = null!;
     private SettingsCheckbox detachPlayerCheckbox = null!;
     private SettingsCheckbox playOnMainCheckbox = null!;
+    private SettingsCheckbox discordPresenceCheckbox = null!;
 
     // Checkbox-facing adapter for playOnMainCheckbox (same shape as hardwareAccelerationEnabled
     // below): the dependent-row grey-out lives on THIS bindable's Disabled, never on the config
@@ -208,6 +209,7 @@ public partial class SettingsOverlay : FocusedOverlayContainer
     internal SettingsSlider<double> MasterVolumeSlider => masterVolumeRow;
     internal SettingsCheckbox DetachPlayerCheckbox => detachPlayerCheckbox;
     internal SettingsCheckbox PlayOnMainCheckbox => playOnMainCheckbox;
+    internal SettingsCheckbox DiscordPresenceCheckbox => discordPresenceCheckbox;
 
     /// <summary>Test-only: the panel's own background surface — non-null only for the floating
     /// card, which is a card in its own right over a scrim. The docked presentation paints none, so
@@ -451,6 +453,7 @@ public partial class SettingsOverlay : FocusedOverlayContainer
                         },
                     },
                 },
+                discordPresenceCheckbox = new SettingsCheckbox { LabelText = "Discord Rich Presence" },
             },
         });
 
@@ -502,6 +505,7 @@ public partial class SettingsOverlay : FocusedOverlayContainer
         searchApiDropdown.Current = config.GetBindable<SearchApi>(JukeBoxSetting.SearchApi);
         clientIdTextBox.Current = config.GetBindable<string>(JukeBoxSetting.OsuClientId);
         clientSecretTextBox.Current = config.GetBindable<string>(JukeBoxSetting.OsuClientSecret);
+        discordPresenceCheckbox.Current = config.GetBindable<bool>(JukeBoxSetting.DiscordRichPresence);
 
         // Credentials only mean anything to the official backend — with the mirrors selected the
         // block is gone rather than greyed, since there is nothing about it to explain in that mode.
