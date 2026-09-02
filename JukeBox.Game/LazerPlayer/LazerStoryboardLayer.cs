@@ -91,7 +91,11 @@ public partial class LazerStoryboardLayer : CompositeDrawable, IBeatSyncProvider
     {
         var layer = drawableStoryboard?.Children.FirstOrDefault(l => l.Layer.Name == name);
 
-        return layer == null ? null : elementContainer(layer)?.Masking;
+        if (layer == null || maskTargets(layer) is not { } targets)
+            return null;
+
+        // Masking anywhere on the way out still crops the layer, so "is it masking" is the OR.
+        return targets.Any(t => t.Target.Masking);
     }
 
     /// <summary>Test hook: the alpha the layer lazer calls <paramref name="name"/> is currently
@@ -322,20 +326,24 @@ public partial class LazerStoryboardLayer : CompositeDrawable, IBeatSyncProvider
         typeof(CompositeDrawable).GetProperty("Masking",
             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
 
-    /// <summary>Each layer's element container, looked up once — the masking state itself is read
-    /// back off the container, whose getter is public.</summary>
-    private readonly Dictionary<DrawableStoryboardLayer, CompositeDrawable> layerElements =
-        new Dictionary<DrawableStoryboardLayer, CompositeDrawable>();
+    /// <summary>
+    /// Everything lazer masks on the way from a storyboard sprite out to us, with the value each one
+    /// was built with — so restoring is putting back what lazer chose rather than guessing. Found
+    /// once per layer, and only once the layer has actually built its contents.
+    /// </summary>
+    private readonly Dictionary<DrawableStoryboardLayer, (CompositeDrawable Target, bool Original)[]> layerMasks =
+        new Dictionary<DrawableStoryboardLayer, (CompositeDrawable, bool)[]>();
 
     /// <summary>
-    /// Releases (or restores) the masking lazer puts on the layer's own element container.
+    /// Releases (or restores) every mask lazer puts between a storyboard sprite and us.
     ///
     /// <para>
-    /// This is the mask that actually crops a storyboard: every layer but Video declares
-    /// <c>Masking = true</c>, so <c>DrawableStoryboardLayer</c> clips its elements to the
-    /// storyboard's own design area no matter what the app around it does. Releasing our player box
-    /// therefore changed nothing on its own — the storyboard was still boxed by lazer, which is
-    /// exactly what the user reported. The layer's own masking is the thing to switch.
+    /// This is what actually crops a storyboard: every layer but Video declares
+    /// <c>Masking = true</c>, and lazer applies it at TWO levels — the
+    /// <c>DrawableStoryboardLayer</c> itself and the element container inside it. Releasing our
+    /// player box changed nothing on its own, and releasing only the inner one still left the layer
+    /// clipping, which is why sprites the mapper drew past the design frame stayed invisible.
+    /// Both are switched here, and put back to what lazer built them with when the release is off.
     /// </para>
     /// </summary>
     private void releaseLayerMasking(DrawableStoryboardLayer layer)
@@ -343,32 +351,45 @@ public partial class LazerStoryboardLayer : CompositeDrawable, IBeatSyncProvider
         if (masking_property == null)
             return;
 
-        var container = elementContainer(layer);
+        var targets = maskTargets(layer);
 
-        if (container == null)
+        if (targets == null)
             return;
 
-        bool wanted = !StoryboardReleased.Value && layer.Layer.Masking;
+        foreach (var (target, original) in targets)
+        {
+            bool wanted = original && !StoryboardReleased.Value;
 
-        if (container.Masking != wanted)
-            masking_property.SetValue(container, wanted);
+            if (target.Masking != wanted)
+                masking_property.SetValue(target, wanted);
+        }
     }
 
     /// <summary>
-    /// The layer's own element container — a <c>LifetimeManagementContainer</c>, which the layer
-    /// itself is not, so this picks it out without naming any lazer-internal type.
+    /// The layer and its element container, with their as-built masking. Null until the layer has
+    /// built that container: caching a half-built layer would leave the inner mask switched on
+    /// forever, which is precisely the bug this pass exists to fix.
     /// </summary>
-    private CompositeDrawable? elementContainer(DrawableStoryboardLayer layer)
+    private (CompositeDrawable Target, bool Original)[]? maskTargets(DrawableStoryboardLayer layer)
     {
-        if (layerElements.TryGetValue(layer, out var known))
+        if (layerMasks.TryGetValue(layer, out var known))
             return known;
 
+        // A LifetimeManagementContainer, which the layer itself is not — so this picks the element
+        // container out without naming any lazer-internal type.
         var container = layer.ChildrenOfType<LifetimeManagementContainer>().FirstOrDefault();
 
-        if (container != null)
-            layerElements[layer] = container;
+        if (container == null)
+            return null;
 
-        return container;
+        var found = new[]
+        {
+            ((CompositeDrawable)layer, layer.Masking),
+            ((CompositeDrawable)container, container.Masking),
+        };
+
+        layerMasks[layer] = found;
+        return found;
     }
 
     protected override void Dispose(bool isDisposing)

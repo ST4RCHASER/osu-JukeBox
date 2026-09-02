@@ -1,5 +1,7 @@
 #nullable enable
 
+using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using JukeBox.Game.Beatmaps;
@@ -243,6 +245,42 @@ namespace JukeBox.Game.Tests.Visual
 
             AddStep("switch it off again", () => layerVisibility.Shown(StoryboardLayerKind.Fail).Value = false);
             AddUntilStep("and it goes back to hidden", () => layer.LayerAlpha("Fail") == 0);
+
+            removeLayer();
+        }
+
+        /// <summary>
+        /// Diagnostic: what is actually masking a storyboard sprite, all the way up to our own
+        /// layer. "Release the storyboard" can only be true if this comes back empty.
+        /// </summary>
+        [Test]
+        public void NothingMasksAStoryboardSpriteOnceReleased()
+        {
+            createHeronLayer();
+
+            AddUntilStep("sprites exist", () => layer.ChildrenOfType<osu.Game.Storyboards.Drawables.DrawableStoryboardSprite>().Any());
+
+            AddStep("release the storyboard", () => layer.StoryboardReleased.Value = true);
+
+            AddAssert("nothing between the sprite and our layer masks", () =>
+            {
+                var sprite = layer.ChildrenOfType<osu.Game.Storyboards.Drawables.DrawableStoryboardSprite>().First();
+                var masking = new List<string>();
+
+                for (CompositeDrawable? p = sprite.Parent; p != null; p = p.Parent)
+                {
+                    if (p.Masking)
+                        masking.Add(p.GetType().Name);
+
+                    if (ReferenceEquals(p, layer))
+                        break;
+                }
+
+                if (masking.Count == 0)
+                    return true;
+
+                throw new Exception("still masked by: " + string.Join(", ", masking));
+            });
 
             removeLayer();
         }
