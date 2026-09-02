@@ -95,6 +95,11 @@ public partial class SettingsOverlay : FocusedOverlayContainer
     [Resolved(canBeNull: true)]
     private OsuConfigManager? lazerConfig { get; set; }
 
+    /// <summary>The shared per-layer storyboard visibility. Nullable like the rest: a bare test
+    /// scene that caches no services still builds the panel, with the layer rows simply inert.</summary>
+    [Resolved(canBeNull: true)]
+    private StoryboardLayerVisibility? storyboardLayers { get; set; }
+
     /// <summary>
     /// The imported-skin listing behind the gameplay-skin dropdown. Optional for the same reason
     /// <see cref="lazerConfig"/> is: settings test scenes cache a config manager and little else,
@@ -126,7 +131,24 @@ public partial class SettingsOverlay : FocusedOverlayContainer
     // ---- our settings ----
     private SkinSettingsDropdown skinDropdown = null!;
     private MaintenanceSection maintenanceSection = null!;
-    private SettingsCheckbox showStoryboardVideoCheckbox = null!;
+    private SettingsCheckbox showStoryboardCheckbox = null!;
+    private SettingsCheckbox showVideoCheckbox = null!;
+
+    /// <summary>One checkbox per storyboard layer, and the block they live in — dimmed and inert
+    /// while the master "Storyboard" toggle is off, the same dependent-row treatment the Chart
+    /// tab's opacity slider gets under "Render chart".</summary>
+    private readonly Dictionary<StoryboardLayerKind, SettingsCheckbox> layerCheckboxes =
+        new Dictionary<StoryboardLayerKind, SettingsCheckbox>();
+
+    /// <summary>
+    /// Checkbox-facing adapters for the layer rows. As everywhere else here, the grey-out lives on
+    /// THESE bindables' Disabled and never on the service's own — those are written programmatically
+    /// (config load, the settings mirror), and a disabled bindable throws on any write at all.
+    /// </summary>
+    private readonly Dictionary<StoryboardLayerKind, BindableBool> layerUi =
+        new Dictionary<StoryboardLayerKind, BindableBool>();
+
+    private Container storyboardLayerBlock = null!;
     private SettingsSlider<double> backgroundDimRow = null!;
     private SettingsSlider<double> backgroundBlurRow = null!;
     private SettingsSlider<double> uiScaleRow = null!;
@@ -231,6 +253,101 @@ public partial class SettingsOverlay : FocusedOverlayContainer
     /// <see cref="FullscreenListingOverlay.OpenUrl"/>.</summary>
     internal Action<string>? OpenUrl;
 
+    /// <summary>
+    /// The five storyboard layers as their own indented block. osu! storyboards always carry all
+    /// five (an empty storyboard still reports them), so this is a complete, stable inventory
+    /// rather than a view of the current map — the same choice the Chart tab's element list makes.
+    /// </summary>
+    private Container createStoryboardLayerBlock()
+    {
+        var rows = new List<Drawable>();
+
+        foreach (var layer in StoryboardLayerVisibility.All)
+        {
+            var checkbox = new SettingsCheckbox { LabelText = layer.ToString() };
+
+            layerCheckboxes[layer] = checkbox;
+            layerUi[layer] = new BindableBool(true);
+            rows.Add(checkbox);
+        }
+
+        rows.Add(new OsuTextFlowContainer(t => t.Font = OsuFont.GetFont(size: 12))
+        {
+            RelativeSizeAxes = Axes.X,
+            AutoSizeAxes = Axes.Y,
+            Padding = new MarginPadding
+            {
+                Left = SettingsPanel.CONTENT_PADDING.Left,
+                Right = SettingsPanel.CONTENT_PADDING.Right,
+                Top = 4,
+                Bottom = 8,
+            },
+            Colour = Theme.TextTertiary,
+            // Said rather than hidden: the row is part of the storyboard's real shape, and a
+            // missing one would only raise the question of where it went.
+            Text = "Fail only ever draws while failing, which never happens here — the chart is "
+                   + "autoplay with no health — so that layer stays blank whatever its toggle says.",
+        });
+
+        return storyboardLayerBlock = new Container
+        {
+            RelativeSizeAxes = Axes.X,
+            AutoSizeAxes = Axes.Y,
+            Padding = new MarginPadding { Left = 24 },
+            Child = new FillFlowContainer
+            {
+                RelativeSizeAxes = Axes.X,
+                AutoSizeAxes = Axes.Y,
+                Direction = FillDirection.Vertical,
+                Children = rows,
+            },
+        };
+    }
+
+    /// <summary>
+    /// Two-way sync between each layer row and the shared visibility service, plus the dependent
+    /// state: with the storyboard itself switched off there is nothing for a layer choice to act
+    /// on, so the whole block greys out and refuses input — and comes straight back when it isn't.
+    /// </summary>
+    private void bindStoryboardLayers()
+    {
+        foreach (var layer in StoryboardLayerVisibility.All)
+        {
+            var captured = layer;
+            var ui = layerUi[layer];
+            var source = storyboardLayers!.Shown(layer);
+
+            layerCheckboxes[layer].Current = ui;
+
+            // Service → UI lifts the disable for the mirroring write, since the disable exists to
+            // stop USER edits rather than programmatic ones.
+            source.BindValueChanged(e =>
+            {
+                bool wasDisabled = ui.Disabled;
+
+                ui.Disabled = false;
+                ui.Value = e.NewValue;
+                ui.Disabled = wasDisabled;
+            }, true);
+
+            ui.BindValueChanged(e => storyboardLayers!.Shown(captured).Value = e.NewValue);
+        }
+
+        showStoryboardCheckbox.Current.BindValueChanged(e => updateStoryboardLayerState(e.NewValue), true);
+    }
+
+    private void updateStoryboardLayerState(bool storyboardShown)
+    {
+        foreach (var ui in layerUi.Values)
+            ui.Disabled = !storyboardShown;
+
+        storyboardLayerBlock.FadeTo(storyboardShown ? 1 : dependent_row_locked_alpha, Theme.HoverFadeDuration, Easing.OutQuint);
+    }
+
+    /// <summary>The dimming a dependent row gets while the toggle it depends on is off, matching
+    /// the Chart tab's own locked-row alpha so the two read as one rule.</summary>
+    private const float dependent_row_locked_alpha = 0.55f;
+
     private void openUrl(string url)
     {
         if (OpenUrl != null)
@@ -241,6 +358,15 @@ public partial class SettingsOverlay : FocusedOverlayContainer
 
     internal SettingsSlider<double> BackgroundDimSlider => backgroundDimRow;
     internal SettingsSlider<double> PlayfieldZoomSlider => playfieldZoomRow;
+    internal SettingsCheckbox ShowStoryboardCheckbox => showStoryboardCheckbox;
+    internal SettingsCheckbox ShowVideoCheckbox => showVideoCheckbox;
+
+    /// <summary>Test-only: a storyboard layer's own row, and whether the block is currently
+    /// accepting input at all.</summary>
+    internal SettingsCheckbox LayerCheckbox(StoryboardLayerKind layer) => layerCheckboxes[layer];
+
+    internal bool StoryboardLayersInert => layerUi.Values.All(b => b.Disabled);
+
     internal SettingsCheckbox RemoveChartMaskCheckbox => removeChartMaskCheckbox;
     internal SettingsCheckbox RemoveStoryboardMaskCheckbox => removeStoryboardMaskCheckbox;
     internal SettingsDropdown<SkinChoice> SkinDropdown => skinDropdown;
@@ -420,7 +546,14 @@ public partial class SettingsOverlay : FocusedOverlayContainer
             beatmapRows.Add(beatmapHitsoundsCheckbox = new SettingsCheckbox { LabelText = "Beatmap hitsounds" });
         }
 
-        beatmapRows.Add(showStoryboardVideoCheckbox = new SettingsCheckbox { LabelText = "Storyboard / video" });
+        // Two independent rows where there was one combined "Storyboard / video" (user request):
+        // the storyboard's video is a layer of its own in lazer's model, so the two really are
+        // separable, and a busy storyboard over a map you want the video of is exactly the case the
+        // combined toggle could not express. The per-layer block sits under the storyboard row it
+        // depends on.
+        beatmapRows.Add(showStoryboardCheckbox = new SettingsCheckbox { LabelText = "Storyboard" });
+        beatmapRows.Add(createStoryboardLayerBlock());
+        beatmapRows.Add(showVideoCheckbox = new SettingsCheckbox { LabelText = "Video" });
 
         if (lazerConfig != null)
             beatmapRows.Add(comboNormalisationRow = new SettingsSlider<float> { LabelText = "Combo colour normalisation", DisplayAsPercentage = true, KeyboardStep = 0.01f });
@@ -737,7 +870,11 @@ public partial class SettingsOverlay : FocusedOverlayContainer
         // ---- ours ----
         bindSkinDropdown();
         fpsDisplayDropdown.Current = config.GetBindable<FpsDisplayMode>(JukeBoxSetting.FpsDisplayMode);
-        showStoryboardVideoCheckbox.Current = config.GetBindable<bool>(JukeBoxSetting.ShowStoryboardVideo);
+        showStoryboardCheckbox.Current = config.GetBindable<bool>(JukeBoxSetting.ShowStoryboard);
+        showVideoCheckbox.Current = config.GetBindable<bool>(JukeBoxSetting.ShowVideo);
+
+        if (storyboardLayers != null)
+            bindStoryboardLayers();
         backgroundDimRow.Current = config.GetBindable<double>(JukeBoxSetting.BackgroundDim);
         backgroundBlurRow.Current = config.GetBindable<double>(JukeBoxSetting.BackgroundBlur);
         playfieldZoomRow.Current = config.GetBindable<double>(JukeBoxSetting.PlayfieldZoom);

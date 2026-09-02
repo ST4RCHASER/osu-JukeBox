@@ -45,6 +45,14 @@ public enum JukeBoxSetting
     VolumeMigrated,
     Skin,
     BackgroundBlur,
+    /// <summary>
+    /// Deprecated: superseded by the independent <see cref="ShowStoryboard"/> and
+    /// <see cref="ShowVideo"/>, which the user asked to be able to switch separately (one combined
+    /// toggle cannot leave a map's video playing while silencing a busy storyboard, or the
+    /// reverse). Kept only so old ini values still parse; its value is copied into BOTH new keys
+    /// once, guarded by <see cref="StoryboardVideoSplitMigrated"/> — someone who had the combined
+    /// toggle off must find both halves off rather than silently back on. See JukeBoxGameBase.load.
+    /// </summary>
     ShowStoryboardVideo,
     UiScale,
     /// <summary>Global audio offset in ms, added to the per-beatmap offset (BeatmapOffsetStore).</summary>
@@ -265,6 +273,33 @@ public enum JukeBoxSetting
     /// <summary>Restricts the radio to osu!'s Featured Artist library. Official backend only (see
     /// <see cref="Online.SearchFilters.FeaturedArtists"/>).</summary>
     RadioFeaturedArtists,
+
+    /// Whether the storyboard is drawn — the sprites, animations and their Sample events, but NOT
+    /// the storyboard's video, which is <see cref="ShowVideo"/>'s. Off silences the storyboard's
+    /// samples too: a hidden layer that is still playing keysounds is a hidden layer you can hear.
+    /// Replaces half of the deprecated <see cref="ShowStoryboardVideo"/>.
+    /// </summary>
+    ShowStoryboard,
+
+    /// <summary>
+    /// Whether the storyboard's VIDEO is drawn. Independent of <see cref="ShowStoryboard"/>: in
+    /// lazer's model the video is one more storyboard layer, and this switches exactly that layer,
+    /// which is what makes "video without storyboard" (and the reverse) possible at all.
+    /// Replaces the other half of the deprecated <see cref="ShowStoryboardVideo"/>.
+    /// </summary>
+    ShowVideo,
+
+    /// <summary>One-shot guard for the <see cref="ShowStoryboardVideo"/> →
+    /// <see cref="ShowStoryboard"/> + <see cref="ShowVideo"/> split.</summary>
+    StoryboardVideoSplitMigrated,
+
+    /// <summary>
+    /// Which storyboard layers the user has switched OFF, as a comma-separated list of
+    /// <see cref="LazerPlayer.StoryboardLayerKind"/> names — same list-shaped, "persist the hidden
+    /// ones" scheme as <see cref="HiddenPlayfieldElements"/>, and for the same reasons. Empty (the
+    /// default) is "every layer drawn".
+    /// </summary>
+    HiddenStoryboardLayers,
 }
 
 /// <summary>
@@ -441,6 +476,11 @@ public class JukeBoxConfigManager : IniConfigManager<JukeBoxSetting>
         SetDefault(JukeBoxSetting.SearchApi, SearchApi.Mirror);
         SetDefault(JukeBoxSetting.OsuClientId, string.Empty);
         SetDefault(JukeBoxSetting.OsuClientSecret, string.Empty);
+
+        SetDefault(JukeBoxSetting.ShowStoryboard, true);
+        SetDefault(JukeBoxSetting.ShowVideo, true);
+        SetDefault(JukeBoxSetting.StoryboardVideoSplitMigrated, false);
+        SetDefault(JukeBoxSetting.HiddenStoryboardLayers, string.Empty);
 
         SetDefault(JukeBoxSetting.RemoveChartMask, false);
         SetDefault(JukeBoxSetting.RemoveStoryboardMask, false);

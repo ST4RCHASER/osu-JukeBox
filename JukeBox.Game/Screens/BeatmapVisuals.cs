@@ -114,7 +114,8 @@ public partial class BeatmapVisuals : CompositeDrawable
     private readonly Bindable<bool> playHitSounds = new();
     private readonly BindableDouble backgroundDim = new();
     private readonly BindableDouble backgroundBlur = new();
-    private readonly Bindable<bool> showStoryboardVideo = new(true);
+    private readonly Bindable<bool> showStoryboard = new(true);
+    private readonly Bindable<bool> showVideo = new(true);
     private readonly BindableDouble playfieldZoom = new(1.0);
     private readonly BindableDouble chartOpacity = new(1.0);
     private readonly Bindable<bool> removeChartMask = new();
@@ -499,7 +500,8 @@ public partial class BeatmapVisuals : CompositeDrawable
             config.BindWith(JukeBoxSetting.PlayHitSounds, playHitSounds);
             config.BindWith(JukeBoxSetting.BackgroundDim, backgroundDim);
             config.BindWith(JukeBoxSetting.BackgroundBlur, backgroundBlur);
-            config.BindWith(JukeBoxSetting.ShowStoryboardVideo, showStoryboardVideo);
+            config.BindWith(JukeBoxSetting.ShowStoryboard, showStoryboard);
+            config.BindWith(JukeBoxSetting.ShowVideo, showVideo);
             config.BindWith(JukeBoxSetting.PlayfieldZoom, playfieldZoom);
             config.BindWith(JukeBoxSetting.ChartOpacity, chartOpacity);
             config.BindWith(JukeBoxSetting.RemoveChartMask, removeChartMask);
@@ -546,12 +548,8 @@ public partial class BeatmapVisuals : CompositeDrawable
             if (backgroundBlurContainer != null)
                 backgroundBlurContainer.BlurSigma = new Vector2((float)e.NewValue * max_blur_sigma);
         }, true);
-        showStoryboardVideo.BindValueChanged(e =>
-        {
-            storyboardLayer.Alpha = e.NewValue ? 1 : 0;
-            storyboardAudio.Volume.Value = e.NewValue ? 1 : 0;
-            updateBackgroundVisibility();
-        }, true);
+        showStoryboard.BindValueChanged(_ => updateStoryboardDisplay(), true);
+        showVideo.BindValueChanged(_ => updateStoryboardDisplay(), true);
 
         // Regression fix: backgroundBlurContainer sets RedrawOnScale = false (see its own
         // construction comment) so MainScreen's continuous, purely-cosmetic scale changes —
@@ -688,8 +686,32 @@ public partial class BeatmapVisuals : CompositeDrawable
         if (backgroundSprite == null)
             return;
 
-        // A hidden storyboard/video layer can't be covering the background, whatever it claims.
-        backgroundSprite.Alpha = showStoryboardVideo.Value && storyboardLayer.ShouldHideBackground ? 0 : 1;
+        // A hidden storyboard (or video) can't be covering the background, whatever it claims —
+        // which half is hidden is the layer's own business now that they switch independently, so
+        // it answers with both toggles already accounted for.
+        backgroundSprite.Alpha = storyboardLayer.ShouldHideBackground ? 0 : 1;
+    }
+
+    /// <summary>
+    /// Hands the two display settings to the storyboard layer, which switches lazer's own layers:
+    /// the video is one of those layers, so "video but no storyboard" (and the reverse) is a matter
+    /// of which layers draw, not of building anything differently.
+    ///
+    /// <para>
+    /// The whole layer is hidden only when NEITHER half is wanted, which stops the storyboard's
+    /// subtree updating at all in that case. Samples follow the STORYBOARD toggle alone: they are
+    /// storyboard events, and a storyboard you have switched off should not still be audible.
+    /// </para>
+    /// </summary>
+    private void updateStoryboardDisplay()
+    {
+        storyboardLayer.StoryboardShown.Value = showStoryboard.Value;
+        storyboardLayer.VideoShown.Value = showVideo.Value;
+
+        storyboardLayer.Alpha = showStoryboard.Value || showVideo.Value ? 1 : 0;
+        storyboardAudio.Volume.Value = showStoryboard.Value ? 1 : 0;
+
+        updateBackgroundVisibility();
     }
 
     /// <summary>

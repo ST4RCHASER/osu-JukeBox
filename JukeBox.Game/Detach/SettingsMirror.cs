@@ -113,7 +113,9 @@ public partial class SettingsMirror : Component
         add<bool>(JukeBoxSetting.RemoveStoryboardMask);
         add<double>(JukeBoxSetting.BackgroundDim);
         add<double>(JukeBoxSetting.BackgroundBlur);
-        add<bool>(JukeBoxSetting.ShowStoryboardVideo);
+        add<bool>(JukeBoxSetting.ShowStoryboard);
+        add<bool>(JukeBoxSetting.ShowVideo);
+        add<string>(JukeBoxSetting.HiddenStoryboardLayers);
         add<double>(JukeBoxSetting.PlayfieldZoom);
         add<double>(JukeBoxSetting.GlobalAudioOffset);
         add<string>(JukeBoxSetting.ChartMods);

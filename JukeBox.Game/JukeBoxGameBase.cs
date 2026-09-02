@@ -105,6 +105,31 @@ namespace JukeBox.Game
             _ => FpsDisplayMode.Off,
         };
 
+        /// <summary>
+        /// The one-shot <see cref="JukeBoxSetting.ShowStoryboardVideo"/> →
+        /// <see cref="JukeBoxSetting.ShowStoryboard"/> + <see cref="JukeBoxSetting.ShowVideo"/>
+        /// split, in the same copy-then-guard shape as the migrations above and separated out for
+        /// the same reason (JukeBox.Game.Tests has InternalsVisibleTo).
+        ///
+        /// <para>
+        /// The old value goes into BOTH halves, which is the whole point: someone who had the
+        /// combined toggle off must find both halves off rather than have an upgrade quietly switch
+        /// storyboards back on. A fresh install has the old key at its own default (true) and lands
+        /// on both-on, which is also the new default.
+        /// </para>
+        /// </summary>
+        internal static void MigrateStoryboardVideoSplit(JukeBoxConfigManager config)
+        {
+            if (config.Get<bool>(JukeBoxSetting.StoryboardVideoSplitMigrated))
+                return;
+
+            bool wasShown = config.Get<bool>(JukeBoxSetting.ShowStoryboardVideo);
+
+            config.SetValue(JukeBoxSetting.ShowStoryboard, wasShown);
+            config.SetValue(JukeBoxSetting.ShowVideo, wasShown);
+            config.SetValue(JukeBoxSetting.StoryboardVideoSplitMigrated, true);
+        }
+
         /// <summary>Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the Compact-mode
         /// overlay, to assert its visibility without depending on internal layout.</summary>
         internal osu.Game.Graphics.UserInterface.FPSCounter FpsCounter => fpsCounter;
@@ -183,6 +208,7 @@ namespace JukeBox.Game
         private UI.JukeBoxDialogOverlay dialogOverlay = null!;
         private ChartModSelection chartMods = null!;
         private PlayfieldElementVisibility playfieldElements = null!;
+        private StoryboardLayerVisibility storyboardLayers = null!;
         private ChartConversion chartConversion = null!;
         private Detach.SettingsMirror settingsMirror = null!;
         private osu.Game.Skinning.SkinManager skinManager = null!;
@@ -403,6 +429,8 @@ namespace JukeBox.Game
                 config.SetValue(JukeBoxSetting.FpsDisplayModeMigrated, true);
             }
 
+            MigrateStoryboardVideoSplit(config);
+
             // The imported-skin listing behind the settings dropdown. Added before the file
             // importer further down, which refreshes it after extracting a .osk. SkinSelection
             // deliberately does NOT resolve this — it reads the same directory through
@@ -422,6 +450,9 @@ namespace JukeBox.Game
 
             Add(playfieldElements = new PlayfieldElementVisibility());
             dependencies.Cache(playfieldElements);
+
+            Add(storyboardLayers = new StoryboardLayerVisibility());
+            dependencies.Cache(storyboardLayers);
 
             Add(chartConversion = new ChartConversion());
             dependencies.Cache(chartConversion);

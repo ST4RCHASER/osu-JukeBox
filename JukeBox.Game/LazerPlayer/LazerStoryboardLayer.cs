@@ -10,6 +10,7 @@ using JukeBox.Game.Beatmaps;
 using osu.Framework.Allocation;
 using osu.Framework.Audio;
 using osu.Framework.Audio.Track;
+using osu.Framework.Bindables;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Video;
@@ -56,6 +57,31 @@ public partial class LazerStoryboardLayer : CompositeDrawable, IBeatSyncProvider
     /// <summary>The decoded lazer storyboard model (empty storyboard when decode failed/absent).</summary>
     internal Storyboard Storyboard => storyboard;
 
+    /// <summary>
+    /// lazer's name for the layer the storyboard's video event lives in. The video is not a special
+    /// case in the storyboard model — it is one more layer alongside Background/Fail/Pass/
+    /// Foreground/Overlay — which is exactly why "video without storyboard" (and the reverse) is a
+    /// matter of switching layers rather than of building a different tree.
+    /// </summary>
+    internal const string video_layer_name = "Video";
+
+    [Resolved(canBeNull: true)]
+    private StoryboardLayerVisibility? layerVisibility { get; set; }
+
+    /// <summary>
+    /// Whether the storyboard's non-video layers are drawn. Set by <see cref="Screens.BeatmapVisuals"/>
+    /// from <see cref="Configuration.JukeBoxSetting.ShowStoryboard"/>; the video half is <see cref="VideoShown"/>.
+    /// </summary>
+    public readonly BindableBool StoryboardShown = new BindableBool(true);
+
+    /// <summary>Whether the storyboard's video layer is drawn (<see cref="Configuration.JukeBoxSetting.ShowVideo"/>).</summary>
+    public readonly BindableBool VideoShown = new BindableBool(true);
+
+    /// <summary>Test hook: the alpha the layer lazer calls <paramref name="name"/> is currently
+    /// drawn at, or null before the storyboard's own async load has built its layers.</summary>
+    internal float? LayerAlpha(string name)
+        => drawableStoryboard?.Children.FirstOrDefault(l => l.Layer.Name == name)?.Alpha;
+
     /// <summary>Whether the storyboard has anything drawable at all (parity with the old layer's HasObjects).</summary>
     public bool HasObjects => storyboard.HasDrawable;
 
@@ -97,14 +123,29 @@ public partial class LazerStoryboardLayer : CompositeDrawable, IBeatSyncProvider
     /// <summary>Whether the declared video is actually going to put pixels on screen.</summary>
     public bool VideoPlayable => HasVideo && !VideoFaulted && !VideoMissing;
 
+    /// <summary>Whether the storyboard draws the beatmap's own background as one of its sprites, in
+    /// which case osu! hides the flat background beneath it.</summary>
+    public bool ReplacesBackground => storyboard.ReplacesBackground;
+
     /// <summary>
     /// Whether our own flat background sprite should hide beneath this layer: when the storyboard
     /// explicitly draws the beatmap background as one of its own sprites
     /// (<see cref="Storyboard.ReplacesBackground"/>), or when a video that can actually play covers
     /// it fullscreen — matching osu!'s behaviour. Plain sprite storyboards leave the background
     /// visible underneath, as mappers intend.
+    ///
+    /// <para>
+    /// Each half is conditioned on the half of the display that would actually cover the
+    /// background, since those switch independently now (see <see cref="StoryboardShown"/> /
+    /// <see cref="VideoShown"/>): a hidden storyboard replaces nothing, and a hidden video covers
+    /// nothing. Note the storyboard half deliberately asks only the MASTER toggle, not the
+    /// per-layer ones — <c>ReplacesBackground</c> is a property of the storyboard as a whole, and
+    /// second-guessing which layer the replacing sprite sits in would trade a correct answer for a
+    /// guess.
+    /// </para>
     /// </summary>
-    public bool ShouldHideBackground => storyboard.ReplacesBackground || VideoPlayable;
+    public bool ShouldHideBackground
+        => (StoryboardShown.Value && ReplacesBackground) || (VideoShown.Value && VideoPlayable);
 
     /// <summary>Test hook: frames the storyboard video has actually rendered in sync, or null with no video.</summary>
     internal int? VideoFramesProcessed => HasVideo ? this.ChildrenOfType<Video>().FirstOrDefault()?.FramesProcessed : null;
@@ -201,6 +242,38 @@ public partial class LazerStoryboardLayer : CompositeDrawable, IBeatSyncProvider
         }
 
         return storyboard;
+    }
+
+    /// <summary>
+    /// Applies the two master toggles and the per-layer choices to lazer's own layer drawables.
+    ///
+    /// <para>
+    /// Every frame, and by ALPHA rather than by lazer's own <c>DrawableStoryboardLayer.Enabled</c>
+    /// flag: that flag is <c>DrawableStoryboard</c>'s own bookkeeping, rewritten from each layer's
+    /// <c>VisibleWhenPassing</c>/<c>VisibleWhenFailing</c> whenever the pass/fail state changes, so
+    /// a value written there is not ours to keep. Alpha is untouched by lazer and reaches the same
+    /// end: a zero-alpha layer is not present, so it is neither drawn nor updated. Re-showing one
+    /// is exact rather than resumed-from-stale, since storyboard elements are transform-driven off
+    /// absolute times. Per frame rather than on a change callback because assigning an unchanged
+    /// alpha is a no-op in osu!framework, and the storyboard's layers only exist after its own
+    /// async load — there is no single moment at which "apply once" would be correct.
+    /// </para>
+    /// </summary>
+    protected override void Update()
+    {
+        base.Update();
+
+        if (drawableStoryboard == null)
+            return;
+
+        foreach (var layer in drawableStoryboard.Children)
+        {
+            bool shown = layer.Layer.Name == video_layer_name
+                ? VideoShown.Value
+                : StoryboardShown.Value && layerVisibility?.IsLayerShown(layer.Layer.Name) != false;
+
+            layer.Alpha = shown ? 1 : 0;
+        }
     }
 
     protected override void Dispose(bool isDisposing)

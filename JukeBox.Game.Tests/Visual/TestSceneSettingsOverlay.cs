@@ -30,6 +30,7 @@ namespace JukeBox.Game.Tests.Visual
     {
         private JukeBoxConfigManager config = null!;
         private SettingsOverlay overlay = null!;
+        private StoryboardLayerVisibility storyboardLayers = null!;
 
 
         [Resolved]
@@ -45,9 +46,29 @@ namespace JukeBox.Game.Tests.Visual
         {
             config = new JukeBoxConfigManager(new TemporaryNativeStorage(Path.Combine("jukebox-settings-overlay-test", Path.GetRandomFileName())));
 
+            // The storyboard-layer service belongs to the ISOLATED config above, not to the
+            // runner's: the panel's layer rows go through it, and a service still bound to the real
+            // game's config would be reading and writing a different file than these tests assert on.
+            storyboardLayers = new StoryboardLayerVisibility();
+
             var deps = new DependencyContainer(parent);
             deps.Cache(config);
+            deps.Cache(storyboardLayers);
             return deps;
+        }
+
+        /// <summary>The overlay gets its own host container: the tests below swap overlays by
+        /// assigning a Child, and doing that on the scene itself would take the service below it
+        /// along too (and dispose it). Constructed with the field so a step can fill it in before
+        /// the scene itself has finished loading.</summary>
+        private readonly Container overlayHost = new Container { RelativeSizeAxes = Axes.Both };
+
+        protected override void LoadComplete()
+        {
+            base.LoadComplete();
+
+            Add(storyboardLayers);
+            Add(overlayHost);
         }
 
         [SetUpSteps]
@@ -66,7 +87,7 @@ namespace JukeBox.Game.Tests.Visual
                 config.SetValue(JukeBoxSetting.Skin, JukeBoxSkin.Argon);
                 config.SetValue(JukeBoxSetting.CustomSkinPath, string.Empty);
 
-                Child = overlay = new SettingsOverlay();
+                overlayHost.Child = overlay = new SettingsOverlay();
             });
         }
 
@@ -233,7 +254,7 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("set FpsDisplayMode Graph then recreate overlay", () =>
             {
                 config.SetValue(JukeBoxSetting.FpsDisplayMode, FpsDisplayMode.Graph);
-                Child = overlay = new SettingsOverlay();
+                overlayHost.Child = overlay = new SettingsOverlay();
             });
 
             AddAssert("dropdown starts Graph", () => overlay.FpsDisplayDropdown.Current.Value == FpsDisplayMode.Graph);
@@ -249,7 +270,7 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("set playfield zoom to 60%", () => overlay.PlayfieldZoomSlider.Current.Value = 0.6);
             AddAssert("config bindable updated to 60%", () => config.Get<double>(JukeBoxSetting.PlayfieldZoom) == 0.6);
 
-            AddStep("recreate overlay", () => Child = overlay = new SettingsOverlay());
+            AddStep("recreate overlay", () => overlayHost.Child = overlay = new SettingsOverlay());
             AddAssert("slider starts at the persisted 60%", () => overlay.PlayfieldZoomSlider.Current.Value == 0.6);
 
             AddStep("restore default 100%", () => overlay.PlayfieldZoomSlider.Current.Value = 1.0);
@@ -274,7 +295,7 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("only its setting moved", () => config.Get<bool>(JukeBoxSetting.RemoveStoryboardMask)
                                                       && !config.Get<bool>(JukeBoxSetting.RemoveChartMask));
 
-            AddStep("recreate overlay", () => Child = overlay = new SettingsOverlay());
+            AddStep("recreate overlay", () => overlayHost.Child = overlay = new SettingsOverlay());
             AddAssert("the choice came back", () => overlay.RemoveStoryboardMaskCheckbox.Current.Value
                                                     && !overlay.RemoveChartMaskCheckbox.Current.Value);
 
@@ -287,6 +308,78 @@ namespace JukeBox.Game.Tests.Visual
                 overlay.RemoveChartMaskCheckbox.Current.Value = false;
                 overlay.RemoveStoryboardMaskCheckbox.Current.Value = false;
             });
+        }
+
+        /// <summary>
+        /// "Storyboard / video" became two rows, each carrying only its own setting. A single
+        /// combined key is exactly what the user asked to be rid of, so what matters here is that
+        /// moving one leaves the other alone.
+        /// </summary>
+        [Test]
+        public void StoryboardAndVideoRowsCarryTheirOwnSettings()
+        {
+            AddStep("show overlay", () => overlay.Show());
+
+            AddAssert("both start on", () => overlay.ShowStoryboardCheckbox.Current.Value
+                                             && overlay.ShowVideoCheckbox.Current.Value);
+
+            AddStep("video off", () => overlay.ShowVideoCheckbox.Current.Value = false);
+            AddAssert("only the video setting moved", () => !config.Get<bool>(JukeBoxSetting.ShowVideo)
+                                                            && config.Get<bool>(JukeBoxSetting.ShowStoryboard));
+
+            AddStep("storyboard off too", () => overlay.ShowStoryboardCheckbox.Current.Value = false);
+            AddAssert("both off now", () => !config.Get<bool>(JukeBoxSetting.ShowVideo)
+                                            && !config.Get<bool>(JukeBoxSetting.ShowStoryboard));
+
+            AddStep("recreate overlay", () => overlayHost.Child = overlay = new SettingsOverlay());
+            AddAssert("both choices came back", () => !overlay.ShowStoryboardCheckbox.Current.Value
+                                                      && !overlay.ShowVideoCheckbox.Current.Value);
+
+            AddStep("restore", () =>
+            {
+                overlay.ShowStoryboardCheckbox.Current.Value = true;
+                overlay.ShowVideoCheckbox.Current.Value = true;
+            });
+        }
+
+        /// <summary>The per-layer block is a dependent row of the storyboard toggle: with the
+        /// storyboard off there is nothing for a layer choice to act on.</summary>
+        [Test]
+        public void StoryboardLayerRowsFollowTheMasterToggleBothWays()
+        {
+            AddStep("show overlay, storyboard on", () =>
+            {
+                overlay.Show();
+                overlay.ShowStoryboardCheckbox.Current.Value = true;
+            });
+
+            AddUntilStep("layer rows are live", () => !overlay.StoryboardLayersInert);
+
+            AddStep("storyboard off", () => overlay.ShowStoryboardCheckbox.Current.Value = false);
+            AddUntilStep("layer rows go inert", () => overlay.StoryboardLayersInert);
+
+            AddStep("storyboard on again", () => overlay.ShowStoryboardCheckbox.Current.Value = true);
+            AddUntilStep("and live again", () => !overlay.StoryboardLayersInert);
+        }
+
+        [Test]
+        public void StoryboardLayerRowsRoundTripTheHiddenList()
+        {
+            AddStep("show overlay, storyboard on", () =>
+            {
+                overlay.Show();
+                overlay.ShowStoryboardCheckbox.Current.Value = true;
+                config.SetValue(JukeBoxSetting.HiddenStoryboardLayers, string.Empty);
+            });
+
+            AddStep("untick Overlay", () => overlay.LayerCheckbox(StoryboardLayerKind.Overlay).Current.Value = false);
+            AddUntilStep("persisted as hidden", () => config.Get<string>(JukeBoxSetting.HiddenStoryboardLayers) == "Overlay");
+
+            AddStep("write a different list into config", () => config.SetValue(JukeBoxSetting.HiddenStoryboardLayers, "Background"));
+            AddUntilStep("the rows followed", () => !overlay.LayerCheckbox(StoryboardLayerKind.Background).Current.Value
+                                                    && overlay.LayerCheckbox(StoryboardLayerKind.Overlay).Current.Value);
+
+            AddStep("restore", () => config.SetValue(JukeBoxSetting.HiddenStoryboardLayers, string.Empty));
         }
 
         // Regression coverage for the ChartZoom -> PlayfieldZoom rework's widened 1%-200% range
@@ -324,7 +417,7 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("set PreferredMirror to OsuDirect then recreate overlay", () =>
             {
                 config.SetValue(JukeBoxSetting.PreferredMirror, MirrorSource.OsuDirect);
-                Child = overlay = new SettingsOverlay();
+                overlayHost.Child = overlay = new SettingsOverlay();
             });
 
             AddAssert("dropdown starts OsuDirect", () => overlay.MirrorDropdown.Current.Value == MirrorSource.OsuDirect);
@@ -408,7 +501,7 @@ namespace JukeBox.Game.Tests.Visual
         public void TheVersionSitsAtTheVeryBottomOfSettings()
         {
             SettingsOverlay dockedOverlay = null!;
-            AddStep("create docked overlay", () => Child = dockedOverlay = new SettingsOverlay(docked: true));
+            AddStep("create docked overlay", () => overlayHost.Child = dockedOverlay = new SettingsOverlay(docked: true));
 
             AddAssert("it shows the build's own version", () => dockedOverlay.VersionText == AppVersion.DisplayString);
             AddAssert("which is not empty", () => dockedOverlay.VersionText.Length > 1);
@@ -441,7 +534,7 @@ namespace JukeBox.Game.Tests.Visual
         public void DockedInstanceStartsVisibleAndEscapeDoesNotHideIt()
         {
             SettingsOverlay dockedOverlay = null!;
-            AddStep("create docked overlay", () => Child = dockedOverlay = new SettingsOverlay(docked: true));
+            AddStep("create docked overlay", () => overlayHost.Child = dockedOverlay = new SettingsOverlay(docked: true));
 
             AddAssert("starts visible", () => dockedOverlay.State.Value == Visibility.Visible);
 
@@ -459,7 +552,7 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("reset HardwareVideoDecoder and create docked overlay", () =>
             {
                 frameworkConfig.SetValue(osu.Framework.Configuration.FrameworkSetting.HardwareVideoDecoder, osu.Framework.Graphics.Video.HardwareVideoDecoder.None);
-                Child = dockedOverlay = new SettingsOverlay(docked: true);
+                overlayHost.Child = dockedOverlay = new SettingsOverlay(docked: true);
             });
             AddAssert("config starts None", () => frameworkConfig.Get<osu.Framework.Graphics.Video.HardwareVideoDecoder>(osu.Framework.Configuration.FrameworkSetting.HardwareVideoDecoder) == osu.Framework.Graphics.Video.HardwareVideoDecoder.None);
             AddAssert("checkbox starts unchecked", () => dockedOverlay.HardwareAccelerationCheckbox.Current.Value == false);
@@ -482,7 +575,7 @@ namespace JukeBox.Game.Tests.Visual
         public void DockedInstanceChangingFpsDisplayUpdatesConfigBindable()
         {
             SettingsOverlay dockedOverlay = null!;
-            AddStep("create docked overlay", () => Child = dockedOverlay = new SettingsOverlay(docked: true));
+            AddStep("create docked overlay", () => overlayHost.Child = dockedOverlay = new SettingsOverlay(docked: true));
             AddAssert("config starts Off", () => config.Get<FpsDisplayMode>(JukeBoxSetting.FpsDisplayMode) == FpsDisplayMode.Off);
 
             AddStep("select Details in dropdown", () => dockedOverlay.FpsDisplayDropdown.Current.Value = FpsDisplayMode.Details);
@@ -498,7 +591,7 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("set HardwareVideoDecoder to NVDEC then recreate overlay", () =>
             {
                 frameworkConfig.SetValue(osu.Framework.Configuration.FrameworkSetting.HardwareVideoDecoder, osu.Framework.Graphics.Video.HardwareVideoDecoder.NVDEC);
-                Child = overlay = new SettingsOverlay();
+                overlayHost.Child = overlay = new SettingsOverlay();
             });
 
             AddAssert("checkbox reads checked", () => overlay.HardwareAccelerationCheckbox.Current.Value);
@@ -597,7 +690,7 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("the kind persists as Custom", () => config.Get<JukeBoxSkin>(JukeBoxSetting.Skin) == JukeBoxSkin.Custom);
             AddAssert("and the folder names which one", () => config.Get<string>(JukeBoxSetting.CustomSkinPath) == "aristia-archive");
 
-            AddStep("recreate overlay", () => Child = overlay = new SettingsOverlay());
+            AddStep("recreate overlay", () => overlayHost.Child = overlay = new SettingsOverlay());
             AddAssert("it comes back selected", () => overlay.SkinDropdown.Current.Value == SkinChoice.Imported("aristia-archive"));
 
             // Switching away deliberately leaves CustomSkinPath alone, so the library selection is
@@ -624,7 +717,7 @@ namespace JukeBox.Game.Tests.Visual
                 config.SetValue(JukeBoxSetting.Skin, JukeBoxSkin.Custom);
             });
 
-            AddStep("recreate overlay as if freshly launched", () => Child = overlay = new SettingsOverlay());
+            AddStep("recreate overlay as if freshly launched", () => overlayHost.Child = overlay = new SettingsOverlay());
             AddStep("show overlay", () => overlay.Show());
 
             AddAssert("the imported skin is still selected",
@@ -645,7 +738,7 @@ namespace JukeBox.Game.Tests.Visual
                 config.SetValue(JukeBoxSetting.Skin, JukeBoxSkin.Custom);
             });
 
-            AddStep("recreate overlay", () => Child = overlay = new SettingsOverlay());
+            AddStep("recreate overlay", () => overlayHost.Child = overlay = new SettingsOverlay());
             AddStep("show overlay", () => overlay.Show());
 
             AddAssert("the selection stands", () => overlay.SkinDropdown.Current.Value == SkinChoice.Imported("deleted-by-hand"));
@@ -929,7 +1022,7 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("select Triangles", () => overlay.SkinDropdown.Current.Value = SkinChoice.Bundled(JukeBoxSkin.Triangles));
             AddAssert("config updated to Triangles", () => config.Get<JukeBoxSkin>(JukeBoxSetting.Skin) == JukeBoxSkin.Triangles);
 
-            AddStep("recreate overlay", () => Child = overlay = new SettingsOverlay());
+            AddStep("recreate overlay", () => overlayHost.Child = overlay = new SettingsOverlay());
             AddAssert("dropdown starts Triangles", () => overlay.SkinDropdown.Current.Value == SkinChoice.Bundled(JukeBoxSkin.Triangles));
         }
 
@@ -1009,7 +1102,7 @@ namespace JukeBox.Game.Tests.Visual
         {
             SettingsOverlay docked = null!;
 
-            AddStep("create docked overlay", () => Child = docked = new SettingsOverlay(docked: true));
+            AddStep("create docked overlay", () => overlayHost.Child = docked = new SettingsOverlay(docked: true));
             AddUntilStep("sections built", () => docked.ChildrenOfType<SettingsSection>().Any());
 
             AddAssert("docked paints no ground of its own", () => docked.CardBackground == null);

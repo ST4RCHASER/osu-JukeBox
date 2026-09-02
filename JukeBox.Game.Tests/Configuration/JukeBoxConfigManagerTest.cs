@@ -221,5 +221,60 @@ namespace JukeBox.Game.Tests.Configuration
 
             Assert.That(config.Get<UiLayout>(JukeBoxSetting.UiLayout), Is.EqualTo(UiLayout.ThreeColumn));
         }
+
+        /// <summary>
+        /// The combined "Storyboard / video" toggle became two independent ones. Somebody who had
+        /// it OFF must end up with both halves off — an upgrade that silently switches storyboards
+        /// back on is exactly the failure the guarded copy exists to prevent.
+        /// </summary>
+        [Test]
+        public void StoryboardVideoSplitCarriesTheOldCombinedValueIntoBothHalves()
+        {
+            var config = freshConfig();
+
+            config.SetValue(JukeBoxSetting.ShowStoryboardVideo, false);
+            JukeBoxGameBase.MigrateStoryboardVideoSplit(config);
+
+            Assert.That(config.Get<bool>(JukeBoxSetting.ShowStoryboard), Is.False);
+            Assert.That(config.Get<bool>(JukeBoxSetting.ShowVideo), Is.False);
+            Assert.That(config.Get<bool>(JukeBoxSetting.StoryboardVideoSplitMigrated), Is.True);
+        }
+
+        [Test]
+        public void StoryboardVideoSplitLeavesAFreshInstallWithBothOn()
+        {
+            var config = freshConfig();
+
+            JukeBoxGameBase.MigrateStoryboardVideoSplit(config);
+
+            Assert.That(config.Get<bool>(JukeBoxSetting.ShowStoryboard), Is.True);
+            Assert.That(config.Get<bool>(JukeBoxSetting.ShowVideo), Is.True);
+        }
+
+        /// <summary>Once migrated the two halves are the user's own, and a later edit to one of them
+        /// must survive the next launch rather than being overwritten from the dead combined key.</summary>
+        [Test]
+        public void StoryboardVideoSplitRunsOnlyOnce()
+        {
+            var config = freshConfig();
+
+            JukeBoxGameBase.MigrateStoryboardVideoSplit(config);
+            config.SetValue(JukeBoxSetting.ShowVideo, false);
+            JukeBoxGameBase.MigrateStoryboardVideoSplit(config);
+
+            Assert.That(config.Get<bool>(JukeBoxSetting.ShowVideo), Is.False);
+            Assert.That(config.Get<bool>(JukeBoxSetting.ShowStoryboard), Is.True);
+        }
+
+        [Test]
+        public void StoryboardLayersDefaultToAllVisible()
+        {
+            var config = freshConfig();
+
+            Assert.That(config.Get<string>(JukeBoxSetting.HiddenStoryboardLayers), Is.Empty);
+        }
+
+        private static JukeBoxConfigManager freshConfig()
+            => new JukeBoxConfigManager(new TemporaryNativeStorage(Path.Combine("jukebox-config-test", Path.GetRandomFileName())));
     }
 }

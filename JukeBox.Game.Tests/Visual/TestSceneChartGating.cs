@@ -127,6 +127,8 @@ namespace JukeBox.Game.Tests.Visual
                 config.SetValue(JukeBoxSetting.RenderChart, false);
                 config.SetValue(JukeBoxSetting.PlayHitSounds, false);
                 config.SetValue(JukeBoxSetting.ChartOpacity, 1.0);
+                config.SetValue(JukeBoxSetting.ShowStoryboard, true);
+                config.SetValue(JukeBoxSetting.ShowVideo, true);
             });
         }
 
@@ -473,6 +475,45 @@ namespace JukeBox.Game.Tests.Visual
 
             AddStep("back to full", () => config.SetValue(JukeBoxSetting.ChartOpacity, 1.0));
             AddUntilStep("opaque again", () => visuals.ChartLayerAlpha == 1);
+
+            AddStep("remove visuals", () => Remove(visuals, true));
+        }
+
+        /// <summary>
+        /// The two split display settings reach the storyboard layer, and reach it separately —
+        /// this is the wiring between the Settings rows the user ticks and the lazer layers that
+        /// actually draw, which the layer-level tests exercise from the other end.
+        /// </summary>
+        [Test]
+        public void StoryboardAndVideoSettingsReachTheLayerIndependently()
+        {
+            BeatmapVisuals visuals = null!;
+
+            AddStep("both on", () =>
+            {
+                config.SetValue(JukeBoxSetting.ShowStoryboard, true);
+                config.SetValue(JukeBoxSetting.ShowVideo, true);
+            });
+
+            AddStep("create visuals", () => Add(visuals = new BeatmapVisuals(storyboardSet, idleClock)
+            {
+                RelativeSizeAxes = Axes.Both,
+            }));
+
+            AddUntilStep("visuals loaded", () => visuals.IsLoaded);
+            AddAssert("layer told both are shown",
+                () => visuals.StoryboardLayer.StoryboardShown.Value && visuals.StoryboardLayer.VideoShown.Value);
+
+            AddStep("video off only", () => config.SetValue(JukeBoxSetting.ShowVideo, false));
+            AddUntilStep("only the video half followed",
+                () => visuals.StoryboardLayer.StoryboardShown.Value && !visuals.StoryboardLayer.VideoShown.Value);
+            AddAssert("the layer is still on screen for the storyboard", () => visuals.StoryboardLayer.Alpha == 1);
+
+            AddStep("storyboard off too", () => config.SetValue(JukeBoxSetting.ShowStoryboard, false));
+            AddUntilStep("with neither wanted the whole layer stands down", () => visuals.StoryboardLayer.Alpha == 0);
+
+            AddStep("storyboard back on", () => config.SetValue(JukeBoxSetting.ShowStoryboard, true));
+            AddUntilStep("and it is back", () => visuals.StoryboardLayer.Alpha == 1);
 
             AddStep("remove visuals", () => Remove(visuals, true));
         }

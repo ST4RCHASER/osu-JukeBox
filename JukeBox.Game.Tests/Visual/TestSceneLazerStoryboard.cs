@@ -3,10 +3,13 @@
 using System.IO;
 using System.Linq;
 using JukeBox.Game.Beatmaps;
+using JukeBox.Game.Configuration;
 using JukeBox.Game.LazerPlayer;
 using NUnit.Framework;
+using osu.Framework.Allocation;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
+using osu.Framework.Testing;
 using osu.Framework.Timing;
 using osu.Game.Storyboards;
 
@@ -29,11 +32,29 @@ namespace JukeBox.Game.Tests.Visual
         private Container host = null!;
         private LazerStoryboardLayer layer = null!;
 
+        /// <summary>The game-wide services the runner (a real JukeBoxGameBase) caches — the same
+        /// ones the app's own settings write to, which is what makes these tests exercise the real
+        /// path rather than a stand-in.</summary>
+        [Resolved]
+        private StoryboardLayerVisibility layerVisibility { get; set; } = null!;
+
+        [Resolved]
+        private JukeBoxConfigManager config { get; set; } = null!;
+
         [SetUp]
         public void SetUp()
         {
             dir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
             Directory.CreateDirectory(dir);
+        }
+
+        [TearDownSteps]
+        public void TearDownSteps()
+        {
+            // This scene writes into the shared test-browser config — put back what the rest of the
+            // suite expects.
+            AddStep("show every storyboard layer again",
+                () => config.SetValue(JukeBoxSetting.HiddenStoryboardLayers, string.Empty));
         }
 
         private static string fixture(string name)
@@ -59,6 +80,143 @@ namespace JukeBox.Game.Tests.Visual
         }
 
         private void removeLayer() => AddStep("remove layer", () => Remove(host, true));
+
+        // ---- the storyboard / video split, and the per-layer toggles ----
+        //
+        // lazer models the video as one more storyboard layer alongside Background/Fail/Pass/
+        // Foreground/Overlay, which is exactly what makes "video without storyboard" (and the
+        // reverse) possible: both settings switch layers, they just switch different ones.
+
+        /// <summary>The layer set is fixed by the decoder, not by what a map happens to use — so the
+        /// settings can offer a stable list rather than one that changes with the song.</summary>
+        [Test]
+        public void EveryStoryboardCarriesTheSameFixedLayerSet()
+        {
+            AddAssert("an empty storyboard already has all six layers", () =>
+                new Storyboard().Layers.Select(l => l.Name).OrderBy(n => n)
+                                .SequenceEqual(new[] { "Background", "Fail", "Foreground", "Overlay", "Pass", "Video" }));
+
+            AddAssert("and the five we offer are the non-video ones", () =>
+                StoryboardLayerVisibility.All.Select(l => l.ToString()).OrderBy(n => n)
+                                         .SequenceEqual(new[] { "Background", "Fail", "Foreground", "Overlay", "Pass" }));
+        }
+
+        [Test]
+        public void VideoAndStoryboardSwitchIndependently()
+        {
+            createHeronLayer();
+
+            AddAssert("everything drawn to begin with",
+                () => layer.LayerAlpha("Video") == 1 && layer.LayerAlpha("Foreground") == 1);
+
+            AddStep("video off", () => layer.VideoShown.Value = false);
+            AddUntilStep("only the video went", () => layer.LayerAlpha("Video") == 0 && layer.LayerAlpha("Foreground") == 1);
+
+            AddStep("video back, storyboard off", () =>
+            {
+                layer.VideoShown.Value = true;
+                layer.StoryboardShown.Value = false;
+            });
+            AddUntilStep("now only the video is drawn", () =>
+                layer.LayerAlpha("Video") == 1
+                && StoryboardLayerVisibility.All.All(l => layer.LayerAlpha(l.ToString()) == 0));
+
+            AddStep("storyboard back", () => layer.StoryboardShown.Value = true);
+            AddUntilStep("everything drawn again", () =>
+                layer.LayerAlpha("Video") == 1 && layer.LayerAlpha("Foreground") == 1);
+
+            removeLayer();
+        }
+
+        [Test]
+        public void ALayerToggleHidesExactlyThatLayerLive()
+        {
+            createHeronLayer();
+
+            AddStep("hide the foreground", () => layerVisibility.Shown(StoryboardLayerKind.Foreground).Value = false);
+            AddUntilStep("foreground gone, the rest untouched", () =>
+                layer.LayerAlpha("Foreground") == 0
+                && layer.LayerAlpha("Background") == 1
+                && layer.LayerAlpha("Overlay") == 1
+                && layer.LayerAlpha("Video") == 1);
+
+            AddStep("hide the background too", () => layerVisibility.Shown(StoryboardLayerKind.Background).Value = false);
+            AddUntilStep("both gone", () => layer.LayerAlpha("Foreground") == 0 && layer.LayerAlpha("Background") == 0);
+
+            AddStep("show the foreground again", () => layerVisibility.Shown(StoryboardLayerKind.Foreground).Value = true);
+            AddUntilStep("it comes straight back, live", () => layer.LayerAlpha("Foreground") == 1 && layer.LayerAlpha("Background") == 0);
+
+            removeLayer();
+        }
+
+        /// <summary>A per-layer choice is a choice about the storyboard, so it cannot resurrect one
+        /// the master toggle has switched off.</summary>
+        [Test]
+        public void LayerChoicesCannotOverrideTheMasterStoryboardToggle()
+        {
+            createHeronLayer();
+
+            AddStep("storyboard off, every layer wanted", () =>
+            {
+                layer.StoryboardShown.Value = false;
+
+                foreach (var kind in StoryboardLayerVisibility.All)
+                    layerVisibility.Shown(kind).Value = true;
+            });
+
+            AddUntilStep("nothing storyboard-side is drawn",
+                () => StoryboardLayerVisibility.All.All(l => layer.LayerAlpha(l.ToString()) == 0));
+
+            removeLayer();
+        }
+
+        [Test]
+        public void HiddenLayersRoundTripThroughTheConfigList()
+        {
+            AddStep("hide two layers", () =>
+            {
+                layerVisibility.Shown(StoryboardLayerKind.Overlay).Value = false;
+                layerVisibility.Shown(StoryboardLayerKind.Pass).Value = false;
+            });
+
+            AddAssert("persisted in layer order", () => config.Get<string>(JukeBoxSetting.HiddenStoryboardLayers) == "Pass,Overlay");
+
+            AddStep("write a list back", () => config.SetValue(JukeBoxSetting.HiddenStoryboardLayers, "Background"));
+            AddAssert("service followed", () => layerVisibility.IsHidden(StoryboardLayerKind.Background)
+                                                && !layerVisibility.IsHidden(StoryboardLayerKind.Overlay)
+                                                && !layerVisibility.IsHidden(StoryboardLayerKind.Pass));
+
+            AddStep("junk names are dropped, not fatal", () => config.SetValue(JukeBoxSetting.HiddenStoryboardLayers, "Nonsense,Overlay"));
+            AddAssert("only the real one applied", () => layerVisibility.IsHidden(StoryboardLayerKind.Overlay)
+                                                         && !layerVisibility.IsHidden(StoryboardLayerKind.Background));
+
+            AddStep("restore", () => config.SetValue(JukeBoxSetting.HiddenStoryboardLayers, string.Empty));
+        }
+
+        private void createHeronLayer()
+        {
+            CachedBeatmapSet set = null!;
+
+            AddStep("show every layer", () => config.SetValue(JukeBoxSetting.HiddenStoryboardLayers, string.Empty));
+
+            AddStep("extract heron fixture", () =>
+            {
+                File.Copy(fixture("heron_beginner.osu"), Path.Combine(dir, "heron [Beginner].osu"));
+                File.Copy(fixture("heron.osb"), Path.Combine(dir, "heron.osb"));
+
+                set = new CachedBeatmapSet
+                {
+                    SetId = 165202,
+                    Directory = dir,
+                    OsbFile = Path.Combine(dir, "heron.osb"),
+                    OsuFiles = { Path.Combine(dir, "heron [Beginner].osu") },
+                    PreferredOsuFile = Path.Combine(dir, "heron [Beginner].osu"),
+                };
+            });
+
+            createLayer(() => set);
+            AddUntilStep("storyboard built its layers", () => layer.LayerAlpha("Foreground") != null);
+        }
 
         [Test]
         public void RealFixtureStoryboardLoads()

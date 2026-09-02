@@ -85,6 +85,15 @@ namespace JukeBox.Game.Tests.Visual
                       && mirror.Keys.Contains("jukebox:RemoveChartMask")
                       && mirror.Keys.Contains("jukebox:RemoveStoryboardMask"));
 
+            // The split storyboard/video pair and the per-layer list, likewise: the viewer draws the
+            // same scene, so it has to be told which of its layers to draw.
+            AddAssert("covers the split storyboard/video settings and the per-layer list",
+                () => mirror.Keys.Contains("jukebox:ShowStoryboard")
+                      && mirror.Keys.Contains("jukebox:ShowVideo")
+                      && mirror.Keys.Contains("jukebox:HiddenStoryboardLayers"));
+
+            AddAssert("the dead combined key is NOT synced", () => !mirror.Keys.Contains("jukebox:ShowStoryboardVideo"));
+
             AddAssert("covers lazer's game-wide config", () => mirror.Keys.Contains("lazer:HitLighting"));
 
             AddAssert("covers the per-ruleset configs", () => mirror.Keys.Contains("ruleset:OsuRulesetSetting.SnakingInSliders")
