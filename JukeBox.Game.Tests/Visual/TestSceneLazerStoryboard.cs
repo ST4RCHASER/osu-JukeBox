@@ -193,11 +193,65 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("restore", () => config.SetValue(JukeBoxSetting.HiddenStoryboardLayers, string.Empty));
         }
 
+        /// <summary>
+        /// The user's report: with "Remove storyboard mask" on, storyboard content outside the box
+        /// still would not draw. Releasing OUR box was never enough — every storyboard layer but
+        /// Video declares Masking, so lazer clips each one's elements to the storyboard's own area
+        /// whatever the app around it does. The release has to reach that.
+        /// </summary>
+        [Test]
+        public void ReleasingTheStoryboardTurnsOffLazersOwnPerLayerMasking()
+        {
+            createHeronLayer();
+
+            AddUntilStep("lazer masks its layers to begin with",
+                () => layer.LayerMasking("Foreground") == true && layer.LayerMasking("Background") == true);
+
+            AddStep("release the storyboard", () => layer.StoryboardReleased.Value = true);
+            AddUntilStep("every storyboard layer stops masking itself",
+                () => StoryboardLayerVisibility.All.All(l => layer.LayerMasking(l.ToString()) == false));
+
+            AddStep("mask it again", () => layer.StoryboardReleased.Value = false);
+            AddUntilStep("and lazer's masking is back",
+                () => StoryboardLayerVisibility.All.All(l => layer.LayerMasking(l.ToString()) == true));
+
+            removeLayer();
+        }
+
+        /// <summary>
+        /// The Fail layer is failing-only, so lazer keeps it switched off over a passing play —
+        /// which made its toggle a dead row. Switching it on now forces the layer drawn (user
+        /// request); it stays off by default.
+        /// </summary>
+        [Test]
+        public void TheFailLayerIsForcedOnWhenItsToggleIsOn()
+        {
+            createHeronLayer();
+
+            AddStep("everything at its default", () => config.SetValue(JukeBoxSetting.HiddenStoryboardLayers,
+                string.Join(',', StoryboardLayerVisibility.HiddenByDefault)));
+
+            AddUntilStep("Fail starts hidden, and lazer keeps it disabled",
+                () => layer.LayerAlpha("Fail") == 0 && layer.LayerEnabled("Fail") == false);
+            AddAssert("while the passing layers are drawn",
+                () => layer.LayerAlpha("Pass") == 1 && layer.LayerEnabled("Pass") == true);
+
+            AddStep("switch Fail on", () => layerVisibility.Shown(StoryboardLayerKind.Fail).Value = true);
+
+            AddUntilStep("it is forced drawn despite never failing",
+                () => layer.LayerAlpha("Fail") == 1 && layer.LayerEnabled("Fail") == true);
+
+            AddStep("switch it off again", () => layerVisibility.Shown(StoryboardLayerKind.Fail).Value = false);
+            AddUntilStep("and it goes back to hidden", () => layer.LayerAlpha("Fail") == 0);
+
+            removeLayer();
+        }
+
         private void createHeronLayer()
         {
             CachedBeatmapSet set = null!;
 
-            AddStep("show every layer", () => config.SetValue(JukeBoxSetting.HiddenStoryboardLayers, string.Empty));
+            AddStep("show every layer, Fail included", () => config.SetValue(JukeBoxSetting.HiddenStoryboardLayers, string.Empty));
 
             AddStep("extract heron fixture", () =>
             {

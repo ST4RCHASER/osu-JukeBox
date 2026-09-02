@@ -328,6 +328,11 @@ public partial class ChartModSelection : osu.Framework.Graphics.Component
 
     private readonly Bindable<BeatmapSetInfo?> nowPlaying = new Bindable<BeatmapSetInfo?>();
 
+    /// <summary>The replay's own recorded rate, as it currently sits on the track — fields, since
+    /// these are bound copies the source holds only weakly.</summary>
+    private readonly BindableDouble replayTempo = new BindableDouble(1);
+    private readonly BindableDouble replayFrequency = new BindableDouble(1);
+
     /// <summary>Guards the config→bindables direction from being echoed straight back.</summary>
     private bool applying;
 
@@ -371,6 +376,17 @@ public partial class ChartModSelection : osu.Framework.Graphics.Component
                 applyReplayState(e.NewValue?.Replay);
                 updateRate();
             }, true);
+        }
+
+        if (playback != null)
+        {
+            // The replay's own recorded rate is written independently (Jukebox, once per round) and
+            // multiplies with ours, so the difference we contribute has to be recomputed whenever it
+            // moves — whichever of the two writes happens to land first.
+            replayTempo.BindTo(playback.ReplayTempo);
+            replayFrequency.BindTo(playback.ReplayFrequency);
+            replayTempo.BindValueChanged(_ => updateRate());
+            replayFrequency.BindValueChanged(_ => updateRate());
         }
 
         updateRate();
@@ -550,17 +566,37 @@ public partial class ChartModSelection : osu.Framework.Graphics.Component
     /// or not the chart is being rendered, because a rate mod is a change to the song, not to the
     /// drawing of it. The conversion mods (key counts, Dual Stages, Mirror, Random) touch the track
     /// not at all, and contribute nothing here for exactly that reason.
+    ///
+    /// <para>
+    /// This applies DURING a replay too. A replay's frames are timestamped in beatmap time and the
+    /// whole stack — track, storyboard, chart, replay walk — runs off one clock, so changing the
+    /// rate scales all of them together: turning a replay's Double Time off plays the same play
+    /// slower, with the cursor still on the objects. (An earlier round assumed this would desync
+    /// and left the recorded rate pinned; it does not, and the user reported the pinned rate as the
+    /// bug it was.)
+    /// </para>
+    ///
+    /// <para>
+    /// The replay's own recorded rate is a SEPARATE track adjustment (Jukebox writes it once per
+    /// round) and the two multiply, so while a replay plays this contributes the DIFFERENCE and the
+    /// product lands on exactly what the toggles say. Read from the live bindable rather than
+    /// remembered, so it stays correct however the two writes interleave — and re-run whenever that
+    /// bindable moves (see LoadComplete). A rate mod the Chart tab has no row for would be cancelled
+    /// this way rather than preserved; every rate mod a legacy .osr can carry (DT, NC, HT) has one.
+    /// </para>
     /// </summary>
     private void updateRate()
     {
         if (playback == null)
             return;
 
-        double tempo = 1;
-        double frequency = 1;
+        var (tempo, frequency) = ChartModCatalog.TrackAdjustmentsFor(Selected);
 
-        if (!replayActive.Value)
-            (tempo, frequency) = ChartModCatalog.TrackAdjustmentsFor(Selected);
+        if (replayActive.Value)
+        {
+            tempo /= playback.ReplayTempo.Value;
+            frequency /= playback.ReplayFrequency.Value;
+        }
 
         playback.ChartModTempo.Value = tempo;
         playback.ChartModFrequency.Value = frequency;

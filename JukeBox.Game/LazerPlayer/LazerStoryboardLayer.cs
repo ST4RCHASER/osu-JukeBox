@@ -77,10 +77,32 @@ public partial class LazerStoryboardLayer : CompositeDrawable, IBeatSyncProvider
     /// <summary>Whether the storyboard's video layer is drawn (<see cref="Configuration.JukeBoxSetting.ShowVideo"/>).</summary>
     public readonly BindableBool VideoShown = new BindableBool(true);
 
+    /// <summary>
+    /// Whether the storyboard has been released from its mask
+    /// (<see cref="Configuration.JukeBoxSetting.RemoveStoryboardMask"/>). Reaches lazer's own
+    /// per-layer masking — see <see cref="releaseLayerMasking"/>, which is the mask that was
+    /// actually cropping the storyboard.
+    /// </summary>
+    public readonly BindableBool StoryboardReleased = new BindableBool();
+
+    /// <summary>Test hook: whether the layer lazer calls <paramref name="name"/> is currently
+    /// masking its own elements, or null before the storyboard's async load has built it.</summary>
+    internal bool? LayerMasking(string name)
+    {
+        var layer = drawableStoryboard?.Children.FirstOrDefault(l => l.Layer.Name == name);
+
+        return layer == null ? null : elementContainer(layer)?.Masking;
+    }
+
     /// <summary>Test hook: the alpha the layer lazer calls <paramref name="name"/> is currently
     /// drawn at, or null before the storyboard's own async load has built its layers.</summary>
     internal float? LayerAlpha(string name)
         => drawableStoryboard?.Children.FirstOrDefault(l => l.Layer.Name == name)?.Alpha;
+
+    /// <summary>Test hook: lazer's own Enabled flag for that layer — the one that keeps the Fail
+    /// layer dark over a passing play until its toggle forces it on.</summary>
+    internal bool? LayerEnabled(string name)
+        => drawableStoryboard?.Children.FirstOrDefault(l => l.Layer.Name == name)?.Enabled;
 
     /// <summary>Whether the storyboard has anything drawable at all (parity with the old layer's HasObjects).</summary>
     public bool HasObjects => storyboard.HasDrawable;
@@ -273,7 +295,80 @@ public partial class LazerStoryboardLayer : CompositeDrawable, IBeatSyncProvider
                 : StoryboardShown.Value && layerVisibility?.IsLayerShown(layer.Layer.Name) != false;
 
             layer.Alpha = shown ? 1 : 0;
+
+            // Enabled as well as Alpha, so a layer lazer would keep switched off can still be shown
+            // on request. The Fail layer is the case that matters: DrawableStoryboard sets
+            // Enabled from VisibleWhenPassing/VisibleWhenFailing, and since nothing here ever
+            // fails it keeps Fail off — so alpha alone could never reveal it (a disabled layer is
+            // not present at any alpha). Writing it every frame is what makes ours the last word:
+            // lazer rewrites the flag only when the pass/fail state changes.
+            layer.Enabled = shown;
+
+            releaseLayerMasking(layer);
         }
+    }
+
+    /// <summary>
+    /// osu!framework's <c>Masking</c> setter, which <c>DrawableStoryboardLayer</c>'s element
+    /// container inherits from <see cref="CompositeDrawable"/> but does not re-expose (it is a
+    /// <c>LifetimeManagementContainer</c>, not a <c>Container</c>, so there is no public setter to
+    /// call). Same reflection-with-graceful-degradation shape as LazerChartLayer's frame-stable
+    /// hook: if upstream renames it we simply leave lazer's own masking in place, which is the
+    /// pre-release behaviour rather than a crash.
+    /// </summary>
+    private static readonly System.Reflection.PropertyInfo? masking_property =
+        // Public|NonPublic both: the property READS public and only its setter is protected, so a
+        // NonPublic-only lookup finds nothing at all.
+        typeof(CompositeDrawable).GetProperty("Masking",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
+
+    /// <summary>Each layer's element container, looked up once — the masking state itself is read
+    /// back off the container, whose getter is public.</summary>
+    private readonly Dictionary<DrawableStoryboardLayer, CompositeDrawable> layerElements =
+        new Dictionary<DrawableStoryboardLayer, CompositeDrawable>();
+
+    /// <summary>
+    /// Releases (or restores) the masking lazer puts on the layer's own element container.
+    ///
+    /// <para>
+    /// This is the mask that actually crops a storyboard: every layer but Video declares
+    /// <c>Masking = true</c>, so <c>DrawableStoryboardLayer</c> clips its elements to the
+    /// storyboard's own design area no matter what the app around it does. Releasing our player box
+    /// therefore changed nothing on its own — the storyboard was still boxed by lazer, which is
+    /// exactly what the user reported. The layer's own masking is the thing to switch.
+    /// </para>
+    /// </summary>
+    private void releaseLayerMasking(DrawableStoryboardLayer layer)
+    {
+        if (masking_property == null)
+            return;
+
+        var container = elementContainer(layer);
+
+        if (container == null)
+            return;
+
+        bool wanted = !StoryboardReleased.Value && layer.Layer.Masking;
+
+        if (container.Masking != wanted)
+            masking_property.SetValue(container, wanted);
+    }
+
+    /// <summary>
+    /// The layer's own element container — a <c>LifetimeManagementContainer</c>, which the layer
+    /// itself is not, so this picks it out without naming any lazer-internal type.
+    /// </summary>
+    private CompositeDrawable? elementContainer(DrawableStoryboardLayer layer)
+    {
+        if (layerElements.TryGetValue(layer, out var known))
+            return known;
+
+        var container = layer.ChildrenOfType<LifetimeManagementContainer>().FirstOrDefault();
+
+        if (container != null)
+            layerElements[layer] = container;
+
+        return container;
     }
 
     protected override void Dispose(bool isDisposing)

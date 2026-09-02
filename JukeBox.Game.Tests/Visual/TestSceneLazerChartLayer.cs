@@ -361,6 +361,86 @@ namespace JukeBox.Game.Tests.Visual
             });
         }
 
+        /// <summary>
+        /// The measurement behind "editing a replay's rate cannot desync it": a replay's frames are
+        /// timestamped in BEATMAP time, and so are its hit objects, so at a given beatmap time the
+        /// cursor sits on the same spot whether or not a rate mod is in force — a rate mod scales
+        /// the TRACK, i.e. how fast wall-clock time walks through beatmap time, and scales it for
+        /// the whole stack at once. Asserted by rebuilding the same replay with and without Double
+        /// Time and comparing where the cursor lands at the same beatmap time.
+        /// </summary>
+        [Test]
+        public void ARateModDoesNotMoveTheReplayRelativeToTheChart()
+        {
+            Score score = null!;
+            string osu = null!;
+            osuTK.Vector2 unmodded = default;
+
+            AddStep("a replay with a frame at a known place and time", () =>
+            {
+                osu = Path.Combine(dir, "rate [0].osu");
+                File.WriteAllText(osu, beatmapForMode(0));
+
+                var ruleset = LazerChartLayer.CreateRuleset(0);
+
+                score = new Score
+                {
+                    Replay = new Replay
+                    {
+                        Frames =
+                        {
+                            new OsuReplayFrame(0, new osuTK.Vector2(64, 96)),
+                            new OsuReplayFrame(2000, new osuTK.Vector2(320, 240)),
+                            new OsuReplayFrame(4000, new osuTK.Vector2(448, 300)),
+                        },
+                    },
+                    ScoreInfo = new ScoreInfo { Ruleset = ruleset.RulesetInfo, Mods = System.Array.Empty<Mod>() },
+                };
+            });
+
+            AddStep("no rate mod selected", () => chartMods.Enabled(ChartMod.DoubleTime).Value = false);
+            buildRateLayer(() => osu, () => score);
+            AddStep("record where the cursor sits at 2s", () => unmodded = cursorPosition());
+
+            AddStep("select Double Time", () => chartMods.Enabled(ChartMod.DoubleTime).Value = true);
+            buildRateLayer(() => osu, () => score);
+
+            AddAssert("the cursor is in exactly the same place at the same beatmap time",
+                () => (cursorPosition() - unmodded).Length < 0.5f);
+
+            AddStep("clean up", () =>
+            {
+                chartMods.Enabled(ChartMod.DoubleTime).Value = false;
+                Remove(host, true);
+            });
+        }
+
+        private void buildRateLayer(System.Func<string> osu, System.Func<Score> score)
+        {
+            AddStep("build the layer", () =>
+            {
+                if (host != null)
+                    Remove(host, true);
+
+                manual.CurrentTime = 2000;
+
+                Add(host = new Container
+                {
+                    RelativeSizeAxes = Axes.Both,
+                    Clock = new FramedClock(manual),
+                    Child = layer = new LazerChartLayer(new FlatWorkingBeatmap(osu()), osu(), score()),
+                });
+            });
+
+            AddUntilStep("layer settled at 2s", () => layer.IsLoaded
+                                                      && layer.DrawableRuleset != null
+                                                      && System.Math.Abs(layer.DrawableRuleset.FrameStableClock.CurrentTime - 2000) < 50);
+        }
+
+        /// <summary>Where the replay is currently pointing, in the playfield's own coordinates.</summary>
+        private osuTK.Vector2 cursorPosition()
+            => layer.DrawableRuleset!.Playfield.Cursor!.ActiveCursor.Position;
+
         // Regression guard for a real crash: the chart layer is rebuilt often (difficulty switch,
         // skin change, toggling the chart off and on), and every rebuild handed the SAME decoded
         // mod instances — stored once on the queue item — to a brand new DrawableRuleset.

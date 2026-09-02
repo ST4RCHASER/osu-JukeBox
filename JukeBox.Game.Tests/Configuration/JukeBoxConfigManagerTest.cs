@@ -266,12 +266,14 @@ namespace JukeBox.Game.Tests.Configuration
             Assert.That(config.Get<bool>(JukeBoxSetting.ShowStoryboard), Is.True);
         }
 
+        /// <summary>Every storyboard layer starts drawn except Fail, which osu! itself would never
+        /// draw over a passing play (see StoryboardLayerKind.Fail).</summary>
         [Test]
-        public void StoryboardLayersDefaultToAllVisible()
+        public void OnlyTheFailStoryboardLayerStartsHidden()
         {
             var config = freshConfig();
 
-            Assert.That(config.Get<string>(JukeBoxSetting.HiddenStoryboardLayers), Is.Empty);
+            Assert.That(config.Get<string>(JukeBoxSetting.HiddenStoryboardLayers), Is.EqualTo("Fail"));
         }
 
         private static JukeBoxConfigManager freshConfig()

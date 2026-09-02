@@ -27,11 +27,18 @@ public enum StoryboardLayerKind
     Background,
 
     /// <summary>
-    /// Only ever drawn while the player is FAILING (lazer sets each layer's own
-    /// <c>VisibleWhenPassing</c>/<c>VisibleWhenFailing</c> from the layer definition, and this one
-    /// is failing-only). Nothing here ever fails — the chart is autoplay with no health — so this
-    /// layer draws nothing whatever this toggle says. It is listed anyway because the list is the
-    /// storyboard's real shape, and hiding a row would only raise the question of where it went.
+    /// The layer osu! draws only while the player is FAILING. Nothing here ever fails — the chart
+    /// is autoplay with no health — so lazer keeps this one switched off of its own accord
+    /// (<c>DrawableStoryboard</c> drives every layer's Enabled from
+    /// <c>VisibleWhenPassing</c>/<c>VisibleWhenFailing</c>).
+    ///
+    /// <para>
+    /// Switching this row on FORCES it drawn anyway (user request): the toggle means "draw this
+    /// layer", and for the one layer whose state never arrives on its own that has to override
+    /// lazer's gating rather than defer to it — see <c>LazerStoryboardLayer.Update</c>, which
+    /// writes Enabled as well as Alpha. It is also the one layer that defaults to OFF, since a fail
+    /// layer over a passing play is a deliberate curiosity rather than what the mapper intended.
+    /// </para>
     /// </summary>
     Fail,
 
@@ -60,8 +67,15 @@ public partial class StoryboardLayerVisibility : Component
     /// <summary>Every layer, in the order osu! itself stacks them (back to front).</summary>
     public static readonly StoryboardLayerKind[] All = Enum.GetValues<StoryboardLayerKind>();
 
+    /// <summary>
+    /// The layers that start hidden — <see cref="StoryboardLayerKind.Fail"/> alone, which osu!
+    /// itself would never draw over a passing play (see its own remarks). Everything else defaults
+    /// to drawn, so a layer added by a future osu! release arrives visible.
+    /// </summary>
+    public static readonly StoryboardLayerKind[] HiddenByDefault = { StoryboardLayerKind.Fail };
+
     private readonly Dictionary<StoryboardLayerKind, BindableBool> shown =
-        All.ToDictionary(l => l, _ => new BindableBool(true));
+        All.ToDictionary(l => l, l => new BindableBool(!HiddenByDefault.Contains(l)));
 
     private readonly Bindable<string> hiddenList = new Bindable<string>(string.Empty);
 

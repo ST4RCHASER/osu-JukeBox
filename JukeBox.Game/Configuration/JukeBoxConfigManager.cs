@@ -296,8 +296,9 @@ public enum JukeBoxSetting
     /// <summary>
     /// Which storyboard layers the user has switched OFF, as a comma-separated list of
     /// <see cref="LazerPlayer.StoryboardLayerKind"/> names — same list-shaped, "persist the hidden
-    /// ones" scheme as <see cref="HiddenPlayfieldElements"/>, and for the same reasons. Empty (the
-    /// default) is "every layer drawn".
+    /// ones" scheme as <see cref="HiddenPlayfieldElements"/>, and for the same reasons. Defaults to
+    /// the Fail layer alone (see <see cref="LazerPlayer.StoryboardLayerKind.Fail"/>); everything
+    /// else, including any layer a future osu! release adds, starts drawn.
     /// </summary>
     HiddenStoryboardLayers,
 }
@@ -480,7 +481,8 @@ public class JukeBoxConfigManager : IniConfigManager<JukeBoxSetting>
         SetDefault(JukeBoxSetting.ShowStoryboard, true);
         SetDefault(JukeBoxSetting.ShowVideo, true);
         SetDefault(JukeBoxSetting.StoryboardVideoSplitMigrated, false);
-        SetDefault(JukeBoxSetting.HiddenStoryboardLayers, string.Empty);
+        SetDefault(JukeBoxSetting.HiddenStoryboardLayers,
+            string.Join(',', LazerPlayer.StoryboardLayerVisibility.HiddenByDefault));
 
         SetDefault(JukeBoxSetting.RemoveChartMask, false);
         SetDefault(JukeBoxSetting.RemoveStoryboardMask, false);

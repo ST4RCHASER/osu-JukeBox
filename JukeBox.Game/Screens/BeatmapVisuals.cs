@@ -550,6 +550,7 @@ public partial class BeatmapVisuals : CompositeDrawable
         }, true);
         showStoryboard.BindValueChanged(_ => updateStoryboardDisplay(), true);
         showVideo.BindValueChanged(_ => updateStoryboardDisplay(), true);
+        removeStoryboardMask.BindValueChanged(_ => updateStoryboardDisplay(), true);
 
         // Regression fix: backgroundBlurContainer sets RedrawOnScale = false (see its own
         // construction comment) so MainScreen's continuous, purely-cosmetic scale changes —
@@ -707,6 +708,11 @@ public partial class BeatmapVisuals : CompositeDrawable
     {
         storyboardLayer.StoryboardShown.Value = showStoryboard.Value;
         storyboardLayer.VideoShown.Value = showVideo.Value;
+
+        // The release has to reach lazer's own per-layer masking, not just our clips: every
+        // storyboard layer masks its own elements, so releasing the player box around it changed
+        // nothing on its own (see LazerStoryboardLayer.releaseLayerMasking).
+        storyboardLayer.StoryboardReleased.Value = removeStoryboardMask.Value;
 
         storyboardLayer.Alpha = showStoryboard.Value || showVideo.Value ? 1 : 0;
         storyboardAudio.Volume.Value = showStoryboard.Value ? 1 : 0;
@@ -928,13 +934,30 @@ public partial class BeatmapVisuals : CompositeDrawable
         }
 
         // "Stand in for the box" — true exactly when the box has been released for one layer or the
-        // other, since that is the only time anything here has to clip.
+        // other, since that is the only time anything here has to clip on its behalf.
         bool standIn = boxKnown && (removeChartMask.Value || removeStoryboardMask.Value);
 
         applyClip(backdropClip, standIn, boxLocal, cornerRadiusLocal);
         applyClip(storyboardClip, standIn && !removeStoryboardMask.Value, boxLocal, cornerRadiusLocal);
         applyClip(dimClip, standIn, boxLocal, cornerRadiusLocal);
-        applyClip(chartClip, standIn && !removeChartMask.Value, boxLocal, cornerRadiusLocal);
+
+        // The chart's own mask is the SCENE, not the box — and it is on whenever the user has not
+        // released it, box or no box.
+        //
+        // A hit object sitting at the playfield's edge reaches past the playfield by its own radius,
+        // and its approach circle by several times that; with nothing clipping until the box, those
+        // drew on the black AROUND the scene, which is what a user reads as "outside the screen"
+        // (reported against a zoomed-out playfield, where the box is much larger than the scene, but
+        // it was never zoom-specific — the overflow was simply less obvious at 100%). Clipping to
+        // the scene is what makes "the chart stays on screen" true; releasing the mask is what lets
+        // it spill, which is the whole point of the setting.
+        //
+        // The box's own mask still applies on top whenever it is masking, so zooming the scene past
+        // the box's edges is caught there as before. osu!catch's fruit-spawn and catcher overflow
+        // (see catch_reserved_height) is clipped by this too, deliberately: it is exactly the
+        // "chart outside the screen" being complained about, and the release toggle is how someone
+        // who wants lazer's off-screen-spawn look asks for it.
+        applyClip(chartClip, !removeChartMask.Value, canvas, 0);
     }
 
     private static void applyClip(Container clip, bool masking, Vector2 size, float cornerRadius)

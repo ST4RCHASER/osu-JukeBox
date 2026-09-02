@@ -156,6 +156,60 @@ namespace JukeBox.Game.Tests.Visual
                 () => playback.ChartModTempo.Value == 1 && playback.ChartModFrequency.Value == 1);
         }
 
+        /// <summary>
+        /// The user's report: watching a Double Time replay and turning DT off left the track still
+        /// running at 1.5×. A replay's frames are timestamped in beatmap time and everything here
+        /// runs off one clock, so the rate is the user's to change — the play simply runs slower,
+        /// still in sync. The replay's recorded rate is a separate track adjustment that multiplies
+        /// with ours, so what is asserted is the PRODUCT the track actually ends up at.
+        /// </summary>
+        [Test]
+        public void RateModsStayEditableDuringAReplay()
+        {
+            AddStep("a DT replay starts playing", () =>
+            {
+                // Exactly what Jukebox does for a replay round: the recorded rate onto the replay
+                // channel, then the now-playing item the selection follows.
+                playback.ReplayTempo.Value = 1.5;
+                playback.ReplayFrequency.Value = 1.0;
+
+                jukebox.NowPlaying.Value = new BeatmapSetInfo
+                {
+                    Id = 21,
+                    Replay = new ReplayAttachment { PlayerName = "Cookiezi", ModAcronyms = new[] { "HD", "DT" } },
+                };
+            });
+
+            AddUntilStep("the replay's mods are on the toggles", () => selection.Enabled(ChartMod.DoubleTime).Value);
+            AddAssert("and the track runs at the recorded 1.5x", () => Math.Abs(trackRate() - 1.5) < 1e-9);
+
+            AddStep("the user turns DT off", () => selection.Enabled(ChartMod.DoubleTime).Value = false);
+            AddAssert("the track drops to 1x", () => Math.Abs(trackRate() - 1.0) < 1e-9);
+
+            AddStep("the user asks for Half Time instead", () => selection.Enabled(ChartMod.HalfTime).Value = true);
+            AddAssert("the track slows to 0.75x", () => Math.Abs(trackRate() - 0.75) < 1e-9);
+
+            AddStep("and Nightcore, which shifts pitch instead", () => selection.Enabled(ChartMod.Nightcore).Value = true);
+            AddAssert("the speed is carried by frequency now", () =>
+                Math.Abs(playback.ChartModTempo.Value * playback.ReplayTempo.Value - 1.0) < 1e-9
+                && Math.Abs(playback.ChartModFrequency.Value * playback.ReplayFrequency.Value - 1.5) < 1e-9);
+
+            AddStep("replay stops", () =>
+            {
+                jukebox.NowPlaying.Value = new BeatmapSetInfo { Id = 22 };
+                playback.ReplayTempo.Value = 1;
+                playback.ReplayFrequency.Value = 1;
+            });
+
+            AddAssert("back to no forced rate", () => Math.Abs(trackRate() - 1.0) < 1e-9);
+        }
+
+        /// <summary>The rate the track actually ends up at: the replay's own adjustment and the
+        /// selection's are separate, and the track multiplies them.</summary>
+        private double trackRate()
+            => playback.ChartModTempo.Value * playback.ReplayTempo.Value
+               * playback.ChartModFrequency.Value * playback.ReplayFrequency.Value;
+
         [Test]
         public void NonRateModsLeaveThePlaybackRateAlone()
         {

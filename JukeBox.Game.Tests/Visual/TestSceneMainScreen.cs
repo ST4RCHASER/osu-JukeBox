@@ -561,7 +561,14 @@ namespace JukeBox.Game.Tests.Visual
                     Directory.CreateDirectory(dir);
                     File.WriteAllText(Path.Combine(dir, "mask [Normal].osu"),
                         "osu file format v14\n\n[General]\nAudioFilename: audio.wav\nMode: 0\n\n[Metadata]\nVersion:Normal\n\n"
-                        + "[Difficulty]\nCircleSize:4\n\n[TimingPoints]\n0,500,4,1,0,100,1,0\n\n[HitObjects]\n256,192,1000,1,0\n");
+                        + "[Difficulty]\nCircleSize:4\n\n[TimingPoints]\n0,500,4,1,0,100,1,0\n\n[HitObjects]\n"
+                        // Objects at the playfield's CORNERS, not its middle: a circle sitting at
+                        // the edge is the one whose approach ring reaches past the playfield, and a
+                        // fixture that only ever placed one in the centre is exactly why the leak
+                        // the user hit was invisible to these tests. Spread over ten seconds so one
+                        // is always alive whatever the clock has reached.
+                        + string.Join(string.Empty, Enumerable.Range(0, 40).Select(i =>
+                            $"{(i % 2 == 0 ? 0 : 512)},{(i % 4 < 2 ? 0 : 384)},{500 + i * 250},1,0\n")));
 
                     maskFixtureSet = cache.LoadFromDirectory(424242, dir);
                 }
@@ -574,6 +581,94 @@ namespace JukeBox.Game.Tests.Visual
         }
 
         private BeatmapVisuals visuals() => screen.ChildrenOfType<BeatmapVisuals>().First(v => v.IsLoaded);
+
+        /// <summary>
+        /// Every drawable the hosted ruleset actually puts on screen — the playfield's own content,
+        /// which is what a user means by "the chart". Measured rather than reasoned about: the leak
+        /// this covers was invisible to tests that only asked the clip containers what they had been
+        /// set to.
+        /// </summary>
+        private IEnumerable<Drawable> chartDrawables()
+            => visuals().ChartRenderer?.DrawableRuleset?.Playfield.HitObjectContainer.Objects.Cast<Drawable>()
+               ?? Enumerable.Empty<Drawable>();
+
+        private static bool insideOf(Drawable inner, Drawable outer, float tolerance = 1f)
+        {
+            var a = inner.ScreenSpaceDrawQuad.AABBFloat;
+            var b = outer.ScreenSpaceDrawQuad.AABBFloat;
+
+            return a.Left >= b.Left - tolerance && a.Right <= b.Right + tolerance
+                   && a.Top >= b.Top - tolerance && a.Bottom <= b.Bottom + tolerance;
+        }
+
+        /// <summary>
+        /// The user's report: with "Remove playfield/chart mask" OFF — the default — hit circles
+        /// still drew outside the scene, on the black around it, once the playfield was zoomed out.
+        /// The scene is what the background and storyboard fill, so it is what a user reads as "the
+        /// screen"; that is what the chart is clipped to while the mask is on. Checked at several
+        /// zooms because the leak only shows once the scene is smaller than the box.
+        /// </summary>
+        [TestCase(0.5)]
+        [TestCase(0.8)]
+        [TestCase(1.0)]
+        [TestCase(1.6)]
+        public void ByDefaultTheChartNeverDrawsOutsideTheScene(double zoom)
+        {
+            AddStep("render the chart", () => config.SetValue(JukeBoxSetting.RenderChart, true));
+            AddStep($"zoom {zoom:0.0}x", () => config.SetValue(JukeBoxSetting.PlayfieldZoom, zoom));
+
+            addRealVisuals();
+
+            AddUntilStep("the chart is drawing something", () => chartDrawables().Any());
+
+            // The condition that makes the clip matter, asserted rather than assumed: a circle at
+            // the playfield's edge really does reach past the scene, so "nothing is outside" can
+            // only be true because something clips it.
+            AddAssert("some chart drawable really does overflow the scene",
+                () => chartDrawables().Any(d => !insideOf(d, screen.VisualsStack)));
+
+            AddAssert("and the scene itself is what clips the chart", () =>
+            {
+                var clipping = clippers(chartDrawables().First());
+
+                return clipping.Count > 0 && coversTheSameRect(clipping[0], screen.VisualsStack);
+            });
+
+            AddStep("restore", () =>
+            {
+                config.SetValue(JukeBoxSetting.RenderChart, false);
+                config.SetValue(JukeBoxSetting.PlayfieldZoom, 1.0);
+            });
+        }
+
+        /// <summary>Releasing the chart mask is what lets it spill: nothing between the chart and
+        /// the screen clips it any more, the box included.</summary>
+        [Test]
+        public void ReleasingTheChartMaskLetsItLeaveTheSceneAndTheBox()
+        {
+            AddStep("render the chart, zoomed out", () =>
+            {
+                config.SetValue(JukeBoxSetting.RenderChart, true);
+                config.SetValue(JukeBoxSetting.PlayfieldZoom, 0.5);
+            });
+
+            addRealVisuals();
+            AddUntilStep("the chart is drawing something", () => chartDrawables().Any());
+
+            AddAssert("clipped to the scene to begin with",
+                () => coversTheSameRect(clippers(chartDrawables().First())[0], screen.VisualsStack));
+
+            AddStep("release the chart mask", () => config.SetValue(JukeBoxSetting.RemoveChartMask, true));
+
+            AddUntilStep("nothing clips it any more", () => !clippers(chartDrawables().First()).Any());
+
+            AddStep("restore", () =>
+            {
+                config.SetValue(JukeBoxSetting.RemoveChartMask, false);
+                config.SetValue(JukeBoxSetting.RenderChart, false);
+                config.SetValue(JukeBoxSetting.PlayfieldZoom, 1.0);
+            });
+        }
 
         /// <summary>A marker parked far outside the player box, so "is this clipped" has a definite
         /// answer instead of depending on what a particular beatmap happens to draw.</summary>
@@ -625,8 +720,11 @@ namespace JukeBox.Game.Tests.Visual
 
             AddAssert("box clips its content", () => screen.PlayerBox.Masking);
             AddAssert("and no per-layer clip is standing in for it", () =>
-                !visuals().StoryboardClip.Masking && !visuals().ChartClip.Masking
-                && !visuals().BackdropClip.Masking && !visuals().DimClip.Masking);
+                !visuals().StoryboardClip.Masking && !visuals().BackdropClip.Masking && !visuals().DimClip.Masking);
+
+            // The chart's clip is the exception, and not a stand-in for the box at all: it bounds
+            // the chart to the SCENE whenever the user has not released it, box or no box.
+            AddAssert("the chart is clipped to the scene", () => visuals().ChartClip.Masking);
         }
 
         [Test]
@@ -651,9 +749,11 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("remove the storyboard mask", () => config.SetValue(JukeBoxSetting.RemoveStoryboardMask, true));
 
             AddUntilStep("nothing clips the storyboard any more", () => !clippers(storyboardProbe).Any());
-            AddAssert("the chart is still clipped, and by the box's own rectangle", () =>
+            // The chart's own clip is the SCENE, which is the rectangle it is bounded to whether or
+            // not the box is masking — releasing the storyboard changed nothing about it.
+            AddAssert("the chart is still clipped, and by the scene", () =>
                 clippers(chartProbe).SequenceEqual(new[] { visuals().ChartClip })
-                && coversTheSameRect(visuals().ChartClip, screen.PlayerBox));
+                && coversTheSameRect(visuals().ChartClip, screen.VisualsStack));
             AddAssert("the background and the dim keep clipping too",
                 () => visuals().BackdropClip.Masking && visuals().DimClip.Masking
                       && coversTheSameRect(visuals().BackdropClip, screen.PlayerBox));
@@ -667,8 +767,9 @@ namespace JukeBox.Game.Tests.Visual
                 () => clippers(storyboardProbe).Any() && !clippers(chartProbe).Any());
 
             AddStep("put the chart mask back", () => config.SetValue(JukeBoxSetting.RemoveChartMask, false));
-            AddUntilStep("the box is in sole charge once more",
-                () => screen.PlayerBox.Masking && clippers(chartProbe).SequenceEqual(new[] { screen.PlayerBox }));
+            AddUntilStep("the box masks again, with the chart bounded to the scene inside it",
+                () => screen.PlayerBox.Masking
+                      && clippers(chartProbe).SequenceEqual(new[] { visuals().ChartClip, screen.PlayerBox }));
         }
 
         // A released layer reaching over the gutter must go UNDER the side columns, never over
