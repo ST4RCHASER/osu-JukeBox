@@ -50,10 +50,37 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("restore config", () => config.SetValue(JukeBoxSetting.DiscordRichPresence, true));
         }
 
+        /// <summary>
+        /// The safety property, asserted from inside a test host rather than argued about. A
+        /// headless host means a test run, and a Discord connection opened during one does not fail
+        /// a presence test — its cancelled pipe read surfaces as an unobserved task exception, which
+        /// osu!framework turns into a whole-host abort while NUnit is running, failing whichever
+        /// unrelated fixture happens to be mid-run. That is what took main red.
+        /// </summary>
         [Test]
-        public void ConnectsOnceWhileTheSettingIsOn()
+        public void NeverOpensAConnectionUnderAHeadlessHost()
         {
-            AddAssert("client started", () => client.StartCount == 1);
+            AddAssert("host really is headless", () => !service.CanConnect);
+            AddAssert("client was never started", () => client.StartCount == 0);
+
+            AddStep("toggle the setting off and on again", () =>
+            {
+                config.SetValue(JukeBoxSetting.DiscordRichPresence, false);
+                config.SetValue(JukeBoxSetting.DiscordRichPresence, true);
+            });
+
+            AddAssert("still never started", () => client.StartCount == 0);
+        }
+
+        /// <summary>
+        /// Only the CONNECTION is gated, not the service — everything above the IPC boundary still
+        /// runs, which is what keeps the rest of this fixture meaningful.
+        /// </summary>
+        [Test]
+        public void ThePresenceModelIsStillBuiltWhileTheConnectionIsGated()
+        {
+            AddUntilStep("presence still computed and published to the client", () => client.Published != null);
+            AddAssert("without ever connecting", () => client.StartCount == 0);
         }
 
         [Test]

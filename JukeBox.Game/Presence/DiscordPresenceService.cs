@@ -11,6 +11,7 @@ using osu.Framework.Allocation;
 using osu.Framework.Bindables;
 using osu.Framework.Graphics;
 using osu.Framework.Logging;
+using osu.Framework.Platform;
 using osu.Framework.Threading;
 
 namespace JukeBox.Game.Presence;
@@ -66,6 +67,9 @@ public partial class DiscordPresenceService : Component
     [Resolved]
     private JukeBoxConfigManager config { get; set; } = null!;
 
+    [Resolved]
+    private GameHost host { get; set; } = null!;
+
     private readonly IPresenceClient client;
 
     private readonly Bindable<bool> enabled = new Bindable<bool>(true);
@@ -110,6 +114,28 @@ public partial class DiscordPresenceService : Component
     /// </summary>
     protected bool ChartIsRendering => renderChart.Value;
 
+    /// <summary>
+    /// Whether this process may open the Discord connection at all. A headless host has no window
+    /// (the same test <see cref="UI.SettingsOverlay"/> uses for its window-bound rows), and a
+    /// headless host means a test run.
+    ///
+    /// <para>
+    /// Belt to <see cref="JukeBoxGame"/>'s braces. The wiring now lives in JukeBox.Desktop so no
+    /// fixture can construct this at all, but the cost of that being wrong again is severe and
+    /// non-obvious: under NUnit, osu!framework's <c>GameHost.unobservedExceptionHandler</c> aborts
+    /// the whole host on ANY unobserved task exception, and a cancelled pipe read is exactly that.
+    /// One test-host connection therefore doesn't fail a presence test — it kills whatever fixture
+    /// happens to be running. So the connection is gated on the thing that actually distinguishes
+    /// the two worlds, not on where the wiring happens to sit.
+    /// </para>
+    ///
+    /// <para>
+    /// Only the CONNECTION is gated. Everything above the IPC boundary still runs, so the tests
+    /// that drive this service against a fake client exercise the real update policy.
+    /// </para>
+    /// </summary>
+    internal bool CanConnect => host.Window != null;
+
     [BackgroundDependencyLoader]
     private void load()
     {
@@ -125,7 +151,9 @@ public partial class DiscordPresenceService : Component
         {
             if (e.NewValue)
             {
-                client.Start();
+                if (CanConnect)
+                    client.Start();
+
                 return;
             }
 
@@ -385,18 +413,34 @@ public partial class DiscordPresenceService : Component
         var scanning = set;
         string? osb = set.OsbFile;
 
-        Task.Run(() => scanStoryboard(osuFile, osb)).ContinueWith(t =>
+        // Off the update thread, and TOTAL: nothing in this body may throw, because a faulted task
+        // nobody observes is not a quiet failure here. Under NUnit, osu!framework's
+        // GameHost.unobservedExceptionHandler aborts the entire host on any unobserved task
+        // exception, so a stray fault on this path would kill whichever unrelated fixture happened
+        // to be running — the same shape of failure the Discord pipe caused. The previous
+        // ContinueWith form also left an antecedent fault unobserved whenever the scan did not
+        // complete successfully; folding the continuation into the body removes both hazards.
+        Task.Run(() =>
         {
-            Schedule(() =>
+            try
             {
-                // The song (or difficulty) moved on while we were reading — this answer is about a
-                // track nobody is listening to any more.
-                if (token != Volatile.Read(ref storyboardScanToken) || !ReferenceEquals(playback.Current.Value, scanning))
-                    return;
+                bool found = scanStoryboard(osuFile, osb);
 
-                hasStoryboard = t.IsCompletedSuccessfully && t.Result;
-            });
-        }, TaskScheduler.Default);
+                Schedule(() =>
+                {
+                    // The song (or difficulty) moved on while we were reading — this answer is
+                    // about a track nobody is listening to any more.
+                    if (token != Volatile.Read(ref storyboardScanToken) || !ReferenceEquals(playback.Current.Value, scanning))
+                        return;
+
+                    hasStoryboard = found;
+                });
+            }
+            catch (Exception e)
+            {
+                Logger.Log($"Storyboard scan for the presence line failed: {e.Message}", LoggingTarget.Runtime, LogLevel.Debug);
+            }
+        });
     }
 
     /// <summary>
