@@ -270,7 +270,9 @@ public partial class SettingsOverlay : FocusedOverlayContainer, ITabSearch
             var checkbox = new SettingsCheckbox { LabelText = layer.ToString() };
 
             layerCheckboxes[layer] = checkbox;
-            layerUi[layer] = new BindableBool(true);
+            // The UI bindable's DEFAULT must mirror the service's (Fail ships hidden), or the
+            // revert-to-default arrow shows on the shipped state and "revert" turns Fail ON.
+            layerUi[layer] = new BindableBool(!StoryboardLayerVisibility.HiddenByDefault.Contains(layer));
             rows.Add(checkbox);
         }
 
@@ -288,8 +290,8 @@ public partial class SettingsOverlay : FocusedOverlayContainer, ITabSearch
             Colour = Theme.TextTertiary,
             // Said rather than hidden: the row is part of the storyboard's real shape, and a
             // missing one would only raise the question of where it went.
-            Text = "Fail only ever draws while failing, which never happens here — the chart is "
-                   + "autoplay with no health — so that layer stays blank whatever its toggle says.",
+            Text = "Fail normally draws only while failing, which never happens here — switching it "
+                   + "on forces that layer visible anyway.",
         });
 
         return storyboardLayerBlock = new Container
