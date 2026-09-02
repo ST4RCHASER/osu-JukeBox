@@ -32,11 +32,32 @@ namespace JukeBox.Game
         /// the main instance's config/realm/log files — see JukeBox.Desktop's Program.</summary>
         public const string VIEWER_HOST_NAME = @"JukeBox-Viewer";
 
+        /// <summary>
+        /// The named pipe the running instance binds so a SECOND launch can hand over its
+        /// command-line arguments instead of booting a rival app. Two instances on one storage
+        /// directory is not a cosmetic problem — they would share a realm and a config file — so
+        /// binding this is what makes "click a link, it lands in the player already open" work at
+        /// all. See JukeBox.Desktop's Program.
+        ///
+        /// <para>
+        /// A THIRD name, deliberately separate from the two storage names above: the pipe is an
+        /// identity for "who owns this desktop session", and tying it to a storage directory would
+        /// tempt someone into renaming it along with one.
+        /// </para>
+        /// </summary>
+        public const string IPC_PIPE_NAME = @"JukeBox-args";
+
         public static string HostNameFor(bool viewer) => viewer ? VIEWER_HOST_NAME : MAIN_HOST_NAME;
 
         public static HostOptions OptionsFor(bool viewer) => new HostOptions
         {
             FriendlyGameName = viewer ? VIEWER_WINDOW_TITLE : PRODUCT_NAME,
+
+            // The viewer gets NO pipe. It is a legitimate second process of this same binary
+            // (spawned by DetachedViewerManager), so a viewer that bound the pipe would both make
+            // the next real launch believe an instance was already running and swallow its
+            // arguments into a window that cannot queue anything.
+            IPCPipeName = viewer ? null : IPC_PIPE_NAME,
         };
     }
 }

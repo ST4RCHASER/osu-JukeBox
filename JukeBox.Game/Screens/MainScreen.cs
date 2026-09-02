@@ -105,6 +105,9 @@ public partial class MainScreen : Screen
     [Resolved]
     private DroppedFileImporter fileImporter { get; set; } = null!;
 
+    [Resolved]
+    private LaunchArgumentImporter launchArguments { get; set; } = null!;
+
     /// <summary>
     /// A bound COPY of <see cref="Jukebox.LastError"/> rather than a subscription straight onto
     /// the jukebox's own bindable. The jukebox long outlives any one screen, so a direct
@@ -118,6 +121,10 @@ public partial class MainScreen : Screen
     /// <summary>Drag-and-drop import outcomes, bound the same way (and for the same lifetime
     /// reasons) as <see cref="lastError"/>.</summary>
     private readonly Bindable<DropNotification?> dropNotification = new Bindable<DropNotification?>();
+
+    /// <summary>Command-line argument outcomes, bound the same way (and for the same lifetime
+    /// reasons) as <see cref="lastError"/>.</summary>
+    private readonly Bindable<DropNotification?> argumentNotification = new Bindable<DropNotification?>();
 
     /// <summary>Why the official search backend last fell back to a mirror, bound the same way (and
     /// for the same lifetime reasons) as <see cref="lastError"/>.</summary>
@@ -602,6 +609,16 @@ public partial class MainScreen : Screen
         {
             if (e.NewValue is { } drop)
                 showToast(drop.Message, drop.IsError ? Theme.Error : Theme.Accent);
+        });
+
+        // Command-line arguments report the same way drops do — a bad argument is named in its own
+        // toast and the rest of the batch carries on. Its own bindable rather than the importer's
+        // so an argument that never reached a file import isn't reported as a failed file import.
+        argumentNotification.BindTo(launchArguments.Notification);
+        argumentNotification.BindValueChanged(e =>
+        {
+            if (e.NewValue is { } outcome)
+                showToast(outcome.Message, outcome.IsError ? Theme.Error : Theme.Accent);
         });
     }
 

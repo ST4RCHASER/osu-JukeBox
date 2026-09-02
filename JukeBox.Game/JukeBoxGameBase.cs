@@ -213,6 +213,7 @@ namespace JukeBox.Game
         private Detach.SettingsMirror settingsMirror = null!;
         private osu.Game.Skinning.SkinManager skinManager = null!;
         private DroppedFileImporter fileImporter = null!;
+        private LaunchArgumentImporter launchArguments = null!;
 
         [BackgroundDependencyLoader]
         private void load(osu.Framework.Configuration.FrameworkConfigManager frameworkConfig)
@@ -463,6 +464,18 @@ namespace JukeBox.Game
             // window-thread work a test host can't service.
             Add(fileImporter = new DroppedFileImporter());
             dependencies.Cache(fileImporter);
+
+            // Command-line arguments. Cached (rather than owned by whoever receives them) because
+            // two very different callers hand it work: this process's own argv at startup, and a
+            // SECOND invocation forwarding its arguments over IPC — see JukeBox.Desktop, which
+            // owns that wiring so no test host ever binds a pipe.
+            //
+            // The HttpClient is shared rather than a second one being made here: an argument may
+            // be a URL to a file, and nothing else in the app downloads anything that isn't a
+            // beatmapset by id.
+            dependencies.CacheAs(http);
+            Add(launchArguments = new LaunchArgumentImporter());
+            dependencies.Cache(launchArguments);
 
             var offsetStore = new BeatmapOffsetStore();
             Add(offsetStore);

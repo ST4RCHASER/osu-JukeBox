@@ -252,7 +252,6 @@ public partial class MapIdOverlay : FocusedOverlayContainer
         }
 
         int id = link.Id;
-        string query = id.ToString();
 
         int mySequence = ++lookupSequence;
 
@@ -261,25 +260,9 @@ public partial class MapIdOverlay : FocusedOverlayContainer
         idBox.Current.Disabled = true;
         lookupButton.Enabled.Value = false;
 
-        BeatmapSetInfo? found = null;
-
-        try
-        {
-            var restricted = new SearchRequest { Query = query, Option = "setId" };
-            var restrictedResults = await mirror.SearchAsync(restricted).ConfigureAwait(false);
-            found = restrictedResults.Count > 0 && restrictedResults[0].Id == id ? restrictedResults[0] : null;
-
-            if (found == null)
-            {
-                var fallback = new SearchRequest { Query = query };
-                var fallbackResults = await mirror.SearchAsync(fallback).ConfigureAwait(false);
-                found = fallbackResults.FirstOrDefault(s => s.Id == id);
-            }
-        }
-        catch (Exception ex)
-        {
-            Logger.Error(ex, $"MapIdOverlay: lookup of set {id} failed");
-        }
+        // Shared with the command-line path so both resolve a set id identically — see
+        // BeatmapSetLookup for why the restricted-then-plain dance is needed at all.
+        var found = await BeatmapSetLookup.ResolveAsync(mirror, id).ConfigureAwait(false);
 
         Schedule(() =>
         {
