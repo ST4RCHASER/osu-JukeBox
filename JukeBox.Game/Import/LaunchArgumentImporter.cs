@@ -83,6 +83,12 @@ public partial class LaunchArgumentImporter : Component
     /// </summary>
     public async Task HandleAsync(IReadOnlyList<string> arguments)
     {
+        // Local files are gathered and imported as ONE batch at the end. Several .osr named on a
+        // single command line are the same "these belong together" gesture as dropping them at
+        // once, and grouping them into one queue entry is only possible while something still
+        // knows they arrived together — a per-argument loop throws that away immediately.
+        var localFiles = new List<string>();
+
         foreach (string argument in arguments)
         {
             if (LaunchArgument.IsSwitch(argument))
@@ -90,7 +96,19 @@ public partial class LaunchArgumentImporter : Component
 
             try
             {
-                await handleAsync(LaunchArgument.Classify(argument)).ConfigureAwait(false);
+                var classified = LaunchArgument.Classify(argument);
+
+                if (classified.Kind == LaunchArgumentKind.LocalFile)
+                {
+                    if (File.Exists(classified.Path))
+                        localFiles.Add(classified.Path);
+                    else
+                        notify($"No such file: {classified.Raw}", isError: true);
+
+                    continue;
+                }
+
+                await handleAsync(classified).ConfigureAwait(false);
             }
             catch (Exception e)
             {
@@ -99,6 +117,19 @@ public partial class LaunchArgumentImporter : Component
                 Logger.Error(e, $"[args] '{argument}' failed");
                 notify($"Couldn't add {argument}: {e.Message}", isError: true);
             }
+        }
+
+        if (localFiles.Count == 0)
+            return;
+
+        try
+        {
+            await files.ImportMany(localFiles).ConfigureAwait(false);
+        }
+        catch (Exception e)
+        {
+            Logger.Error(e, "[args] local file import failed");
+            notify($"Couldn't add the dropped files: {e.Message}", isError: true);
         }
     }
 

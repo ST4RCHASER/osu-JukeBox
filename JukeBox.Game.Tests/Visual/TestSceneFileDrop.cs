@@ -1,5 +1,6 @@
 #nullable enable
 
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
@@ -284,6 +285,64 @@ namespace JukeBox.Game.Tests.Visual
                 && playback.SelectedOsuFile.Value == queuedOrPlayingReplay()?.OsuFile);
         }
 
+        /// <summary>
+        /// The whole point of the batch import: several people's replays of ONE beatmap are one
+        /// viewing session, so they resolve that beatmap once and arrive as a single queue entry
+        /// carrying all of them — not three identical rows that each overwrite the last one's
+        /// replay.
+        /// </summary>
+        [Test]
+        public void SeveralReplaysForOneBeatmapBecomeOneQueueEntryCarryingThemAll()
+        {
+            string[] batch = null!;
+
+            AddStep("build three replays of the same difficulty", () => batch = new[]
+            {
+                makeReplayFor("group", setId: 707070, player: "WhiteCat"),
+                anotherReplayOfTheSameMap("group_b", "Vaxei"),
+                anotherReplayOfTheSameMap("group_c", "mrekk"),
+            });
+
+            AddStep("drop all three at once", () => importer.ImportMany(batch));
+
+            AddUntilStep("toast credits the group", () => lastMessage == "Added: Replayed Song — played by WhiteCat, Vaxei and 1 other");
+            AddUntilStep("the resolved set is playing", () => playback.Current.Value?.SetId == 707070);
+
+            AddAssert("exactly ONE entry for the set", () => entryCountFor(707070) == 1);
+            AddAssert("and it carries all three replays", () => entryFor(707070)?.Replays.Count == 3);
+            AddAssert("named in the order they were dropped", () =>
+                entryFor(707070)!.Replays.Select(r => r.PlayerName).SequenceEqual(new[] { "WhiteCat", "Vaxei", "mrekk" }));
+
+            AddAssert("every one of them decoded real frames", () =>
+                entryFor(707070)!.Replays.All(r => r.Score?.Replay?.Frames.Count > 0));
+
+            AddAssert("and the store holds all three against that one difficulty", () =>
+                replayStore.AllForOsuFile(entryFor(707070)!.Replays[0].OsuFile).Count == 3);
+        }
+
+        /// <summary>
+        /// Grouping is on the beatmap the replay was PLAYED ON, so replays of different beatmaps
+        /// dropped together stay separate entries — which is what stops a batch collapsing two
+        /// unrelated songs into one row.
+        /// </summary>
+        [Test]
+        public void ReplaysForDifferentBeatmapsStaySeparateEntries()
+        {
+            string[] batch = null!;
+
+            AddStep("build replays of two different beatmaps", () => batch = new[]
+            {
+                makeReplayFor("split_a", setId: 808081, player: "WhiteCat"),
+                makeReplayFor("split_b", setId: 808082, player: "Vaxei"),
+            });
+
+            AddStep("drop both at once", () => importer.ImportMany(batch));
+
+            AddUntilStep("both sets arrived", () => entryCountFor(808081) == 1 && entryCountFor(808082) == 1);
+            AddAssert("each carrying only its own replay", () =>
+                entryFor(808081)?.Replays.Count == 1 && entryFor(808082)?.Replays.Count == 1);
+        }
+
         [Test]
         public void AReplayWhoseBeatmapNoMirrorKnowsReportsAClearError()
         {
@@ -373,8 +432,11 @@ namespace JukeBox.Game.Tests.Visual
             // Sorted first, so this is the set's default difficulty — and NOT the one played.
             File.WriteAllText(Path.Combine(dir, "map [Easy].osu"), osuWithObjects("Easy"));
 
+            // The played difficulty's CONTENT carries the fixture name, so two fixtures really are
+            // two different beatmaps. Without that they hash identically, and a test meaning "these
+            // replays are for different maps" would silently be testing one map twice.
             string played = Path.Combine(dir, "map [Hard].osu");
-            File.WriteAllText(played, osuWithObjects("Hard"));
+            File.WriteAllText(played, osuWithObjects("Hard " + name));
 
             writeSilentWav(Path.Combine(dir, "audio.wav"), 1);
 
@@ -388,10 +450,33 @@ namespace JukeBox.Game.Tests.Visual
                     ReplayFixture.Md5OfFile(played));
             }
 
+            lastPlayedDifficulty = played;
+
             string osr = Path.Combine(tmp, name + ".osr");
             ReplayFixture.Write(osr, played, player);
             return osr;
         }
+
+        /// <summary>The exact .osu the most recent <see cref="makeReplayFor"/> recorded against, so
+        /// further replays can be written for the SAME beatmap.</summary>
+        private string lastPlayedDifficulty = null!;
+
+        /// <summary>Another player's replay of the difficulty the last fixture was built on — the
+        /// same beatmap hash, which is what makes a group a group.</summary>
+        private string anotherReplayOfTheSameMap(string name, string player)
+        {
+            string osr = Path.Combine(tmp, name + ".osr");
+            ReplayFixture.Write(osr, lastPlayedDifficulty, player);
+            return osr;
+        }
+
+        private BeatmapSetInfo? entryFor(int setId)
+            => jukebox.NowPlaying.Value?.Id == setId
+                ? jukebox.NowPlaying.Value
+                : queue.Items.FirstOrDefault(i => i.Id == setId);
+
+        private int entryCountFor(int setId)
+            => queue.Items.Count(i => i.Id == setId) + (jukebox.NowPlaying.Value?.Id == setId ? 1 : 0);
 
         private static string osuWithObjects(string version) =>
             "osu file format v14\n\n"
@@ -478,9 +563,17 @@ namespace JukeBox.Game.Tests.Visual
             /// <summary>The beatmap checksum the currently-registered set's replay was recorded on.</summary>
             public string? RegisteredMd5 { get; private set; }
 
+            /// <summary>
+            /// Every published set by the beatmap checksum it was published under, so more than one
+            /// beatmap can exist at a time — which is what "these replays are for DIFFERENT maps"
+            /// needs in order to be expressible at all.
+            /// </summary>
+            private readonly Dictionary<string, BeatmapSetInfo> byMd5 = new(StringComparer.OrdinalIgnoreCase);
+
             public void Reset()
             {
                 archives.Clear();
+                byMd5.Clear();
                 searchResults = new List<BeatmapSetInfo>();
                 LastSearch = null;
                 RegisteredMd5 = null;
@@ -489,6 +582,7 @@ namespace JukeBox.Game.Tests.Visual
             public void Publish(int setId, string oszPath, BeatmapSetInfo set, string beatmapMd5)
             {
                 archives[setId] = oszPath;
+                byMd5[beatmapMd5] = set;
                 searchResults = new List<BeatmapSetInfo> { set };
                 RegisteredMd5 = beatmapMd5;
             }
@@ -498,6 +592,13 @@ namespace JukeBox.Game.Tests.Visual
             public Task<List<BeatmapSetInfo>> SearchAsync(SearchRequest request, CancellationToken ct = default)
             {
                 LastSearch = request;
+
+                // A checksum search answers for the set published under THAT checksum. Anything else
+                // (and any checksum never published) falls back to the last-published list, which is
+                // what every single-set test relies on.
+                if (request.Option == "checksum" && request.Query != null && byMd5.TryGetValue(request.Query, out var match))
+                    return Task.FromResult(new List<BeatmapSetInfo> { match });
+
                 return Task.FromResult(searchResults);
             }
 

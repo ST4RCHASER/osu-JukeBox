@@ -3,6 +3,8 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Collections.Immutable;
+using System.Linq;
 using osu.Game.Scoring;
 
 namespace JukeBox.Game.Replays;
@@ -91,18 +93,55 @@ public class ReplayAttachment
 /// </summary>
 public class ReplayStore
 {
+    /// <summary>
+    /// Every replay held for a difficulty, newest registration last. A LIST rather than one
+    /// attachment because several people's replays of the same difficulty are watched together —
+    /// dropping five .osr for one map is one viewing session, not five that overwrite each other,
+    /// which is what a single-valued entry did.
+    /// </summary>
     // Written from the import's threadpool continuation, read from the async drawable-load thread.
-    private readonly ConcurrentDictionary<string, ReplayAttachment> byOsuFile = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, ImmutableList<ReplayAttachment>> byOsuFile = new(StringComparer.Ordinal);
 
-    /// <summary>Registers <paramref name="attachment"/> against its own difficulty. A no-op for an
-    /// attachment whose difficulty never resolved.</summary>
+    /// <summary>
+    /// Adds <paramref name="attachment"/> to its own difficulty, keeping any already there. A no-op
+    /// for an attachment whose difficulty never resolved.
+    ///
+    /// <para>
+    /// Re-registering the same SOURCE FILE replaces its entry rather than doubling it, so importing
+    /// the same .osr twice (a re-drop, or a launch argument repeated) leaves one copy — otherwise a
+    /// duplicate would show up as a second player rendering identical cursors.
+    /// </para>
+    /// </summary>
     public void Register(ReplayAttachment attachment)
     {
-        if (attachment.OsuFile != null)
-            byOsuFile[attachment.OsuFile] = attachment;
+        if (attachment.OsuFile == null)
+            return;
+
+        byOsuFile.AddOrUpdate(attachment.OsuFile,
+            _ => ImmutableList.Create(attachment),
+            (_, existing) =>
+            {
+                int same = attachment.SourcePath.Length == 0
+                    ? -1
+                    : existing.FindIndex(a => string.Equals(a.SourcePath, attachment.SourcePath, StringComparison.Ordinal));
+
+                return same >= 0 ? existing.SetItem(same, attachment) : existing.Add(attachment);
+            });
     }
 
-    /// <summary>The replay for <paramref name="osuFile"/>, or null when that difficulty has none.</summary>
+    /// <summary>
+    /// The FIRST replay for <paramref name="osuFile"/>, or null when that difficulty has none. The
+    /// single-replay view of the store, which is what everything rendering one chart still wants.
+    /// </summary>
     public ReplayAttachment? ForOsuFile(string? osuFile)
-        => osuFile != null && byOsuFile.TryGetValue(osuFile, out var attachment) ? attachment : null;
+        => AllForOsuFile(osuFile).FirstOrDefault();
+
+    /// <summary>
+    /// Every replay for <paramref name="osuFile"/>, in registration order — empty when there are
+    /// none. Registration order is import order, which is the order the user dropped them.
+    /// </summary>
+    public IReadOnlyList<ReplayAttachment> AllForOsuFile(string? osuFile)
+        => osuFile != null && byOsuFile.TryGetValue(osuFile, out var attachments)
+            ? attachments
+            : ImmutableList<ReplayAttachment>.Empty;
 }

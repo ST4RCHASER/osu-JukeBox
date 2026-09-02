@@ -1,5 +1,6 @@
 #nullable enable
 
+using System;
 using System.IO;
 using System.Linq;
 using JukeBox.Game.Beatmaps;
@@ -193,7 +194,95 @@ namespace JukeBox.Game.Tests.Import
             store.Register(new ReplayAttachment { PlayerName = "Nobody", OsuFile = null });
 
             Assert.That(store.ForOsuFile(beatmapPath), Is.Null);
+            Assert.That(store.AllForOsuFile(beatmapPath), Is.Empty);
         }
+
+        /// <summary>
+        /// Several people's replays of ONE difficulty are watched together, so the registry keeps
+        /// them all. A single-valued entry made each new replay silently evict the last, which is
+        /// exactly the behaviour multi-replay playback cannot be built on.
+        /// </summary>
+        [Test]
+        public void TheRegistryKeepsEveryReplayForADifficulty()
+        {
+            var store = new ReplayStore();
+
+            var first = new ReplayAttachment { PlayerName = "WhiteCat", OsuFile = beatmapPath, SourcePath = "/a.osr" };
+            var second = new ReplayAttachment { PlayerName = "Vaxei", OsuFile = beatmapPath, SourcePath = "/b.osr" };
+            var third = new ReplayAttachment { PlayerName = "mrekk", OsuFile = beatmapPath, SourcePath = "/c.osr" };
+
+            store.Register(first);
+            store.Register(second);
+            store.Register(third);
+
+            Assert.That(store.AllForOsuFile(beatmapPath), Is.EqualTo(new[] { first, second, third }),
+                "kept in the order they were imported, which is the order they were dropped");
+            Assert.That(store.ForOsuFile(beatmapPath), Is.SameAs(first),
+                "the single-replay view stays the first one");
+        }
+
+        /// <summary>
+        /// Re-importing the same .osr — a re-drop, or the same path repeated on the command line —
+        /// must not turn one player into two identical cursors.
+        /// </summary>
+        [Test]
+        public void ReRegisteringTheSameFileReplacesItRatherThanDoublingIt()
+        {
+            var store = new ReplayStore();
+
+            store.Register(new ReplayAttachment { PlayerName = "WhiteCat", OsuFile = beatmapPath, SourcePath = "/a.osr" });
+            store.Register(new ReplayAttachment { PlayerName = "Vaxei", OsuFile = beatmapPath, SourcePath = "/b.osr" });
+            store.Register(new ReplayAttachment { PlayerName = "WhiteCat (again)", OsuFile = beatmapPath, SourcePath = "/a.osr" });
+
+            var all = store.AllForOsuFile(beatmapPath);
+
+            Assert.That(all, Has.Count.EqualTo(2));
+            Assert.That(all[0].PlayerName, Is.EqualTo("WhiteCat (again)"), "replaced in place, keeping its position");
+            Assert.That(all[1].PlayerName, Is.EqualTo("Vaxei"));
+        }
+
+        /// <summary>
+        /// The queue entry carries the whole group, and <c>Replay</c> stays the first of them so
+        /// everything that only ever shows one credit is untouched.
+        /// </summary>
+        [Test]
+        public void AQueueEntryCarriesEveryReplayAndReportsTheFirstAsItsOwn()
+        {
+            var a = new ReplayAttachment { PlayerName = "WhiteCat" };
+            var b = new ReplayAttachment { PlayerName = "Vaxei" };
+
+            var set = new BeatmapSetInfo { Replays = new[] { a, b } };
+
+            Assert.That(set.Replay, Is.SameAs(a));
+            Assert.That(set.Replays, Has.Count.EqualTo(2));
+
+            // And the single-replay setter still works, for every path that only ever has one.
+            var single = new BeatmapSetInfo { Replay = b };
+
+            Assert.That(single.Replays, Is.EqualTo(new[] { b }));
+            Assert.That(new BeatmapSetInfo().Replay, Is.Null);
+            Assert.That(new BeatmapSetInfo().Replays, Is.Empty);
+        }
+
+        [Test]
+        public void TheCreditNamesEveryPlayerUpToAPointAndThenCountsTheRest()
+        {
+            Assert.That(credit("WhiteCat"), Is.EqualTo("WhiteCat"));
+            Assert.That(credit("WhiteCat", "Vaxei"), Is.EqualTo("WhiteCat and Vaxei"));
+            Assert.That(credit("WhiteCat", "Vaxei", "mrekk"), Is.EqualTo("WhiteCat, Vaxei and 1 other"));
+            Assert.That(credit("WhiteCat", "Vaxei", "mrekk", "Croa", "Aricin"), Is.EqualTo("WhiteCat, Vaxei and 3 others"));
+        }
+
+        [Test]
+        public void AReplayWithNoRecordedNameStillReadsAsSomebody()
+        {
+            Assert.That(credit(string.Empty), Is.EqualTo("an unknown player"));
+            Assert.That(credit("WhiteCat", string.Empty), Is.EqualTo("WhiteCat and an unknown player"));
+            Assert.That(DroppedFileImporter.PlayerCredit(Array.Empty<ReplayAttachment>()), Is.EqualTo("an unknown player"));
+        }
+
+        private static string credit(params string[] names)
+            => DroppedFileImporter.PlayerCredit(names.Select(n => new ReplayAttachment { PlayerName = n }).ToArray());
 
         // The checksum lookup is a field-restricted legacy search — the same mechanism the map-ID
         // lookup uses with option=setId — so the request has to actually carry option=checksum.

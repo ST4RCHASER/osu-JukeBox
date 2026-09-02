@@ -1,6 +1,7 @@
 #nullable enable
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
@@ -16,6 +17,7 @@ using osu.Framework.Bindables;
 using osu.Framework.Graphics;
 using osu.Framework.Logging;
 using osu.Framework.Platform;
+using osu.Framework.Threading;
 using osu.Game.Scoring;
 
 namespace JukeBox.Game.Import;
@@ -82,7 +84,41 @@ public partial class DroppedFileImporter : Component
             subscribedWindow.DragDrop += onWindowDragDrop;
     }
 
-    private void onWindowDragDrop(string path) => Schedule(() => Import(path));
+    /// <summary>
+    /// Paths dropped in one gesture but delivered one event at a time, waiting to be imported
+    /// together. See <see cref="onWindowDragDrop"/>.
+    /// </summary>
+    private readonly List<string> pendingDrop = new List<string>();
+
+    private ScheduledDelegate? pendingDropFlush;
+
+    /// <summary>
+    /// How long to keep collecting dropped paths before importing them as one batch. The OS
+    /// delivers a multi-file drop as one event PER FILE, so without this a five-replay drop is five
+    /// unrelated imports and there is nothing left to tell us they arrived together.
+    /// </summary>
+    internal const double DROP_BATCH_MS = 150;
+
+    private void onWindowDragDrop(string path) => Schedule(() =>
+    {
+        pendingDrop.Add(path);
+
+        // Trailing window: each further file in the same drop pushes the flush back, so the batch
+        // closes only once the drop has actually finished arriving.
+        pendingDropFlush?.Cancel();
+        pendingDropFlush = Scheduler.AddDelayed(() =>
+        {
+            pendingDropFlush = null;
+
+            string[] batch = pendingDrop.ToArray();
+            pendingDrop.Clear();
+
+            // Deliberately not awaited: a drop has no caller to await it, and the importer reports
+            // its own outcome through Notification. Discarded explicitly so that stays a decision
+            // rather than an oversight.
+            _ = ImportMany(batch);
+        }, DROP_BATCH_MS);
+    });
 
     /// <summary>
     /// Imports one dropped path. Fire-and-forget by design (a drop has no caller to await it), but
@@ -90,12 +126,31 @@ public partial class DroppedFileImporter : Component
     /// unrecognised extensions and unreadable files are reported through <see cref="Notification"/>
     /// rather than thrown.
     /// </summary>
-    public Task Import(string path)
-    {
-        var kind = DroppedFile.Classify(path);
-        Logger.Log($"[drop] {Path.GetFileName(path)} classified as {kind}");
+    public Task Import(string path) => ImportMany(new[] { path });
 
-        return importAsync(path, kind);
+    /// <summary>
+    /// Imports a whole drop at once. The batch matters for REPLAYS and only for replays: several
+    /// .osr naming the same beatmap are one viewing session, so they resolve and download that
+    /// beatmap once and arrive as a single queue entry carrying all of them. Replays for different
+    /// beatmaps, and every other kind of file, are imported independently exactly as before.
+    /// </summary>
+    public async Task ImportMany(IReadOnlyList<string> paths)
+    {
+        var replayPaths = new List<string>();
+
+        foreach (string path in paths)
+        {
+            var kind = DroppedFile.Classify(path);
+            Logger.Log($"[drop] {Path.GetFileName(path)} classified as {kind}");
+
+            if (kind == DroppedFileKind.Replay)
+                replayPaths.Add(path);
+            else
+                await importAsync(path, kind).ConfigureAwait(false);
+        }
+
+        if (replayPaths.Count > 0)
+            await importReplayBatchAsync(replayPaths).ConfigureAwait(false);
     }
 
     private async Task importAsync(string path, DroppedFileKind kind)
@@ -113,7 +168,10 @@ public partial class DroppedFileImporter : Component
                     break;
 
                 case DroppedFileKind.Replay:
-                    await importReplayAsync(path).ConfigureAwait(false);
+                    // Replays never reach here: ImportMany routes them all through the batch path
+                    // so a group can be recognised. Kept explicit so a future caller adding a
+                    // fourth kind doesn't quietly reintroduce the one-at-a-time replay import.
+                    await importReplayBatchAsync(new[] { path }).ConfigureAwait(false);
                     break;
 
                 default:
@@ -190,19 +248,52 @@ public partial class DroppedFileImporter : Component
     /// beatmap is cached, decode the replay against it, and queue the set with the replay attached
     /// so playback renders the real play instead of autoplay.
     /// </summary>
-    private async Task importReplayAsync(string path)
+    /// <summary>
+    /// Imports a batch of dropped .osr, grouped by the beatmap each was PLAYED ON — the replay's
+    /// own MD5, which is the only beatmap identity a .osr carries. Grouping on that rather than on
+    /// title is what makes it exact: two people playing the same song on different difficulties, or
+    /// on a re-upload of the set, are genuinely different beatmaps and stay separate entries.
+    ///
+    /// <para>
+    /// Each group resolves and downloads its beatmap ONCE and becomes ONE queue entry carrying all
+    /// of its replays, so five .osr for one map is one row credited to five people rather than five
+    /// identical rows. Headers that won't read are reported and dropped from the batch rather than
+    /// failing the rest of it.
+    /// </para>
+    /// </summary>
+    private async Task importReplayBatchAsync(IReadOnlyList<string> paths)
     {
-        OsrHeader header;
+        var byBeatmap = new Dictionary<string, List<(string Path, OsrHeader Header)>>(StringComparer.OrdinalIgnoreCase);
 
-        try
+        foreach (string path in paths)
         {
-            header = await Task.Run(() => OsrReader.ReadHeader(path)).ConfigureAwait(false);
+            OsrHeader header;
+
+            try
+            {
+                header = await Task.Run(() => OsrReader.ReadHeader(path)).ConfigureAwait(false);
+            }
+            catch (InvalidDataException e)
+            {
+                Notify($"Not a readable replay: {e.Message}", isError: true);
+                continue;
+            }
+
+            if (!byBeatmap.TryGetValue(header.BeatmapMd5, out var group))
+                byBeatmap[header.BeatmapMd5] = group = new List<(string, OsrHeader)>();
+
+            group.Add((path, header));
         }
-        catch (InvalidDataException e)
-        {
-            Notify($"Not a readable replay: {e.Message}", isError: true);
-            return;
-        }
+
+        foreach (var group in byBeatmap.Values)
+            await importReplayGroupAsync(group).ConfigureAwait(false);
+    }
+
+    /// <summary>One beatmap's worth of replays: resolve it once, decode each replay against it, and
+    /// queue a single entry carrying all of them.</summary>
+    private async Task importReplayGroupAsync(IReadOnlyList<(string Path, OsrHeader Header)> group)
+    {
+        var header = group[0].Header;
 
         string player = header.PlayerName.Length > 0 ? header.PlayerName : "an unknown player";
 
@@ -221,53 +312,94 @@ public partial class DroppedFileImporter : Component
         // The replay names ONE .osu by checksum; the set generally has several. Matching here is
         // what lets playback select the difficulty actually played.
         string? osuFile = await Task.Run(() => ResolveDifficulty(cached, found, header.BeatmapMd5)).ConfigureAwait(false);
-        Score? score = null;
 
         if (osuFile == null)
             Logger.Log($"[drop] set {found.Id} has no difficulty matching the replay's checksum — falling back to autoplay on its default difficulty", level: LogLevel.Important);
-        else
+
+        var attachments = new List<ReplayAttachment>(group.Count);
+
+        // One decode per replay, all against the SAME difficulty — the group is defined by that
+        // difficulty's checksum, so there is nothing per-replay left to resolve.
+        foreach (var (path, replayHeader) in group)
         {
-            try
+            Score? score = null;
+
+            if (osuFile != null)
             {
-                score = await Task.Run(() => new JukeBoxScoreDecoder(osuFile).Decode(path)).ConfigureAwait(false);
+                try
+                {
+                    score = await Task.Run(() => new JukeBoxScoreDecoder(osuFile).Decode(path)).ConfigureAwait(false);
+                }
+                catch (Exception e)
+                {
+                    // The set and difficulty are still worth queueing (with the credit shown) even
+                    // if the frames themselves won't decode — the user gets the map they dropped.
+                    Logger.Error(e, $"[drop] failed to decode replay '{path}' — queueing the beatmap with autoplay instead");
+                }
             }
-            catch (Exception e)
+
+            var mods = ReplayMods.ForGameplay(score);
+            var (rateTempo, rateFrequency) = ReplayMods.TrackAdjustmentsFor(mods);
+
+            var attachment = new ReplayAttachment
             {
-                // The set and difficulty are still worth queueing (with the credit shown) even if
-                // the frames themselves won't decode — the user gets the map they dropped.
-                Logger.Error(e, $"[drop] failed to decode replay '{path}' — queueing the beatmap with autoplay instead");
+                PlayerName = replayHeader.PlayerName,
+                SourcePath = path,
+                BeatmapMd5 = replayHeader.BeatmapMd5,
+                OsuFile = osuFile,
+                Score = score,
+                ModAcronyms = ReplayMods.Acronyms(mods),
+                RateTempo = rateTempo,
+                RateFrequency = rateFrequency,
+                PlayedAt = replayHeader.PlayedAt,
+            };
+
+            if (attachment.ModAcronyms.Count > 0)
+            {
+                Logger.Log($"[drop] {PlayerLabel(attachment)} played with {string.Join(" ", attachment.ModAcronyms)}"
+                           + $" at {attachment.Rate:0.##}× speed (tempo {rateTempo:0.##}, frequency {rateFrequency:0.##})");
             }
+
+            replays.Register(attachment);
+            attachments.Add(attachment);
         }
 
-        var mods = ReplayMods.ForGameplay(score);
-        var (rateTempo, rateFrequency) = ReplayMods.TrackAdjustmentsFor(mods);
-
-        var attachment = new ReplayAttachment
-        {
-            PlayerName = header.PlayerName,
-            SourcePath = path,
-            BeatmapMd5 = header.BeatmapMd5,
-            OsuFile = osuFile,
-            Score = score,
-            ModAcronyms = ReplayMods.Acronyms(mods),
-            RateTempo = rateTempo,
-            RateFrequency = rateFrequency,
-            PlayedAt = header.PlayedAt,
-        };
-
-        if (attachment.ModAcronyms.Count > 0)
-        {
-            Logger.Log($"[drop] {player} played with {string.Join(" ", attachment.ModAcronyms)}"
-                       + $" at {attachment.Rate:0.##}× speed (tempo {rateTempo:0.##}, frequency {rateFrequency:0.##})");
-        }
-
-        replays.Register(attachment);
-        found.Replay = attachment;
+        found.Replays = attachments;
 
         await onUpdateThread(() => jukebox.EnqueueAndMaybePlayAsync(found, announce: false)).ConfigureAwait(false);
 
-        Notify($"Added: {found.DisplayTitle} — played by {player}", isError: false);
+        Notify($"Added: {found.DisplayTitle} — played by {PlayerCredit(attachments)}", isError: false);
     }
+
+    /// <summary>One replay's player, as something that reads in a sentence when the name is empty.</summary>
+    internal static string PlayerLabel(ReplayAttachment replay)
+        => replay.PlayerName.Length > 0 ? replay.PlayerName : "an unknown player";
+
+    /// <summary>
+    /// The players of a group, as a credit line: "A", "A and B", "A, B and C". Beyond
+    /// <see cref="CREDIT_NAMES"/> it becomes "A, B and 6 others" rather than a paragraph.
+    /// </summary>
+    internal static string PlayerCredit(IReadOnlyList<ReplayAttachment> group)
+    {
+        if (group.Count == 0)
+            return "an unknown player";
+
+        var names = group.Select(PlayerLabel).ToList();
+
+        if (names.Count == 1)
+            return names[0];
+
+        if (names.Count > CREDIT_NAMES)
+        {
+            int others = names.Count - CREDIT_NAMES;
+            return $"{string.Join(", ", names.Take(CREDIT_NAMES))} and {others} other{(others == 1 ? string.Empty : "s")}";
+        }
+
+        return $"{string.Join(", ", names.Take(names.Count - 1))} and {names[^1]}";
+    }
+
+    /// <summary>How many players a credit names before it starts counting the rest.</summary>
+    internal const int CREDIT_NAMES = 2;
 
     /// <summary>
     /// Finds the beatmapset a replay's beatmap checksum belongs to — the only identity a replay

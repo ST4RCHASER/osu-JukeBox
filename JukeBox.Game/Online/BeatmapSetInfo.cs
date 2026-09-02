@@ -1,5 +1,6 @@
 #nullable enable
 
+using System;
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -72,7 +73,26 @@ public class BeatmapSetInfo
     /// bookkeeping to keep in step. Never serialised — no mirror has a field for it.
     /// </summary>
     [JsonIgnore]
-    public Replays.ReplayAttachment? Replay { get; set; }
+    public Replays.ReplayAttachment? Replay
+    {
+        get => Replays.Count > 0 ? Replays[0] : null;
+        set => Replays = value == null
+            ? Array.Empty<Replays.ReplayAttachment>()
+            : new[] { value };
+    }
+
+    /// <summary>
+    /// EVERY replay that resolved to this set — several when a batch of .osr for the same beatmap
+    /// arrived together, which is one viewing session rather than several. Empty for a set that
+    /// came from an ordinary search or download.
+    ///
+    /// <para>
+    /// <see cref="Replay"/> is the first of these and stays the single-replay view, so everything
+    /// that only ever shows one credit is unchanged.
+    /// </para>
+    /// </summary>
+    [JsonIgnore]
+    public IReadOnlyList<Replays.ReplayAttachment> Replays { get; set; } = Array.Empty<Replays.ReplayAttachment>();
     // Prefer the romanized Title/Artist: the default font has no CJK (or other non-Latin) glyph
     // coverage, so preferring TitleUnicode/ArtistUnicode drew as "????" tofu boxes whenever a set's
     // metadata was non-Latin. Fall back to the unicode variant only when the romanized one is
