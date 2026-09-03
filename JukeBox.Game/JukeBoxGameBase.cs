@@ -363,6 +363,11 @@ namespace JukeBox.Game
                 config.GetBindable<string>(JukeBoxSetting.OsuClientSecret));
             dependencies.Cache(officialSearch);
 
+            // The signed-in osu! account (Settings -> Account). Cached unconditionally, like the
+            // search above: with nobody connected it simply reports no token, and every feature
+            // that needs one treats that as "unavailable" rather than as an error.
+            dependencies.Cache(new OsuAccount(new OsuOAuth(http), config));
+
             var cache = new BeatmapCache(Host.Storage.GetFullPath("cache"), mirror, config.Get<bool>(JukeBoxSetting.NoVideoDownloads));
             dependencies.Cache(cache);
 

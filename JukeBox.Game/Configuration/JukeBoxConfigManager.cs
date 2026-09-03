@@ -143,6 +143,30 @@ public enum JukeBoxSetting
     OsuClientSecret,
 
     /// <summary>
+    /// The signed-in user's OAuth access token (see <see cref="Online.OsuAccount"/>). Short-lived
+    /// and refreshed automatically; stored only so a restart doesn't need a round trip before the
+    /// first request. Treated exactly like <see cref="OsuClientSecret"/>: never logged, never shown.
+    /// </summary>
+    OsuUserAccessToken,
+
+    /// <summary>
+    /// The refresh token — the long-lived half, and the one that actually means "this account is
+    /// connected". osu! ROTATES it on every refresh, so it is rewritten each time rather than
+    /// written once. Clearing it is what Disconnect does.
+    /// </summary>
+    OsuUserRefreshToken,
+
+    /// <summary>When <see cref="OsuUserAccessToken"/> expires, ISO-8601 round-trip ("O") in UTC.</summary>
+    OsuUserTokenExpiry,
+
+    /// <summary>The connected account's username. The only part of the sign-in shown in the UI — a
+    /// person needs to see WHOSE account is connected, and nothing else.</summary>
+    OsuUserName,
+
+    /// <summary>The connected account's numeric osu! id.</summary>
+    OsuUserId,
+
+    /// <summary>
     /// The gameplay mods the Chart tab applies to the autoplay chart, as a comma-separated list of
     /// osu! acronyms ("HD,HR,DT"). Stored as acronyms rather than one boolean key per mod so the
     /// set can grow without churning this enum — and because an acronym is exactly how osu! itself
@@ -486,6 +510,11 @@ public class JukeBoxConfigManager : IniConfigManager<JukeBoxSetting>
         SetDefault(JukeBoxSetting.SearchApi, SearchApi.Mirror);
         SetDefault(JukeBoxSetting.OsuClientId, string.Empty);
         SetDefault(JukeBoxSetting.OsuClientSecret, string.Empty);
+        SetDefault(JukeBoxSetting.OsuUserAccessToken, string.Empty);
+        SetDefault(JukeBoxSetting.OsuUserRefreshToken, string.Empty);
+        SetDefault(JukeBoxSetting.OsuUserTokenExpiry, string.Empty);
+        SetDefault(JukeBoxSetting.OsuUserName, string.Empty);
+        SetDefault(JukeBoxSetting.OsuUserId, 0);
 
         SetDefault(JukeBoxSetting.ShowStoryboard, true);
         SetDefault(JukeBoxSetting.ShowVideo, true);

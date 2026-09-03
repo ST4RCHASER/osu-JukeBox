@@ -22,6 +22,7 @@ using osu.Framework.Graphics.Video;
 using osu.Framework.Extensions.ObjectExtensions;
 using osu.Framework.Input.Events;
 using osu.Framework.Localisation;
+using osu.Framework.Logging;
 using osu.Framework.Platform;
 using osu.Game.Configuration;
 using osu.Game.Graphics;
@@ -95,6 +96,11 @@ public partial class SettingsOverlay : FocusedOverlayContainer, ITabSearch
     [Resolved(canBeNull: true)]
     private OsuConfigManager? lazerConfig { get; set; }
 
+    /// <summary>The signed-in osu! account. Null in bare scenes that cache no account, where the
+    /// section shows its disconnected state and the button reports the missing service.</summary>
+    [Resolved(canBeNull: true)]
+    private OsuAccount? account { get; set; }
+
     /// <summary>The shared per-layer storyboard visibility. Nullable like the rest: a bare test
     /// scene that caches no services still builds the panel, with the layer rows simply inert.</summary>
     [Resolved(canBeNull: true)]
@@ -163,6 +169,11 @@ public partial class SettingsOverlay : FocusedOverlayContainer, ITabSearch
     private SettingsEnumDropdown<SearchApi> searchApiDropdown = null!;
     private SettingsTextBox clientIdTextBox = null!;
     private SettingsPasswordTextBox clientSecretTextBox = null!;
+
+    // ---- Account (osu! sign-in) ----
+    private SettingsButton accountButton = null!;
+    private OsuTextFlowContainer accountStatus = null!;
+    private OsuTextFlowContainer accountHint = null!;
 
     // Wraps the three official-API-only rows so "Search API = Mirror" hides the whole block in one
     // write. Hidden by Alpha (not removed) because these rows carry live config bindables that must
@@ -250,6 +261,19 @@ public partial class SettingsOverlay : FocusedOverlayContainer, ITabSearch
     /// <summary>Test-only: the block of official-API credential rows, present only while the
     /// official search backend is selected.</summary>
     internal Container OfficialCredentials => officialCredentials;
+
+    /// <summary>Test-only: the Account section's button and status line, so the connected/
+    /// disconnected presentation can be asserted without depending on layout.</summary>
+    internal SettingsButton AccountButton => accountButton;
+
+    internal string AccountStatusText => accountStatusText;
+
+    internal string AccountHintText => accountHintText;
+
+    // TextFlowContainer is write-only for Text, so the strings are kept here too — the tests need
+    // to read back what the section is actually telling the user.
+    private string accountStatusText = string.Empty;
+    private string accountHintText = string.Empty;
 
     /// <summary>Test seam (JukeBox.Game.Tests has InternalsVisibleTo): replaces
     /// <see cref="osu.Framework.Platform.GameHost.OpenUrlExternally"/> so tests can assert the
@@ -671,8 +695,9 @@ public partial class SettingsOverlay : FocusedOverlayContainer, ITabSearch
                                 },
                                 Colour = Theme.TextTertiary,
                                 Text = "Create an OAuth application on your osu! account page and paste its id and "
-                                       + "secret here. The callback URL can be left blank. Nothing about your account "
-                                       + "is read — the credentials only unlock osu!'s own beatmap search.",
+                                       + "secret here. For beatmap search alone the callback URL can be left blank; to "
+                                       + "sign in under Account (which is what spectating needs) it must be set — see "
+                                       + "that section for the exact URL.",
                             },
                             new SettingsButton
                             {
@@ -685,6 +710,8 @@ public partial class SettingsOverlay : FocusedOverlayContainer, ITabSearch
                 discordPresenceCheckbox = new SettingsCheckbox { LabelText = "Discord Rich Presence" },
             },
         });
+
+        sections.Add(createAccountSection());
 
         // Last section, and deliberately so: these are one-shot destructive actions rather than
         // settings, and putting them anywhere above would mean scrolling past a pair of delete
@@ -769,6 +796,53 @@ public partial class SettingsOverlay : FocusedOverlayContainer, ITabSearch
             syncing = false;
         });
     }
+
+    /// <summary>
+    /// Signing in to osu! as yourself — what the spectate feature needs in order to download the
+    /// replays it shows.
+    ///
+    /// <para>
+    /// The sign-in happens on osu!'s OWN login page in the browser (OAuth authorization code); this
+    /// app never sees the password. It uses the same client id/secret from the Online section
+    /// above, which means the user's OAuth application must have its Redirect URI set to exactly
+    /// <see cref="OsuOAuth.RedirectUri"/> — printed here rather than merely documented, because a
+    /// blank or mismatched one is the single most likely way this fails, with an error message that
+    /// explains nothing on its own.
+    /// </para>
+    /// </summary>
+    private Drawable createAccountSection()
+    {
+        accountHintText = "Opens osu! in your browser to sign in — osu!JukeBox never sees your password. "
+                          + $"Your OAuth application's Redirect URI must be exactly {OsuOAuth.RedirectUri}. "
+                          + "The connection is only used to look up players and download their replays for spectating.";
+
+        return new LazerSection("Account", FontAwesome.Solid.User)
+        {
+            Children = new Drawable[]
+            {
+                accountStatus = descriptionText(string.Empty),
+                accountButton = new SettingsButton { Text = "Connect osu! account" },
+                accountHint = descriptionText(accountHintText),
+            },
+        };
+    }
+
+    /// <summary>The small muted paragraph style the credential block already uses, factored out so
+    /// the Account section reads identically rather than approximately.</summary>
+    private static OsuTextFlowContainer descriptionText(string text) => new OsuTextFlowContainer(t => t.Font = OsuFont.GetFont(size: 12))
+    {
+        RelativeSizeAxes = Axes.X,
+        AutoSizeAxes = Axes.Y,
+        Padding = new MarginPadding
+        {
+            Left = SettingsPanel.CONTENT_PADDING.Left,
+            Right = SettingsPanel.CONTENT_PADDING.Right,
+            Top = 8,
+            Bottom = 8,
+        },
+        Colour = Theme.TextTertiary,
+        Text = text,
+    };
 
     /// <summary>
     /// The radio: whether it plays at all, and what it picks from.
@@ -958,6 +1032,8 @@ public partial class SettingsOverlay : FocusedOverlayContainer, ITabSearch
         else
             updateRadioFilterAvailability(SearchFilters.All);
 
+        bindAccountSection();
+
         detachPlayerCheckbox.Current = config.GetBindable<bool>(JukeBoxSetting.DetachPlayer);
 
         // "Play on main window too" only means something while the player IS detached; while it
@@ -1029,6 +1105,93 @@ public partial class SettingsOverlay : FocusedOverlayContainer, ITabSearch
         {
             Show();
         }
+    }
+
+    /// <summary>
+    /// Makes the Account section live: the button connects or disconnects depending on state, and
+    /// the status line names whoever is signed in.
+    /// </summary>
+    private void bindAccountSection()
+    {
+        if (account == null)
+        {
+            setAccountStatus("Sign-in isn't available in this window.");
+            accountButton.Enabled.Value = false;
+            return;
+        }
+
+        account.Username.BindValueChanged(_ => updateAccountSection(), true);
+        account.IsConnected.BindValueChanged(_ => updateAccountSection(), true);
+
+        accountButton.Action = () =>
+        {
+            if (account.IsConnected.Value)
+            {
+                account.Disconnect();
+                return;
+            }
+
+            connectAccount();
+        };
+    }
+
+    private void updateAccountSection()
+    {
+        if (account == null)
+            return;
+
+        bool connected = account.IsConnected.Value;
+
+        accountButton.Text = connected ? "Disconnect osu! account" : "Connect osu! account";
+
+        setAccountStatus(connected
+            ? $"Signed in as {(account.Username.Value.Length > 0 ? account.Username.Value : "your osu! account")}."
+            : "Not signed in.");
+    }
+
+    /// <summary>
+    /// Runs the sign-in and reports the outcome in the section's own status line.
+    ///
+    /// <para>
+    /// Deliberately fire-and-forget with everything caught: the flow waits on a browser the user
+    /// may simply close, and an unobserved faulted task there would take the update thread down
+    /// (the same abort path a stray exception on any framework thread takes).
+    /// </para>
+    /// </summary>
+    private async void connectAccount()
+    {
+        accountButton.Enabled.Value = false;
+        setAccountStatus($"Waiting for osu! in your browser… (callback: {OsuOAuth.RedirectUri})");
+
+        try
+        {
+            await account!.ConnectAsync(openUrl).ConfigureAwait(false);
+        }
+        catch (OsuOAuthException e)
+        {
+            // Already written for a person — see OsuOAuth.DescribeTokenError, which is where the
+            // redirect-URI case gets its actionable sentence.
+            Schedule(() => setAccountStatus(e.Message));
+        }
+        catch (Exception e)
+        {
+            Logger.Log($"osu! sign-in failed: {e.GetBaseException().Message}", level: LogLevel.Important);
+            Schedule(() => setAccountStatus("Sign-in failed. See the log for details."));
+        }
+        finally
+        {
+            Schedule(() =>
+            {
+                accountButton.Enabled.Value = true;
+                updateAccountSection();
+            });
+        }
+    }
+
+    private void setAccountStatus(string text)
+    {
+        accountStatusText = text;
+        accountStatus.Text = text;
     }
 
     private void onAudioDeviceChanged(string deviceName) => Schedule(updateAudioDevices);
