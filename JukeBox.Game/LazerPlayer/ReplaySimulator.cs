@@ -14,6 +14,7 @@ using osu.Game.Rulesets.Difficulty;
 using osu.Game.Rulesets.Mods;
 using osu.Game.Rulesets.Objects;
 using osu.Game.Scoring;
+using osu.Game.Scoring.Legacy;
 
 namespace JukeBox.Game.LazerPlayer;
 
@@ -135,6 +136,11 @@ public partial class ReplaySimulator : CompositeDrawable
     /// </summary>
     internal IReadOnlyList<IReadOnlyList<Mod>> SimulatedMods
         => simulations.Select(s => s.Mods).ToList();
+
+    /// <summary>Test hook: the scoring mode each play's numbers were recorded under, indexed like
+    /// <see cref="Timelines"/> — Classic for a CL play, Standardised otherwise.</summary>
+    internal IReadOnlyList<osu.Game.Rulesets.Scoring.ScoringMode> ScoringModes
+        => simulations.Select(s => s.ScoringMode).ToList();
 
     /// <summary>
     /// Test hook: whether every play was simulated ignoring the shared mod selection. False means
@@ -308,6 +314,10 @@ public partial class ReplaySimulator : CompositeDrawable
         /// <summary>The mods this play was simulated under, kept past the renderer's disposal.</summary>
         public IReadOnlyList<Mod> Mods { get; private set; } = Array.Empty<Mod>();
 
+        /// <summary>The scoring mode this play's numbers were recorded under — Classic for a play made
+        /// under the Classic mod, Standardised otherwise.</summary>
+        public osu.Game.Rulesets.Scoring.ScoringMode ScoringMode { get; private set; }
+
         /// <summary>
         /// Whether this play's renderer was told to ignore the shared mod selection. Captured from
         /// the layer rather than assumed, so that removing the flag at the construction site is
@@ -349,7 +359,22 @@ public partial class ReplaySimulator : CompositeDrawable
             Mods = Layer.ActiveMods;
             RecordedModsOnly = Layer.UseRecordedReplayModsOnly;
 
+            // A play made under Classic (every stable replay, or a per-player CL override) must be
+            // SCORED the classic way too — its rail number and its place in a score-ranked knockout
+            // are the classic score, not lazer's standardised one. Non-classic plays stay
+            // standardised. Per replay, off its own mods.
+            bool classic = Mods.Any(m => m is ModClassic);
+            ScoringMode = classic ? osu.Game.Rulesets.Scoring.ScoringMode.Classic : osu.Game.Rulesets.Scoring.ScoringMode.Standardised;
+
             var score = Layer.LiveScore;
+
+            // For a classic play, each recorded score is lazer's OWN standardised→classic conversion
+            // (ScoreInfoExtensions.GetDisplayScore), fed from the live processor via PopulateScore into
+            // a single reused ScoreInfo — no per-judgement allocation, no re-implementing the formula.
+            ScoreInfo? classicScore = classic && Layer.Ruleset != null
+                ? new ScoreInfo { Ruleset = Layer.Ruleset.RulesetInfo }
+                : null;
+
             var performance = performanceFor(Layer);
 
             Layer.DrawableRuleset.NewResult += result =>
@@ -367,9 +392,21 @@ public partial class ReplaySimulator : CompositeDrawable
 
                 lastCombo = combo;
 
+                long total;
+
+                if (classicScore != null)
+                {
+                    score.PopulateScore(classicScore);
+                    total = classicScore.GetDisplayScore(osu.Game.Rulesets.Scoring.ScoringMode.Classic);
+                }
+                else
+                {
+                    total = score.TotalScore.Value;
+                }
+
                 Timeline.Record(new TimelinePoint(
                     result.TimeAbsolute,
-                    score.TotalScore.Value,
+                    total,
                     combo,
                     score.Accuracy.Value,
                     broke,

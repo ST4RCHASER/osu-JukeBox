@@ -1005,6 +1005,33 @@ namespace JukeBox.Game.Tests.Visual
         }
 
         /// <summary>
+        /// A Classic (CL) play is SCORED under classic rules, a non-CL play under standardised — per
+        /// player, off its own mods. Driven here through the override store (the same per-replay mod
+        /// path that carries CL): one player forced to Classic, one forced to no mods.
+        /// </summary>
+        [Test]
+        public void AClassicPlayIsScoredClassicAndANonClassicPlayStandardised()
+        {
+            AddStep("build two, one forced Classic, one forced no-mod", () =>
+            {
+                var replays = new[] { replayFor("player0"), replayFor("player1") };
+                overrideStore.SetMods(replays[0], System.Array.Empty<Mod>());
+                overrideStore.SetMods(replays[1], new Mod[] { new osu.Game.Rulesets.Osu.Mods.OsuModClassic() });
+
+                builtReplays = replays;
+                host.Child = combine = new MultiReplayCombine(beatmapPath, replays);
+                host.Clock = framed = new FramedClock(manual);
+                manual.CurrentTime = 0;
+            });
+
+            AddUntilStep("recorded", () => combine.Simulator.AllComplete);
+
+            AddAssert("player 0 scored standardised, player 1 classic", () =>
+                combine.Simulator.ScoringModes[0] == osu.Game.Rulesets.Scoring.ScoringMode.Standardised
+                && combine.Simulator.ScoringModes[1] == osu.Game.Rulesets.Scoring.ScoringMode.Classic);
+        }
+
+        /// <summary>
         /// A per-player MOD override re-scores that one play under the chosen mods, leaving every
         /// other player on the mods they recorded. Asserted on the mods the simulator actually
         /// computed each player's numbers under — the effect, not the fact that a field was set.
