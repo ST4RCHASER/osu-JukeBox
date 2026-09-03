@@ -283,43 +283,33 @@ namespace JukeBox.Game.Tests.Visual
         /// cushion took the same case to 5.2x.
         /// </para>
         /// </summary>
+        /// <summary>
+        /// The rethink of the freeze: every play is PRELOADED to completion up front, flat out, with
+        /// no regard for where the playhead is. The old model kept a cushion just ahead of the
+        /// playhead and stopped once it had one — which is exactly the race that fell behind and
+        /// froze the board on a heavy map. Held at time zero, the simulator must now still record the
+        /// WHOLE map, and Progress must climb to one.
+        /// </summary>
         [Test]
-        public void SimulationStopsAtItsCushionAndResumesAsThePlayheadMoves()
+        public void EveryPlayIsPreloadedToCompletionRegardlessOfThePlayhead()
         {
             var manual = new ManualClock();
             var framed = new FramedClock(manual);
 
-            // A deliberately short cushion, so where it stops is somewhere this test can see rather
-            // than most of the way through the map.
-            AddStep("simulate three with a short cushion", () =>
+            AddStep("simulate three with the playhead pinned at zero", () =>
             {
                 host.Clock = framed;
                 manual.CurrentTime = 0;
 
                 host.Child = simulator = new ReplaySimulator(beatmapPath,
-                    new[] { replay("a"), replay("b"), replay("c") })
-                {
-                    LookaheadMs = 2500,
-                };
+                    new[] { replay("a"), replay("b"), replay("c") });
             });
 
-            AddUntilStep("it builds the cushion", () => simulator.SimulatedTo >= 2500);
-
-            AddStep("let it run on", () =>
-            {
-                for (int i = 0; i < 120; i++)
-                    host.UpdateSubTree();
-            });
-
-            AddAssert("then stops, rather than recording the whole map", () => !simulator.AllComplete);
-
-            AddStep("move the playhead to the end", () =>
-            {
-                manual.CurrentTime = timeOf(object_count - 1) + 2000;
-                framed.ProcessFrame();
-            });
-
-            AddUntilStep("it picks the work back up", () => simulator.AllComplete);
+            // The playhead never moves — under the old cushion model it would stop a couple of
+            // seconds in and wait. It must record the whole map anyway.
+            AddUntilStep("it records the whole map with the playhead still at zero", () => simulator.AllComplete);
+            AddAssert("and progress is complete", () => simulator.Progress >= 0.999);
+            AddAssert("the playhead never left zero", () => manual.CurrentTime == 0);
         }
 
         /// <summary>

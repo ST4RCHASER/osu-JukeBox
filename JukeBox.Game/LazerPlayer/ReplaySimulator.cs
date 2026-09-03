@@ -55,65 +55,47 @@ public partial class ReplaySimulator : CompositeDrawable
     public double SimulatedTo => simulations.Count == 0 ? 0 : simulations.Min(s => s.Timeline.SimulatedTo);
 
     /// <summary>
-    /// Milliseconds of real time per frame to spend once every play is recorded comfortably ahead
-    /// of the playhead. Small, because at that point there is nothing urgent left to do.
+    /// Milliseconds per frame spent simulating while the PRELOAD is still running — a big slice, on
+    /// purpose.
+    ///
+    /// <para>
+    /// This is the rethink of the 47-real-replays freeze. The old model tried to keep a cushion just
+    /// ahead of the playhead and back off once it had one; on a slider-heavy map under real load the
+    /// per-step cost is high enough that the simulation fell BELOW real time and the board froze
+    /// mid-song, no matter how the budget tiers were tuned — racing the playhead is the wrong model.
+    /// Now every timeline is simulated flat out to COMPLETION up front (the rail shows a progress
+    /// state until then), and once complete every number is a pure lookup with nothing simulating
+    /// live, so there is no playhead left to lose the race against. A finite amount of work done as
+    /// fast as the machine allows, rather than an open-ended race it can lose.
+    /// </para>
     /// </summary>
-    internal double BudgetMs { get; init; } = 4;
+    internal double PreloadBudgetMs { get; init; } = 40;
 
     /// <summary>
-    /// Milliseconds per frame to spend while the cushion is still being built — roughly two thirds
-    /// of a 60fps frame.
-    ///
-    /// <para>
-    /// A flat four milliseconds was not enough and the shortfall only showed up at high replay
-    /// counts. Measured on a five-minute map with the simulation running alone: at 8 replays it ran
-    /// 31x ahead of the playhead, at 24 it ran 5.9x, and at 47 it ran 1.72x. That last number looks
-    /// like a margin and is not — it was measured with nothing else on the update thread, while the
-    /// real app is also drawing the chart, the board and every hidden renderer. Fewer frames per
-    /// second means fewer budget slices per second, and the margin goes under 1x. Which is what the
-    /// user saw: 47 replays, numbers frozen from 2:26 of a 5:08 song.
-    /// </para>
-    ///
-    /// <para>
-    /// Spending this much is affordable precisely because it is temporary: the work is finite, it
-    /// front-loads into the opening seconds, and every renderer is disposed as its play finishes.
-    /// </para>
+    /// How far the preload has got, 0 to 1 — the least-advanced play's recording as a fraction of
+    /// the map's length, so the rail can show "simulating N%". One when every play is recorded.
     /// </summary>
-    internal double CatchUpBudgetMs { get; init; } = 12;
+    public double Progress
+    {
+        get
+        {
+            if (AllComplete)
+                return 1;
 
-    /// <summary>
-    /// Milliseconds per frame to spend when the board is about to FREEZE — the least-advanced play
-    /// has less than <see cref="EmergencyCushionMs"/> of lead on the playhead, or has fallen behind
-    /// it. This is the 47-real-replays case: with the visible chart, forty-seven cursors and the
-    /// board all on the update thread, plus the forty-seven hidden renderers the framework still
-    /// walks every frame, sustained throughput fell below 1x and the numbers froze mid-song.
-    ///
-    /// <para>
-    /// A whole frame's worth (and then some) is spent here on purpose: a brief drop in frame rate
-    /// while the simulation claws back its lead is the right trade against a scoreboard that stops
-    /// counting. It is self-limiting — the moment the lead is rebuilt the budget falls back to
-    /// <see cref="CatchUpBudgetMs"/> and then <see cref="BudgetMs"/>, so the stutter lasts only as
-    /// long as the emergency does.
-    /// </para>
-    /// </summary>
-    internal double EmergencyBudgetMs { get; init; } = 50;
+            double end = mapEndTime;
 
-    /// <summary>The lead below which the simulation is treated as an emergency and given
-    /// <see cref="EmergencyBudgetMs"/>. Kept above zero so it acts BEFORE the board actually freezes
-    /// rather than only once it already has.</summary>
-    internal double EmergencyCushionMs { get; init; } = 5_000;
+            if (end <= 0 || simulations.Count == 0)
+                return 0;
 
-    /// <summary>
-    /// How far ahead of the playhead every play should be recorded before easing off.
-    ///
-    /// <para>
-    /// A cushion rather than "simulate everything immediately": it bounds how much work is urgent,
-    /// so the budget goes to whichever play is closest to being needed instead of being spread over
-    /// forty-seven of them equally. Thirty seconds is comfortably more than a viewer can scrub past
-    /// before the simulation catches up again.
-    /// </para>
-    /// </summary>
-    internal double LookaheadMs { get; init; } = 30_000;
+            // The board is only as ready as its slowest player, so progress is the MINIMUM.
+            double least = simulations.Min(s => Math.Min(s.Timeline.SimulatedTo, end));
+            return Math.Clamp(least / end, 0, 1);
+        }
+    }
+
+    /// <summary>The map's last object time, cached from the first simulation to have loaded. Used as
+    /// the denominator for <see cref="Progress"/>.</summary>
+    private double mapEndTime;
 
     /// <summary>
     /// Steps to run on one play before re-checking which is furthest behind. Picking the laggard
@@ -225,43 +207,28 @@ public partial class ReplaySimulator : CompositeDrawable
         if (AllComplete)
             return;
 
-        double playhead = Clock.CurrentTime;
-
-        // How much lead the LEAST advanced play has on the playhead. Everything keys off this,
-        // because the board can only be trusted as far as its slowest player.
-        double budget = BudgetFor(SimulatedTo - playhead);
-
+        // Flat out to completion: no playhead, no cushion, no backing off. Spend a big slice every
+        // frame on whichever play is furthest behind until every timeline is recorded. The board
+        // shows a progress state meanwhile; after this there is nothing left to simulate live.
         var spent = Stopwatch.StartNew();
 
-        while (spent.Elapsed.TotalMilliseconds < budget)
+        while (spent.Elapsed.TotalMilliseconds < PreloadBudgetMs)
         {
-            // Always the play that is FURTHEST BEHIND. The board can only be trusted as far as its
-            // least advanced player, so that is the number worth raising; round-robin advanced all
-            // forty-seven in lockstep and let the whole board arrive late together.
+            // Always the play that is FURTHEST BEHIND, so the slowest player — the one the board is
+            // waiting on — is the one raised, rather than advancing all forty-seven in lockstep.
             var laggard = leastAdvanced();
 
             if (laggard == null)
                 break;
 
-            // Everyone has their cushion. Nothing here is urgent enough to spend a frame on.
-            if (laggard.Timeline.SimulatedTo - playhead > LookaheadMs)
-                break;
+            // Cache the map length off the first loaded play, for the progress fraction.
+            if (mapEndTime <= 0 && laggard.EndTime is { } end)
+                mapEndTime = end;
 
             for (int i = 0; i < steps_per_slice && !laggard.Timeline.Complete; i++)
                 advance(laggard);
         }
     }
-
-    /// <summary>
-    /// The per-frame time budget for a given <paramref name="cushion"/> (how far the least-advanced
-    /// play leads the playhead). Three tiers: overdrive when the lead is nearly gone or negative (the
-    /// board would otherwise freeze), a steady catch-up while the cushion is still being built, and a
-    /// trickle once it is comfortable. Pure so the escalation can be checked without a clock.
-    /// </summary>
-    internal double BudgetFor(double cushion)
-        => cushion < EmergencyCushionMs ? EmergencyBudgetMs
-         : cushion < LookaheadMs ? CatchUpBudgetMs
-         : BudgetMs;
 
     /// <summary>The incomplete play whose recording has got the least far, or null when all are done.</summary>
     private Simulation? leastAdvanced()

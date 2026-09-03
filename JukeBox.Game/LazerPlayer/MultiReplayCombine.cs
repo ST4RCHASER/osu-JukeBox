@@ -204,6 +204,11 @@ public partial class MultiReplayCombine : CompositeDrawable
         buildBoardWhenReady();
         attachCursors();
         updateCursors();
+
+        // Feed the preload progress to the rail so it can show "simulating N%" until every play is
+        // recorded — after which the whole board is a pure lookup.
+        if (board != null)
+            board.LoadingProgress = simulator.Progress;
     }
 
     /// <summary>
