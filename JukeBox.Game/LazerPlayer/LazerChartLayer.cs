@@ -27,6 +27,7 @@ using osu.Game.Rulesets.Mods;
 using osu.Game.Rulesets.Osu;
 using osu.Game.Rulesets.Taiko;
 using osu.Game.Rulesets.UI;
+using osu.Game.Rulesets.Scoring;
 using osu.Game.Scoring;
 using osu.Game.Skinning;
 
@@ -471,7 +472,49 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
         if (gameplayScore != null)
             drawableRuleset?.SetReplayScore(gameplayScore);
 
+        startLiveScoring();
         attachOsuReplayAnalysis();
+    }
+
+    /// <summary>
+    /// Live score, accuracy and combo for this layer's play — null unless
+    /// <see cref="TrackLiveScore"/> asked for it. The bindables move as the replay is judged, so a
+    /// display bound to them counts up the way a spectate client does.
+    /// </summary>
+    internal ScoreProcessor? LiveScore { get; private set; }
+
+    /// <summary>
+    /// Whether to run a <see cref="ScoreProcessor"/> alongside the play. Off by default: the single
+    /// chart shows no numbers, so judging for it would be bookkeeping nobody reads. Set before load.
+    /// </summary>
+    internal bool TrackLiveScore { get; init; }
+
+    /// <summary>
+    /// Feeds this layer's judgements into a score processor, which is the only way to get numbers
+    /// that MOVE: the .osr header carries the final totals alone, so anything drawn from it is
+    /// correct exactly once — at the end.
+    ///
+    /// <para>
+    /// This is lazer's own wiring minus the Player screen: a processor applied to the playable
+    /// beatmap, then fed the ruleset's results. RevertResult matters as much as NewResult — it is
+    /// what unwinds the numbers when the frame-stable clock runs backwards, which is what a seek
+    /// backwards is.
+    /// </para>
+    /// </summary>
+    private void startLiveScoring()
+    {
+        if (!TrackLiveScore || drawableRuleset == null || Ruleset == null || playableBeatmap == null)
+            return;
+
+        var processor = Ruleset.CreateScoreProcessor();
+
+        processor.Mods.Value = mods;
+        processor.ApplyBeatmap(playableBeatmap);
+
+        drawableRuleset.NewResult += processor.ApplyResult;
+        drawableRuleset.RevertResult += processor.RevertResult;
+
+        LiveScore = processor;
     }
 
     // NOTE: a previous fix here removed LegacyHalfDrum's own Masking, on the theory that some

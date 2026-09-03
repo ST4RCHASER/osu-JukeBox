@@ -5,13 +5,17 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using JukeBox.Game.Configuration;
 using JukeBox.Game.LazerPlayer;
 using JukeBox.Game.Replays;
 using JukeBox.Game.Tests.Import;
 using NUnit.Framework;
+using osu.Framework.Allocation;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Testing;
+using osu.Framework.Timing;
+using osu.Framework.Utils;
 
 namespace JukeBox.Game.Tests.Visual
 {
@@ -42,6 +46,11 @@ namespace JukeBox.Game.Tests.Visual
 
             beatmapPath = Path.Combine(tmp, "map [Hard].osu");
             File.WriteAllText(beatmapPath, osuWithObjects());
+
+            // A real (tiny) image, so "the cell carries the background" is testing a loaded texture
+            // rather than a path that happens to be non-null.
+            backgroundPath = Path.Combine(tmp, "bg.png");
+            File.WriteAllBytes(backgroundPath, onePixelPng);
 
             Clear();
             Add(host = new Container { RelativeSizeAxes = Axes.Both });
@@ -82,8 +91,28 @@ namespace JukeBox.Game.Tests.Visual
                                     .Select(i => replayFor($"player{i}", tempos != null ? tempos[i] : 1))
                                     .ToList();
 
-            host.Child = grid = new MultiReplayGrid(beatmapPath, replays);
+            host.Child = grid = new MultiReplayGrid(cachedSet(), beatmapPath, replays);
         }
+
+        /// <summary>
+        /// The minimum a cell needs to draw its own visuals: where the files are, and which one is
+        /// the background. Hand-built rather than loaded through the cache — nothing here is testing
+        /// the cache.
+        /// </summary>
+        private JukeBox.Game.Beatmaps.CachedBeatmapSet cachedSet() => new JukeBox.Game.Beatmaps.CachedBeatmapSet
+        {
+            SetId = 1,
+            Directory = tmp,
+            BackgroundFile = backgroundPath,
+            PreferredOsuFile = beatmapPath,
+            OsuFiles = { beatmapPath },
+        };
+
+        private string backgroundPath = null!;
+
+        /// <summary>Smallest valid PNG — one opaque pixel.</summary>
+        private static readonly byte[] onePixelPng = Convert.FromBase64String(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==");
 
         [Test]
         public void EveryReplayGetsItsOwnCellOnOneSharedClock()
@@ -172,6 +201,120 @@ namespace JukeBox.Game.Tests.Visual
                 return names.Count == 3 && names.Distinct().Count() == 3;
             });
         }
+
+        /// <summary>
+        /// The "all black" fix. A cell is the whole visual stack — the map's own background behind
+        /// the play — not gameplay on a black box, which is exactly what it used to be.
+        /// </summary>
+        [Test]
+        public void EveryCellDrawsTheMapsBackground()
+        {
+            AddStep("build four", () => buildGrid(4));
+            AddUntilStep("grid loaded", () => grid.IsLoaded && grid.Cells.Count == 4);
+
+            // Counted by TEXTURE IDENTITY, not "a sprite with some texture": the gameplay layers are
+            // full of skin sprites, so the loose version of this assertion passes with no background
+            // in the grid at all — which it did, until a mutant pointed it out.
+            AddAssert("one background sprite per cell, drawing the map's own art", () =>
+                backgroundSpriteCount() == 4);
+        }
+
+        private int backgroundSpriteCount() => grid.ChildrenOfType<osu.Framework.Graphics.Sprites.Sprite>()
+                                                   .Count(s => s.Texture != null
+                                                               && grid.SharedBackgroundTexture != null
+                                                               && ReferenceEquals(s.Texture, grid.SharedBackgroundTexture));
+
+        /// <summary>
+        /// The cells are read against the map's own art, so they need the dim the single chart gets
+        /// — and it has to follow the setting rather than being baked in at build.
+        /// </summary>
+        [Test]
+        public void TheBackgroundDimSettingReachesEveryCell()
+        {
+            AddStep("dim to 70%", () => config.SetValue(JukeBoxSetting.BackgroundDim, 0.7));
+            AddStep("build three", () => buildGrid(3));
+            AddUntilStep("grid loaded", () => grid.Cells.Count == 3);
+
+            AddAssert("every cell dimmed to match", () => cellDimAlphas().Count(a => Precision.AlmostEquals(a, 0.7f, 0.01f)) >= 3);
+
+            AddStep("dim to 20%", () => config.SetValue(JukeBoxSetting.BackgroundDim, 0.2));
+            AddAssert("and it follows live", () => cellDimAlphas().Count(a => Precision.AlmostEquals(a, 0.2f, 0.01f)) >= 3);
+        }
+
+        /// <summary>
+        /// Storyboards are per-cell decoded trees and videos are per-cell decoders, so past the
+        /// limit they go — ALL of them, not the tail. Inconsistent cells would be worse for a
+        /// comparison than uniformly plain ones.
+        /// </summary>
+        [Test]
+        public void StoryboardsAreAllOrNothingByCellCount()
+        {
+            AddStep("build at the limit", () => buildGrid(MultiReplayLayout.STORYBOARD_CELL_LIMIT));
+            AddUntilStep("loaded", () => grid.IsLoaded);
+            AddAssert("every cell has one", () => grid.StoryboardCells == MultiReplayLayout.STORYBOARD_CELL_LIMIT);
+
+            AddStep("build one over the limit", () => buildGrid(MultiReplayLayout.STORYBOARD_CELL_LIMIT + 1));
+            AddUntilStep("loaded", () => grid.IsLoaded);
+            AddAssert("none of them do", () => grid.StoryboardCells == 0);
+
+            AddAssert("but they all still have a background", () =>
+                backgroundSpriteCount() == MultiReplayLayout.STORYBOARD_CELL_LIMIT + 1);
+        }
+
+        /// <summary>
+        /// The "static, not running" fix, asserted at the mechanism rather than at a number: the
+        /// cells' figures now come from a score processor being FED judgements as the replay plays.
+        /// Judged hits climbing is what makes them move; before this they were the .osr header's
+        /// final totals, correct exactly once — at the end.
+        /// </summary>
+        [Test]
+        public void TheCellNumbersAreDrivenByJudgementsAsThePlayRuns()
+        {
+            var manual = new ManualClock();
+            var framed = new FramedClock(manual);
+
+            // Driven by hand rather than by the scene's own clock: the objects sit at 1000-2000ms,
+            // and gameplay has to be STEPPED through them for the frame-stable clock to judge
+            // anything — dropped straight past them, they expire unjudged and nothing is fed.
+            AddStep("build three on a manual clock", () =>
+            {
+                buildGrid(3);
+                host.Clock = framed;
+                manual.CurrentTime = 0;
+            });
+
+            AddUntilStep("grid loaded", () => grid.IsLoaded && grid.Cells.Count == 3);
+            AddAssert("every cell has a live processor", () => grid.Cells.All(c => c.LiveScore != null));
+
+            AddRepeatStep("run the play", () =>
+            {
+                manual.CurrentTime += 100;
+                framed.ProcessFrame();
+            }, 30);
+
+            AddUntilStep("every cell is being judged", () => grid.Cells.All(c => c.LiveScore!.JudgedHits > 0));
+        }
+
+        /// <summary>
+        /// One player's play must never move another's numbers — a shared processor would make the
+        /// whole comparison a lie, and is the obvious wrong way to build this.
+        /// </summary>
+        [Test]
+        public void EachCellScoresItsOwnPlayAndNobodyElses()
+        {
+            AddStep("build three", () => buildGrid(3));
+            AddUntilStep("grid loaded", () => grid.Cells.Count == 3);
+
+            AddAssert("three distinct processors", () =>
+                grid.Cells.Select(c => c.LiveScore).Distinct().Count() == 3);
+        }
+
+        private float[] cellDimAlphas() => grid.ChildrenOfType<osu.Framework.Graphics.Shapes.Box>()
+                                               .Select(b => b.Alpha)
+                                               .ToArray();
+
+        [Resolved]
+        private JukeBoxConfigManager config { get; set; } = null!;
 
         // The cost measurement that set MAX_GRID_CELLS was run here as a one-off and its numbers
         // written into that constant's doc comment. It is deliberately NOT a committed test: it

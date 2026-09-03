@@ -842,7 +842,7 @@ public partial class BeatmapVisuals : CompositeDrawable
                 Logger.Log($"Playing {forThisDifficulty.Count} replays of '{Path.GetFileName(osuFile)}' side by side"
                            + $" ({MultiReplayLayout.RenderedCount(forThisDifficulty.Count)} rendered)");
 
-                chartContainer.Add(multiGrid = new MultiReplayGrid(osuFile!, forThisDifficulty) { AlwaysPresent = true });
+                chartContainer.Add(multiGrid = new MultiReplayGrid(set, osuFile!, forThisDifficulty) { AlwaysPresent = true });
             }
             else
             {

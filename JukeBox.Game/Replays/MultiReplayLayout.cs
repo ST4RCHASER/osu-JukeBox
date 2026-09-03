@@ -91,6 +91,42 @@ public static class MultiReplayLayout
     public static int RenderedCount(int count) => Math.Clamp(count, 0, MAX_GRID_CELLS);
 
     /// <summary>
+    /// How many cells get a storyboard and video of their OWN. Past this the cells keep the map's
+    /// background — one shared texture, effectively free — and drop the moving part.
+    ///
+    /// <para>
+    /// The two halves cost very differently, which is the whole reason for a separate limit. A
+    /// background is ONE decode shared by every cell. A storyboard is a decoded element tree per
+    /// cell and a video is an entire decoder per cell, neither of which lazer's storyboard renderer
+    /// shares between instances — so this, not the cell count, is what decides whether a big grid
+    /// stays watchable.
+    /// </para>
+    ///
+    /// <para>
+    /// Four because a HEAVY storyboard has to still fit. N cell-sized storyboard layers were run in
+    /// a real window with the frame limiter off, and the update thread — the limiter here, not the
+    /// GPU — sustained, for a 2000-element storyboard: 1000fps at one cell, 582 at two, 215 at
+    /// four, 98 at eight and 61 at twelve. A 60fps frame is 16.7ms, so at four cells a heavy
+    /// storyboard costs about 4.7ms and leaves twelve for everything else; at eight it costs 10.2ms
+    /// and leaves six, which the eight gameplay renderers sharing that frame will not fit in. A
+    /// light (500-element) storyboard is comfortable even at twelve (273fps), but the limit has to
+    /// hold for the maps that actually have big storyboards, which are the maps people want to
+    /// watch this way.
+    /// </para>
+    ///
+    /// <para>
+    /// The video half is NOT measured to the same standard. N decoders were confirmed to run
+    /// independently and cost real CPU (0.06 cores at one cell, 0.18 at twelve), but against a
+    /// synthetic test pattern that is far cheaper to decode than a real map's video — so that
+    /// figure is a floor, not a budget, and video rides this same limit rather than one of its own.
+    /// </para>
+    /// </summary>
+    public const int STORYBOARD_CELL_LIMIT = 4;
+
+    /// <summary>Whether a grid of <paramref name="count"/> replays draws storyboards per cell.</summary>
+    public static bool StoryboardsInEveryCell(int count) => RenderedCount(count) <= STORYBOARD_CELL_LIMIT;
+
+    /// <summary>
     /// Whether every replay in <paramref name="replays"/> was played at the same speed.
     ///
     /// <para>
