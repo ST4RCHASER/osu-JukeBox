@@ -172,12 +172,27 @@ namespace JukeBox.Game.Tests.Online
             Assert.That(message, Does.Contain("Redirect URI"));
         }
 
+        /// <summary>
+        /// The bug a user actually hit. osu! answers a MISMATCHED REDIRECT URI with
+        /// invalid_client / "Client authentication failed" — league/oauth2-server's
+        /// validateRedirectUri throws invalidClient, the same error as genuinely bad credentials.
+        /// Verified live against a client whose id and secret work fine for other grants: the wrong
+        /// redirect returns exactly this, the right one gets through to "Cannot decrypt the
+        /// authorization code". So the message must lead with the redirect URI, or it sends people
+        /// to re-check credentials that were never the problem.
+        /// </summary>
         [Test]
-        public void BadClientCredentialsSaySo()
+        public void InvalidClientLeadsWithTheRedirectUriNotTheCredentials()
         {
             string message = OsuOAuth.DescribeTokenError("{\"error\":\"invalid_client\"}", 401);
 
-            Assert.That(message, Does.Contain("client id"));
+            Assert.That(message, Does.Contain(OsuOAuth.RedirectUri));
+            Assert.That(message, Does.Contain("Redirect URI"));
+
+            // Credentials are still mentioned, but only after — they are the less likely cause.
+            Assert.That(message.IndexOf("Redirect URI", StringComparison.Ordinal),
+                Is.LessThan(message.IndexOf("client id", StringComparison.Ordinal)),
+                "the redirect URI must be named before the credentials");
         }
 
         /// <summary>
@@ -278,6 +293,38 @@ namespace JukeBox.Game.Tests.Online
 
             Assert.That(async () => await waiting,
                 Throws.TypeOf<OsuOAuthException>().With.Message.Contains("declined"));
+        }
+
+        /// <summary>
+        /// When osu! refuses the request it renders the error in the BROWSER and never redirects, so
+        /// the callback we are waiting on is never called. Before this bound the app waited forever
+        /// on "waiting for osu!" while the real answer sat in a browser tab — which is exactly how
+        /// the reported bug presented.
+        /// </summary>
+        [Test]
+        public async Task ASignInThatOsuNeverCompletesGivesUpAndSaysWhy()
+        {
+            var handler = new FakeTokenHandler();
+            var config = newConfig();
+            var account = new OsuAccount(new OsuOAuth(new HttpClient(handler)), config);
+
+            config.SetValue(JukeBoxSetting.OsuClientId, "12345");
+            config.SetValue(JukeBoxSetting.OsuClientSecret, "shhh");
+
+            // The browser gets the URL and nothing ever calls back — exactly what happens when osu!
+            // refuses the request and renders the error on its own page instead of redirecting.
+            var connecting = account.ConnectAsync(_ => { }, signInTimeout: TimeSpan.FromMilliseconds(250));
+
+            // Bounded so a regression that removes the timeout FAILS here rather than hanging the suite.
+            var finished = await Task.WhenAny(connecting, Task.Delay(TimeSpan.FromSeconds(10)));
+
+            Assert.That(finished, Is.SameAs(connecting), "the sign-in never gave up — it would wait forever");
+
+            var error = Assert.ThrowsAsync<OsuOAuthException>(async () => await connecting);
+
+            // The diagnosis has to be in the message: the real error is in a browser tab we cannot read.
+            Assert.That(error!.Message, Does.Contain(OsuOAuth.RedirectUri));
+            Assert.That(account.IsConnected.Value, Is.False);
         }
 
         // ---- Token storage on the account --------------------------------------------------------

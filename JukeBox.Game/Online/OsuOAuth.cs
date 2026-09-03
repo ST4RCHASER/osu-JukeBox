@@ -44,12 +44,24 @@ namespace JukeBox.Game.Online
         public const string DEFAULT_SCOPE = "public";
 
         /// <summary>
-        /// The loopback port the callback listens on. FIXED, not ephemeral, and that is forced on
-        /// us rather than chosen: osu-web is Laravel Passport, which matches <c>redirect_uri</c> by
-        /// exact string against the app's registered value. RFC 8252's "allow any port for
-        /// loopback" relaxation is not implemented there, so a port picked per-run could never match
-        /// what the user registered. One fixed port is the only shape that works, which is why
-        /// <see cref="RedirectUri"/> is something we can print and ask the user to paste.
+        /// The loopback port the callback listens on. FIXED rather than ephemeral, because
+        /// <see cref="RedirectUri"/> uses the host name <c>localhost</c>.
+        ///
+        /// <para>
+        /// The nuance is worth recording, because it is the opposite of what the RFC suggests.
+        /// league/oauth2-server DOES implement RFC 8252 §7.3 — but its loopback test matches the IP
+        /// literals <c>127.0.0.1</c> and <c>[::1]</c> ONLY, never the name <c>localhost</c>
+        /// (RedirectUriValidator::isLoopbackUri). So a <c>127.0.0.1</c> redirect would be matched
+        /// ignoring its port and could use any port at all, while a <c>localhost</c> one is matched
+        /// as an exact string and must use the port the user registered.
+        /// </para>
+        ///
+        /// <para>
+        /// We stay on <c>localhost</c> with a fixed port anyway: users have already registered this
+        /// exact URI on their osu! applications, and switching to the IP literal would silently
+        /// break every one of them to buy port-independence nobody has asked for. If that ever
+        /// becomes worth having, it is a redirect the user must re-register, not a free change.
+        /// </para>
         /// </summary>
         public const int LOOPBACK_PORT = 7274;
 
@@ -181,7 +193,16 @@ namespace JukeBox.Game.Online
 
             return error switch
             {
-                "invalid_client" => "osu! rejected the client id/secret — check them in Settings → Online.",
+                // "Client authentication failed", but NOT usually about the client id/secret. osu-web
+                // is Laravel Passport over league/oauth2-server, whose validateRedirectUri throws
+                // invalidClient on a redirect MISMATCH (AbstractGrant::validateRedirectUri) — the same
+                // error as genuinely bad credentials. Verified against a live client whose id and
+                // secret work perfectly for other grants: a wrong redirect_uri returns exactly this,
+                // while the right one gets through to "Cannot decrypt the authorization code". So the
+                // redirect URI is named first, because it is by far the likelier cause and the one
+                // the raw error hides.
+                "invalid_client" =>
+                    $"osu! rejected the sign-in. Almost always this means your OAuth application's Redirect URI is blank or different — set it to exactly {RedirectUri} on your osu! account page. If it is already set to that, re-check the client id and secret in Settings → Online.",
                 "invalid_grant" => "That sign-in attempt expired or was already used. Try connecting again.",
                 "invalid_request" or "redirect_uri_mismatch" =>
                     $"osu! rejected the redirect URL. Set your OAuth application's Redirect URI to exactly {RedirectUri} on your osu! account page, then try again.",

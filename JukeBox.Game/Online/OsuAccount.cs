@@ -72,13 +72,28 @@ namespace JukeBox.Game.Online
         public bool HasClientCredentials => clientId.Value.Trim().Length > 0 && clientSecret.Value.Trim().Length > 0;
 
         /// <summary>
+        /// How long to hold the loopback port waiting for osu! to come back.
+        ///
+        /// <para>
+        /// This exists because the most likely failure NEVER REACHES US. When osu! refuses the
+        /// request — an unregistered redirect URI being the usual reason — it renders the error in
+        /// the BROWSER and performs no redirect at all, so the callback we are waiting on is never
+        /// called. Without a bound the app sits on "waiting for osu!" forever while the answer is
+        /// sitting in a browser tab, which is precisely what a user reported.
+        /// </para>
+        /// </summary>
+        public static readonly TimeSpan SignInTimeout = TimeSpan.FromMinutes(3);
+
+        /// <summary>
         /// Runs the whole interactive sign-in: hold the loopback port, send the user to osu!'s own
         /// login page, catch the code, exchange it, and record who signed in.
         /// </summary>
         /// <param name="openBrowser">How to put the URL in front of the user. Injected rather than
         /// called directly so a test can drive the flow without launching a browser.</param>
         /// <param name="ct">Cancels the wait; the user closing the browser tab is the usual reason.</param>
-        public async Task ConnectAsync(Action<string> openBrowser, CancellationToken ct = default)
+        /// <param name="signInTimeout">Overridable so a test can exercise the give-up path without
+        /// waiting out <see cref="SignInTimeout"/>; production always uses the default.</param>
+        public async Task ConnectAsync(Action<string> openBrowser, CancellationToken ct = default, TimeSpan? signInTimeout = null)
         {
             if (!HasClientCredentials)
                 throw new OsuOAuthException("Set your osu! OAuth client id and secret first (Settings → Online).");
@@ -93,7 +108,23 @@ namespace JukeBox.Game.Online
 
             openBrowser(oauth.BuildAuthorizeUrl(clientId.Value.Trim(), state));
 
-            string code = await listener.WaitForCodeAsync(ct).ConfigureAwait(false);
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeout.CancelAfter(signInTimeout ?? SignInTimeout);
+
+            string code;
+
+            try
+            {
+                code = await listener.WaitForCodeAsync(timeout.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                // Timed out rather than being called off, which means osu! never came back — see
+                // SignInTimeout. The message has to carry the diagnosis, because the actual error is
+                // in a browser tab we cannot read.
+                throw new OsuOAuthException(
+                    $"osu! didn't complete the sign-in. If the browser showed \"Client authentication failed\", your OAuth application's Redirect URI is blank or different — set it to exactly {OsuOAuth.RedirectUri} on your osu! account page and try again.");
+            }
 
             var tokens = await oauth.ExchangeCodeAsync(clientId.Value.Trim(), clientSecret.Value.Trim(), code, ct: ct).ConfigureAwait(false);
 
