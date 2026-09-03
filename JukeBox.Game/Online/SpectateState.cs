@@ -52,6 +52,35 @@ public enum SpectateState
 }
 
 /// <summary>
+/// A watched player's presence, straight from osu!'s user endpoint — and the ONE genuinely live
+/// thing the public API gives us about a person.
+///
+/// <para>
+/// Deliberately a separate type from <see cref="SpectateState"/>, because the two are different
+/// KINDS of fact and the UI must not blur them. Presence is REAL: osu! says whether the account is
+/// online right now. Activity is INFERRED from how recently a score landed. A player can perfectly
+/// well be online and idle — that combination is information, not a contradiction, and it is only
+/// readable if the two stay apart.
+/// </para>
+///
+/// <para>
+/// This is still not the granular activity osu-web's own online list shows ("Clicking circles",
+/// "Choosing a beatmap"). That comes from the metadata hub, which is first-party and closed to us
+/// on the same terms as the spectator hub. What we have is the dot, not the sentence.
+/// </para>
+/// </summary>
+/// <param name="IsOnline">Whether osu! reports the account online. Always present.</param>
+/// <param name="LastVisit">When they were last seen, or null — which is COMMON rather than
+/// exceptional, since users can hide it in their privacy settings. Verified live: of three real
+/// accounts sampled, one had a timestamp and two had none. So it is worth showing when present and
+/// must never be something the presence dot depends on.</param>
+public readonly record struct SpectatePresence(bool IsOnline, DateTimeOffset? LastVisit)
+{
+    /// <summary>Before the first lookup — shown as offline rather than guessed at.</summary>
+    public static SpectatePresence Unknown => new SpectatePresence(false, null);
+}
+
+/// <summary>
 /// Turning "what did this player's last score look like" into a <see cref="SpectateState"/>.
 ///
 /// <para>
@@ -123,7 +152,29 @@ public static class SpectateStateRules
     /// Whether this state means we have something worth RENDERING. Idle and unresolved players keep
     /// their chip but give up their pane, which is what lets a four-pane budget follow whoever is
     /// actually playing.
+    ///
+    /// <para>
+    /// Keyed on ACTIVITY, not presence: being online is not something to render, and a player who
+    /// just logged off still has a play worth showing. Presence decides the dot, never the pane.
+    /// </para>
     /// </summary>
     public static bool ShouldRender(SpectateState state)
         => state is SpectateState.NewResult or SpectateState.Playing or SpectateState.Failed;
+
+    /// <summary>The dot's label. Real, straight from osu! — see <see cref="SpectatePresence"/>.</summary>
+    public static string PresenceLabel(SpectatePresence presence) => presence.IsOnline ? "online" : "offline";
+
+    /// <summary>
+    /// How a player's row reads: the real presence and the inferred activity, side by side rather
+    /// than merged into one word.
+    ///
+    /// <para>
+    /// Kept as two clauses on purpose. Collapsing them would force a single verdict on facts of
+    /// different quality — and would throw away the combinations that carry the most meaning:
+    /// "offline · just finished" is someone who played and logged straight off, while
+    /// "online · idle" is someone at their computer we simply cannot see into.
+    /// </para>
+    /// </summary>
+    public static string Describe(SpectatePresence presence, SpectateState activity)
+        => $"{PresenceLabel(presence)} · {Label(activity)}";
 }

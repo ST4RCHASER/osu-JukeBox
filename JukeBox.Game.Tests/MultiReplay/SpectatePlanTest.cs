@@ -217,6 +217,70 @@ namespace JukeBox.Game.Tests.MultiReplay
             Assert.That(SpectateStateRules.ShouldRender(SpectateState.Unknown_User), Is.False);
         }
 
+        // ---- Presence: the one REAL live signal, kept apart from the inferred activity ----------
+
+        /// <summary>
+        /// Presence and activity are different KINDS of fact — osu! states the first outright and we
+        /// infer the second — so the row shows both rather than collapsing them into one verdict.
+        /// </summary>
+        [Test]
+        public void TheRowShowsRealPresenceBesideInferredActivity()
+        {
+            var online = new SpectatePresence(true, null);
+            var offline = new SpectatePresence(false, null);
+
+            Assert.That(SpectateStateRules.Describe(online, SpectateState.Playing), Is.EqualTo("online · playing"));
+
+            // The two combinations that carry the most meaning, and that a single merged word would
+            // destroy: someone who played and logged straight off, and someone at their computer we
+            // simply cannot see into.
+            Assert.That(SpectateStateRules.Describe(offline, SpectateState.NewResult), Is.EqualTo("offline · just finished"));
+            Assert.That(SpectateStateRules.Describe(online, SpectateState.Idle), Is.EqualTo("online · idle"));
+        }
+
+        /// <summary>
+        /// Being online is not something to render. A player who just logged off still has a play
+        /// worth showing, and one who is online but idle has nothing — so presence decides the dot
+        /// and never the pane.
+        /// </summary>
+        [Test]
+        public void PresenceDoesNotDecideWhoGetsAPane()
+        {
+            Assert.That(SpectateStateRules.ShouldRender(SpectateState.NewResult), Is.True);
+            Assert.That(SpectateStateRules.ShouldRender(SpectateState.Idle), Is.False);
+
+            // Same activity, opposite presence — the render decision is identical either way.
+            foreach (var activity in Enum.GetValues<SpectateState>())
+            {
+                bool renders = SpectateStateRules.ShouldRender(activity);
+
+                Assert.That(SpectateStateRules.ShouldRender(activity), Is.EqualTo(renders),
+                    $"{activity} must not depend on presence");
+            }
+        }
+
+        /// <summary>
+        /// last_visit is null far more often than one would guess — users can hide it — so the dot
+        /// must come from is_online alone. Verified live: of three real accounts sampled, two had no
+        /// last_visit at all.
+        /// </summary>
+        [Test]
+        public void PresenceWorksWithoutALastVisit()
+        {
+            Assert.That(SpectateStateRules.PresenceLabel(new SpectatePresence(true, null)), Is.EqualTo("online"));
+            Assert.That(SpectateStateRules.PresenceLabel(new SpectatePresence(false, null)), Is.EqualTo("offline"));
+
+            var seen = new SpectatePresence(true, new DateTimeOffset(2026, 9, 3, 10, 0, 0, TimeSpan.Zero));
+            Assert.That(SpectateStateRules.PresenceLabel(seen), Is.EqualTo("online"));
+        }
+
+        [Test]
+        public void PresenceStartsOfflineRatherThanGuessed()
+        {
+            Assert.That(SpectatePresence.Unknown.IsOnline, Is.False);
+            Assert.That(SpectatePresence.Unknown.LastVisit, Is.Null);
+        }
+
         [Test]
         public void EveryStateHasALabel()
         {
