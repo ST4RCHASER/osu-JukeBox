@@ -498,6 +498,38 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
     /// resolves OsuRulesetConfigManager — provided inside the DrawableRuleset subtree — so
     /// attaching it from outside reproduces lazer's behaviour 1:1, driven by our autoplay replay.
     /// </summary>
+    /// <summary>
+    /// Adds ANOTHER person's cursor over this same chart, tinted — the mechanism behind combine
+    /// mode, where one rendered beatmap carries every replay's cursor at once.
+    ///
+    /// <para>
+    /// It reuses the very attachment lazer's own analysis overlay uses, and that is the whole point:
+    /// the overlay lives inside <c>PlayfieldAdjustmentContainer</c>, so it inherits the playfield's
+    /// transform and lands in exactly the right place. Deriving that transform by hand to position
+    /// cursors ourselves would be the expensive kind of wrong — right until the map has a different
+    /// aspect, or the zoom setting moves.
+    /// </para>
+    ///
+    /// <para>
+    /// osu! only, unavoidably: the other three rulesets have no cursor to draw. Returns false when
+    /// there is nothing to attach to, so callers can say so rather than silently showing one cursor.
+    /// </para>
+    /// </summary>
+    /// <param name="replay">The frames to draw a cursor from.</param>
+    /// <param name="tint">Colour for this player's cursor and trail.</param>
+    internal bool AddCursorOverlay(osu.Game.Replays.Replay replay, osuTK.Graphics.Color4 tint)
+    {
+        if (drawableRuleset is not osu.Game.Rulesets.Osu.UI.DrawableOsuRuleset osuRuleset)
+            return false;
+
+        var overlay = new osu.Game.Rulesets.Osu.UI.ReplayAnalysisOverlay(replay) { Colour = tint };
+
+        osuRuleset.PlayfieldAdjustmentContainer.Add(overlay);
+        osuRuleset.Overlays.Add(overlay.CreateProxy().With(p => p.Depth = float.NegativeInfinity));
+
+        return true;
+    }
+
     private void attachOsuReplayAnalysis()
     {
         if (drawableRuleset is not osu.Game.Rulesets.Osu.UI.DrawableOsuRuleset osuRuleset || gameplayScore?.Replay == null)

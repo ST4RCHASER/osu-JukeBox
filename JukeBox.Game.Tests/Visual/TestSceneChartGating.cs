@@ -150,19 +150,8 @@ namespace JukeBox.Game.Tests.Visual
         {
             BeatmapVisuals visuals = null!;
 
-            AddStep("register two replays for the difficulty", () =>
-            {
-                string played = plainSet.PreferredOsuFile!;
-
-                replayStore.Register(new JukeBox.Game.Replays.ReplayAttachment
-                {
-                    PlayerName = "WhiteCat", OsuFile = played, SourcePath = "/a.osr",
-                });
-                replayStore.Register(new JukeBox.Game.Replays.ReplayAttachment
-                {
-                    PlayerName = "Vaxei", OsuFile = played, SourcePath = "/b.osr",
-                });
-            });
+            AddStep("prefer the grid", () => config.SetValue(JukeBoxSetting.MultiReplayMode, JukeBox.Game.Replays.MultiReplayMode.Grid));
+            AddStep("register two replays for the difficulty", registerTwoReplays);
 
             AddStep("create visuals", () => Add(visuals = new BeatmapVisuals(plainSet, idleClock)
             {
@@ -172,6 +161,68 @@ namespace JukeBox.Game.Tests.Visual
             AddUntilStep("the grid was built", () => visuals.IsLoaded && visuals.MultiGrid?.IsLoaded == true);
             AddAssert("with a cell per replay", () => visuals.MultiGrid!.Cells.Count == 2);
             AddAssert("and NOT the single-replay layer", () => visuals.ChartRenderer == null);
+            AddAssert("and not combine either", () => visuals.MultiCombine == null);
+        }
+
+        /// <summary>
+        /// The other multi-replay shape, and the default: one chart with everyone's cursor over it.
+        /// </summary>
+        [Test]
+        public void SeveralReplaysBuildCombineWhenThatIsThePreference()
+        {
+            BeatmapVisuals visuals = null!;
+
+            AddStep("prefer combine", () => config.SetValue(JukeBoxSetting.MultiReplayMode, JukeBox.Game.Replays.MultiReplayMode.Combine));
+            AddStep("register two replays for the difficulty", registerTwoReplays);
+
+            AddStep("create visuals", () => Add(visuals = new BeatmapVisuals(plainSet, idleClock)
+            {
+                RelativeSizeAxes = Axes.Both,
+            }));
+
+            AddUntilStep("combine was built", () => visuals.IsLoaded && visuals.MultiCombine?.IsLoaded == true);
+            AddAssert("over ONE chart, not a grid", () => visuals.MultiGrid == null && visuals.ChartRenderer == null);
+        }
+
+        /// <summary>
+        /// Switching the preference mid-song swaps the renderer. The two are different renderers
+        /// rather than two looks of one, so this rebuilds — and the old one must actually go, not
+        /// linger behind the new.
+        /// </summary>
+        [Test]
+        public void ChangingThePreferenceSwapsTheRenderer()
+        {
+            BeatmapVisuals visuals = null!;
+
+            AddStep("prefer combine", () => config.SetValue(JukeBoxSetting.MultiReplayMode, JukeBox.Game.Replays.MultiReplayMode.Combine));
+            AddStep("register two replays for the difficulty", registerTwoReplays);
+
+            AddStep("create visuals", () => Add(visuals = new BeatmapVisuals(plainSet, idleClock)
+            {
+                RelativeSizeAxes = Axes.Both,
+            }));
+
+            AddUntilStep("combine up", () => visuals.MultiCombine?.IsLoaded == true);
+
+            AddStep("switch to the grid", () => config.SetValue(JukeBoxSetting.MultiReplayMode, JukeBox.Game.Replays.MultiReplayMode.Grid));
+            AddUntilStep("grid up, combine gone", () => visuals.MultiGrid?.IsLoaded == true && visuals.MultiCombine == null);
+
+            AddStep("switch back", () => config.SetValue(JukeBoxSetting.MultiReplayMode, JukeBox.Game.Replays.MultiReplayMode.Combine));
+            AddUntilStep("combine up, grid gone", () => visuals.MultiCombine?.IsLoaded == true && visuals.MultiGrid == null);
+        }
+
+        private void registerTwoReplays()
+        {
+            string played = plainSet.PreferredOsuFile!;
+
+            replayStore.Register(new JukeBox.Game.Replays.ReplayAttachment
+            {
+                PlayerName = "WhiteCat", OsuFile = played, SourcePath = "/a.osr",
+            });
+            replayStore.Register(new JukeBox.Game.Replays.ReplayAttachment
+            {
+                PlayerName = "Vaxei", OsuFile = played, SourcePath = "/b.osr",
+            });
         }
 
         /// <summary>

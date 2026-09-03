@@ -6,6 +6,26 @@ using System.Linq;
 
 namespace JukeBox.Game.Replays;
 
+/// <summary>
+/// How several replays of one beatmap are shown. The two answer different questions, which is why
+/// both exist rather than one being a better version of the other.
+/// </summary>
+public enum MultiReplayMode
+{
+    /// <summary>
+    /// One rendered chart with everyone's cursor over it, colour-coded, names and scores down the
+    /// sides. Answers "how did these plays DIFFER" — the paths are directly comparable because they
+    /// are drawn in the same space.
+    /// </summary>
+    Combine,
+
+    /// <summary>
+    /// A cell per player, each its own full render. Answers "what did each play LOOK like" — every
+    /// player gets a whole playfield, at the cost of having to compare across cells by eye.
+    /// </summary>
+    Grid,
+}
+
 /// <summary>How many cells across and down a grid of <c>n</c> replays uses.</summary>
 /// <param name="Columns">Cells across.</param>
 /// <param name="Rows">Cells down.</param>

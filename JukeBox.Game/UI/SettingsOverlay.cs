@@ -158,6 +158,7 @@ public partial class SettingsOverlay : FocusedOverlayContainer, ITabSearch
     private SettingsSlider<double> playfieldZoomRow = null!;
     private SettingsCheckbox removeChartMaskCheckbox = null!;
     private SettingsCheckbox removeStoryboardMaskCheckbox = null!;
+    private SettingsEnumDropdown<JukeBox.Game.Replays.MultiReplayMode> multiReplayModeDropdown = null!;
     private SettingsEnumDropdown<MirrorSource> mirrorDropdown = null!;
     private SettingsEnumDropdown<SearchApi> searchApiDropdown = null!;
     private SettingsTextBox clientIdTextBox = null!;
@@ -542,6 +543,11 @@ public partial class SettingsOverlay : FocusedOverlayContainer, ITabSearch
         gameplayRows.Add(removeChartMaskCheckbox = new SettingsCheckbox { LabelText = "Remove playfield/chart mask" });
         gameplayRows.Add(removeStoryboardMaskCheckbox = new SettingsCheckbox { LabelText = "Remove storyboard mask" });
 
+        // Only ever visible when several replays of one map are playing, but it lives here rather
+        // than appearing and vanishing with them: it is a standing preference for how the user likes
+        // to watch, and a control that only exists sometimes is a control nobody can find.
+        gameplayRows.Add(multiReplayModeDropdown = new SettingsEnumDropdown<JukeBox.Game.Replays.MultiReplayMode> { LabelText = "Multiple replays" });
+
         sections.Add(new LazerSection("Gameplay", FontAwesome.Regular.DotCircle) { Children = gameplayRows });
 
         var beatmapRows = new List<Drawable>();
@@ -904,6 +910,7 @@ public partial class SettingsOverlay : FocusedOverlayContainer, ITabSearch
         playfieldZoomRow.Current = config.GetBindable<double>(JukeBoxSetting.PlayfieldZoom);
         removeChartMaskCheckbox.Current = config.GetBindable<bool>(JukeBoxSetting.RemoveChartMask);
         removeStoryboardMaskCheckbox.Current = config.GetBindable<bool>(JukeBoxSetting.RemoveStoryboardMask);
+        multiReplayModeDropdown.Current = config.GetBindable<JukeBox.Game.Replays.MultiReplayMode>(JukeBoxSetting.MultiReplayMode);
         uiScaleRow.Current = config.GetBindable<double>(JukeBoxSetting.UiScale);
         globalOffsetRow.Current = config.GetBindable<double>(JukeBoxSetting.GlobalAudioOffset);
         mirrorDropdown.Current = config.GetBindable<MirrorSource>(JukeBoxSetting.PreferredMirror);

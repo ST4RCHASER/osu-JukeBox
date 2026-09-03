@@ -54,9 +54,15 @@ public partial class BeatmapVisuals : CompositeDrawable
 
     /// <summary>
     /// The side-by-side grid, built instead of <see cref="chartLayer"/> when this difficulty has
-    /// SEVERAL replays. Exactly one of the two is ever non-null.
+    /// SEVERAL replays and the user prefers the grid. At most one of the three layer fields is ever
+    /// non-null.
     /// </summary>
     private MultiReplayGrid? multiGrid;
+
+    /// <summary>Everyone's cursor over one chart — the other multi-replay shape.</summary>
+    private MultiReplayCombine? multiCombine;
+
+    private readonly Bindable<MultiReplayMode> multiReplayMode = new Bindable<MultiReplayMode>();
 
     // One clip per layer, each sized to MainScreen's player box (see updateLayerClips) and each
     // masking only while that box has stopped doing it itself. They exist for the two
@@ -296,6 +302,9 @@ public partial class BeatmapVisuals : CompositeDrawable
 
     /// <summary>Test-only: the side-by-side grid, non-null only when this difficulty has several replays.</summary>
     internal MultiReplayGrid? MultiGrid => multiGrid;
+
+    /// <summary>Test-only: the one-chart combine view, the other multi-replay shape.</summary>
+    internal MultiReplayCombine? MultiCombine => multiCombine;
 
     /// <summary>Test-only: the container carrying the app Volume setting to lazer-rendered audio.</summary>
     internal AudioContainer AudioAdjustments => audioAdjustments;
@@ -554,6 +563,7 @@ public partial class BeatmapVisuals : CompositeDrawable
         if (config != null)
         {
             config.BindWith(JukeBoxSetting.RenderChart, renderChart);
+            config.BindWith(JukeBoxSetting.MultiReplayMode, multiReplayMode);
             config.BindWith(JukeBoxSetting.PlayHitSounds, playHitSounds);
             config.BindWith(JukeBoxSetting.BackgroundDim, backgroundDim);
             config.BindWith(JukeBoxSetting.BackgroundBlur, backgroundBlur);
@@ -593,6 +603,7 @@ public partial class BeatmapVisuals : CompositeDrawable
 
         // Live-react to settings changes without a rebuild (initial state already applied in load()).
         renderChart.BindValueChanged(_ => updateLazerLayer());
+        multiReplayMode.BindValueChanged(_ => rebuildForMultiReplayMode());
         playHitSounds.BindValueChanged(_ => updateLazerLayer());
 
         // Opacity is pure alpha on the layer already on screen — no rebuild, unlike mods or a
@@ -817,10 +828,16 @@ public partial class BeatmapVisuals : CompositeDrawable
             if (replay?.Score != null)
                 Logger.Log($"Playing back {replay.PlayerName}'s replay on '{Path.GetFileName(osuFile)}' instead of autoplay");
 
-            // Several replays of this exact difficulty are watched side by side rather than one
-            // being picked: the grid renders each under its own mods, on this one clock. One replay
-            // (or none) keeps the single layer it always had.
-            if (forThisDifficulty.Count > 1)
+            // Several replays of this exact difficulty are watched TOGETHER rather than one being
+            // picked — as everyone's cursor over one chart, or as a grid of separate renders,
+            // whichever the user prefers. One replay (or none) keeps the single layer it always had.
+            if (forThisDifficulty.Count > 1 && multiReplayMode.Value == MultiReplayMode.Combine)
+            {
+                Logger.Log($"Playing {forThisDifficulty.Count} replays of '{Path.GetFileName(osuFile)}' over one chart");
+
+                chartContainer.Add(multiCombine = new MultiReplayCombine(osuFile!, forThisDifficulty) { AlwaysPresent = true });
+            }
+            else if (forThisDifficulty.Count > 1)
             {
                 Logger.Log($"Playing {forThisDifficulty.Count} replays of '{Path.GetFileName(osuFile)}' side by side"
                            + $" ({MultiReplayLayout.RenderedCount(forThisDifficulty.Count)} rendered)");
@@ -847,6 +864,11 @@ public partial class BeatmapVisuals : CompositeDrawable
             chartContainer.Remove(multiGrid, true);
             multiGrid = null;
         }
+        else if (!wantLayer && multiCombine != null)
+        {
+            chartContainer.Remove(multiCombine, true);
+            multiCombine = null;
+        }
 
         if (chartLayer != null)
         {
@@ -861,6 +883,35 @@ public partial class BeatmapVisuals : CompositeDrawable
             multiGrid.HitSoundsEnabled = hitSounds;
             updateChartVisibility();
         }
+
+        if (multiCombine != null)
+        {
+            // Combine has one chart, so there is no flam to avoid — it sounds like any single layer.
+            multiCombine.HitSoundsEnabled = hitSounds;
+            updateChartVisibility();
+        }
+    }
+
+    /// <summary>
+    /// Switching between combine and grid REBUILDS, because the two are different renderers rather
+    /// than two looks of one — there is no state to carry across, and rebuilding is what a mode
+    /// change already costs when the user changes it mid-song.
+    /// </summary>
+    private void rebuildForMultiReplayMode()
+    {
+        if (multiGrid != null)
+        {
+            chartContainer.Remove(multiGrid, true);
+            multiGrid = null;
+        }
+
+        if (multiCombine != null)
+        {
+            chartContainer.Remove(multiCombine, true);
+            multiCombine = null;
+        }
+
+        updateLazerLayer();
     }
 
     /// <summary>
@@ -887,10 +938,13 @@ public partial class BeatmapVisuals : CompositeDrawable
         if (chartLayer != null)
             chartLayer.Alpha = alpha;
 
-        // The grid follows the same rule: it IS the chart when several replays are playing, so
-        // "render chart" and the opacity slider govern it exactly as they govern a single layer.
+        // Both multi-replay shapes follow the same rule: whichever is up IS the chart, so "render
+        // chart" and the opacity slider govern it exactly as they govern a single layer.
         if (multiGrid != null)
             multiGrid.Alpha = alpha;
+
+        if (multiCombine != null)
+            multiCombine.Alpha = alpha;
     }
 
     protected override void Update()

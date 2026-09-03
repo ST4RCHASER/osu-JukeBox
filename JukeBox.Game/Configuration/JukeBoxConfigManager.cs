@@ -187,6 +187,15 @@ public enum JukeBoxSetting
     DiscordRichPresence,
 
     /// <summary>
+    /// How several replays of one beatmap are shown: everyone's cursor over one chart
+    /// (<see cref="Game.Replays.MultiReplayMode.Combine"/>) or a grid of separate renders
+    /// (<see cref="Game.Replays.MultiReplayMode.Grid"/>). A preference rather than a per-song
+    /// choice — whichever way the user likes to watch, they like it for every set of replays — so
+    /// it persists rather than resetting each time.
+    /// </summary>
+    MultiReplayMode,
+
+    /// <summary>
     /// Lets the rendered CHART (playfield) draw past the player box's edges instead of being
     /// clipped at them — the box's mask is what normally crops a ruleset's own overflow (catch's
     /// fruit spawn line and catcher, taiko's post-hit fly-up, a zoomed-in playfield) once it
@@ -492,6 +501,11 @@ public class JukeBoxConfigManager : IniConfigManager<JukeBoxSetting>
         SetDefault(JukeBoxSetting.HiddenPlayfieldElements, string.Empty);
         SetDefault(JukeBoxSetting.ConvertToRuleset, LazerPlayer.ChartConversionTarget.Off);
         SetDefault(JukeBoxSetting.DiscordRichPresence, true);
+
+        // Combine by default: it is the mode the user described first and the one that answers
+        // "how did these plays differ" at a glance, where the grid answers "what did each look
+        // like". Grid is one dropdown away.
+        SetDefault(JukeBoxSetting.MultiReplayMode, Replays.MultiReplayMode.Combine);
 
         // Both on, because both describe what the app ALREADY does: it fills an empty queue from
         // the radio, and — since MainScreen starts the jukebox unconditionally and the queue is
