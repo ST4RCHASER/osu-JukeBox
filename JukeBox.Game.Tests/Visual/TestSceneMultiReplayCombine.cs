@@ -7,12 +7,16 @@ using System.Text;
 using JukeBox.Game.LazerPlayer;
 using JukeBox.Game.Replays;
 using JukeBox.Game.Tests.Import;
+using System.Text.RegularExpressions;
+using osu.Game.Rulesets.Mods;
+using osu.Game.Rulesets.Osu.Mods;
 using NUnit.Framework;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Testing;
 using osu.Framework.Timing;
 using osu.Game.Graphics.Sprites;
+using osuTK.Graphics;
 
 namespace JukeBox.Game.Tests.Visual
 {
@@ -257,6 +261,81 @@ namespace JukeBox.Game.Tests.Visual
         }
 
         /// <summary>
+        /// The row as the reference draws it, checked against danser's own renderer
+        /// (knockoutoverlay.go) and the user's target render.
+        ///
+        /// <para>
+        /// Four things, each visibly off before: the player's NAME carries their colour; the mods
+        /// are a separate WHITE run beside it rather than folded into the name string; there is no
+        /// dark strip behind a row, because the reference draws rows straight over the playfield and
+        /// its background pass paints only the playfield boundary; and pp reads to two decimals.
+        /// </para>
+        /// </summary>
+        [Test]
+        public void TheRowIsDrawnTheWayTheReferenceDrawsIt()
+        {
+            AddStep("build two, one of them modded", buildWithMods);
+            AddUntilStep("board built", () => combine.Board?.Rows.Count == 2);
+            AddUntilStep("recorded", () => combine.Simulator.AllComplete);
+            AddStep("show the end", () => showAt(timeOf(object_count - 1) + 500));
+
+            // Asserted as "each name is its own colour, and none is white" rather than against exact
+            // values: what matters is that the colour identifies the player, and an exact-value
+            // check here would really be testing colour conversion.
+            AddAssert("each name carries its own player's colour", () =>
+            {
+                var colours = combine.Board.Rows.Select(r => r.NameColour).ToList();
+
+                return colours.Distinct().Count() == 2 && colours.All(c => c != Color4.White);
+            });
+
+            AddAssert("mods are a separate run, in white", () =>
+            {
+                var modded = combine.Board.Rows.Single(r => r.PlayerIndex == 1);
+
+                return modded.ModsText == "+HR"
+                       && modded.ModsColour == Color4.White
+                       && !modded.NameText.Contains('+');
+            });
+
+            AddAssert("no dark strip behind the rows", () =>
+                combine.Board.Rows.All(r => r.BackgroundColour.A == 0));
+
+            AddAssert("pp reads to two decimals", () =>
+                combine.Board.Rows.All(r => Regex.IsMatch(r.PerformanceText, @"^\d+\.\d\dpp$")));
+        }
+
+        private void buildWithMods()
+        {
+            var replays = new[]
+            {
+                replayFor("player0"),
+                replayForWithMods("player1", new OsuModHardRock()),
+            };
+
+            host.Child = combine = new MultiReplayCombine(beatmapPath, replays);
+            host.Clock = framed = new FramedClock(manual);
+            manual.CurrentTime = 0;
+        }
+
+        private ReplayAttachment replayForWithMods(string player, params Mod[] mods)
+        {
+            string osr = Path.Combine(tmp, player + ".osr");
+            ReplayFixture.WriteHitting(osr, beatmapPath, player, osuTK.Vector2.Zero, mods);
+
+            return new ReplayAttachment
+            {
+                PlayerName = player,
+                SourcePath = osr,
+                OsuFile = beatmapPath,
+                Score = new JukeBoxScoreDecoder(beatmapPath).Decode(osr),
+                ModAcronyms = mods.Select(m => m.Acronym).ToArray(),
+                RateTempo = 1,
+                RateFrequency = 1,
+            };
+        }
+
+        /// <summary>
         /// The rendered chart runs under the DRIVING player's own recorded mods, matching how their
         /// score is computed. Letting the shared Chart-tab selection edit it would put the play on
         /// screen and the numbers beside it under different mods.
@@ -367,6 +446,24 @@ namespace JukeBox.Game.Tests.Visual
 
             AddStep("show the end", () => showAt(timeOf(object_count - 1)));
             AddAssert("the full combo is up", () => combine.Board.Rows.All(r => r.ComboText == $"{object_count}x"));
+
+            // The ROLLED figures — score and pp — as well as the combo, which is not rolled. This
+            // distinction is the whole point of the assertion: the rolled ones animate toward their
+            // value, and when that animation never advanced they sat at zero for the entire song
+            // while the combo beside them read correctly. Every test here passed throughout, because
+            // they all happened to assert on the combo.
+            AddAssert("and so are the score and pp, not left at zero", () =>
+            {
+                var timelines = combine.Simulator.Timelines;
+
+                return combine.Board.Rows.All(r =>
+                {
+                    var point = timelines[r.PlayerIndex].At(timeOf(object_count - 1));
+
+                    return long.Parse(r.ScoreText) == point.Score
+                           && Math.Abs(double.Parse(r.PerformanceText.Replace("pp", string.Empty)) - point.Performance) < 0.02;
+                });
+            });
         }
 
         /// <summary>

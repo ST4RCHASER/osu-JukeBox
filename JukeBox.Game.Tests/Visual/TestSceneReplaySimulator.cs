@@ -334,7 +334,7 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("simulate a clean play", () => simulate(replay("clean")));
             AddUntilStep("recorded", () => simulator.AllComplete);
 
-            AddAssert("graded SS, not X", () => simulator.Timelines[0].Points.Last().Grade == "SS");
+            AddAssert("records the RAW rank (X), which is what the skin names its graphic after", () => simulator.Timelines[0].Points.Last().Grade == "X");
             AddAssert("with pp above zero", () => simulator.Timelines[0].Points.Last().Performance > 0);
         }
 

@@ -4,6 +4,10 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using JukeBox.Game.Replays;
+using osu.Framework.Allocation;
+using osu.Framework.Graphics.Sprites;
+using osu.Framework.Graphics.Textures;
+using osu.Game.Skinning;
 using osu.Framework.Extensions.Color4Extensions;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
@@ -36,7 +40,9 @@ public partial class KnockoutBoard : CompositeDrawable
     /// <param name="Name">Displayed name, mods included.</param>
     /// <param name="Colour">Their colour, shared with their cursor.</param>
     /// <param name="Timeline">Their recorded play.</param>
-    public readonly record struct Entrant(string Name, Color4 Colour, ReplayTimeline Timeline);
+    /// <param name="Mods">Their mods, already formatted ("+HDDT"), drawn in white beside the
+    /// coloured name rather than folded into it — the reference colours the two separately.</param>
+    public readonly record struct Entrant(string Name, Color4 Colour, ReplayTimeline Timeline, string Mods = "");
 
     private readonly IReadOnlyList<Entrant> entrants;
     private readonly List<Row> rows = new List<Row>();
@@ -139,6 +145,39 @@ public partial class KnockoutBoard : CompositeDrawable
 
     private OsuSpriteText overflowNote = null!;
 
+    [Resolved(canBeNull: true)]
+    private ISkinSource? skin { get; set; }
+
+    /// <summary>The grade each row is currently showing a texture for, so the skin is only asked
+    /// again when the answer would change.</summary>
+    private readonly Dictionary<int, string> gradeTextures = new Dictionary<int, string>();
+
+    /// <summary>
+    /// Points each row's grade at the skin's own "ranking-&lt;grade&gt;-small" graphic.
+    ///
+    /// <para>
+    /// Re-checked whenever a row's grade changes rather than every frame: a texture lookup walks
+    /// the whole skin chain, and a board of forty-seven rows doing that per frame is a great deal
+    /// of work to arrive at the same answer.
+    /// </para>
+    /// </summary>
+    private void applyGradeTextures()
+    {
+        foreach (var row in rows)
+        {
+            string wanted = row.CurrentGrade;
+
+            if (gradeTextures.TryGetValue(row.PlayerIndex, out string? shown) && shown == wanted)
+                continue;
+
+            gradeTextures[row.PlayerIndex] = wanted;
+
+            var texture = wanted.Length == 0 ? null : skin?.GetTexture($"ranking-{wanted}-small");
+
+            row.ApplyGradeTexture(texture, Metrics.RowHeight * 0.8f);
+        }
+    }
+
     protected override void Update()
     {
         base.Update();
@@ -180,6 +219,10 @@ public partial class KnockoutBoard : CompositeDrawable
 
             row.UpdateFrom(entrants[standings[rank]].Timeline, Rules, time, rank + 1, !eliminated.Contains(standings[rank]));
         }
+
+        // After the rows have read their grades, so a grade that improves mid-song swaps its
+        // graphic. Cheap: it only asks the skin when a row's grade has actually changed.
+        applyGradeTextures();
     }
 
     /// <summary>
@@ -198,6 +241,10 @@ public partial class KnockoutBoard : CompositeDrawable
 
         foreach (var row in rows)
             row.Apply(metrics);
+
+        // A resize changes the size every grade graphic should be drawn at, so they are all
+        // re-fetched rather than left at the previous scale.
+        gradeTextures.Clear();
 
         int hidden = entrants.Count - metrics.VisibleRows;
 
@@ -256,11 +303,98 @@ public partial class KnockoutBoard : CompositeDrawable
         private readonly Circle dot = null!;
         private readonly OsuSpriteText performance = null!;
         private readonly OsuSpriteText grade = null!;
+        private readonly OsuSpriteText mods = null!;
+        private readonly Sprite gradeImage = null!;
         private readonly FillFlowContainer left = null!;
         private readonly FillFlowContainer right = null!;
 
+        /// <summary>Test hook: whether the grade is showing the skin's graphic rather than a letter.</summary>
+        internal bool GradeIsImage => gradeImage.Alpha > 0;
+
+        /// <summary>Test hooks for the row's drawn appearance, which is what the reference pins.</summary>
+        internal string ModsText => mods.Text.ToString()!;
+
+        internal Color4 ModsColour => mods.Colour;
+
+        internal string NameText => playerName.Text.ToString()!;
+
+        internal Color4 NameColour => playerName.Colour;
+
+        internal Color4 BackgroundColour => background.Colour;
+
+        internal string PerformanceText => performance.Text.ToString()!;
+
+        /// <summary>
+        /// Swaps the letter for the skin's own ranking graphic, when the skin has one.
+        ///
+        /// <para>
+        /// The reference asks its skin for "ranking-&lt;grade&gt;-small" and draws that, so a skin
+        /// that restyles its grades restyles the board too. The letter stays as the fallback: a skin
+        /// without those textures should still say what the grade is rather than show a gap.
+        /// </para>
+        /// </summary>
+        public void ApplyGradeTexture(Texture? texture, float height)
+        {
+            if (texture == null)
+            {
+                gradeImage.Alpha = 0;
+                grade.Alpha = 1;
+                return;
+            }
+
+            gradeImage.Texture = texture;
+            gradeImage.Size = new Vector2(texture.DisplayWidth / texture.DisplayHeight * height, height);
+            gradeImage.Alpha = 1;
+            grade.Alpha = 0;
+        }
+
         /// <summary>The alpha this row rests at — dimmed once its player is out.</summary>
         public float RestingAlpha { get; private set; } = 1;
+
+        /// <summary>The RAW rank this row is showing, which is what the skin names its graphic
+        /// after — "X" for a perfect play, not "SS".</summary>
+        public string CurrentGrade { get; private set; } = string.Empty;
+
+        /// <summary>The rank as a player names it, for the text fallback.</summary>
+        private static string displayGrade(string rank) => rank switch
+        {
+            "X" or "XH" => "SS",
+            "SH" => "S",
+            _ => rank,
+        };
+
+        private double rollingScore;
+        private double rollingAccuracy = 1;
+        private double rollingPerformance;
+
+        /// <summary>
+        /// Eases a displayed number toward its target. Framerate-independent, so the roll takes the
+        /// same wall time on a fast machine as a slow one rather than being however many frames
+        /// happened to elapse.
+        /// </summary>
+        private double roll(double current, double target)
+        {
+            double delta = target - current;
+
+            // Close enough to have arrived: without this the value creeps forever and the text
+            // re-renders every frame for a difference nobody can see.
+            if (Math.Abs(delta) < 0.01)
+                return target;
+
+            // The CLOCK's frame time, not the drawable's Time.Elapsed. A row is updated by its
+            // parent's Update, which runs before the row's own update for the frame, so Time.Elapsed
+            // reads zero there — and a rate of zero means the number never moves at all. That is not
+            // a subtle wrongness: every rolled figure sat at its starting value forever while the
+            // un-rolled ones beside it were correct.
+            double elapsed = Math.Max(Clock.ElapsedFrameTime, 0);
+
+            if (elapsed <= 0)
+                return target;
+
+            double rate = 1 - Math.Pow(0.0001, elapsed / 1000);
+
+            return current + delta * Math.Clamp(rate, 0, 1);
+        }
 
         public Row(int playerIndex, Entrant entrant)
         {
@@ -271,13 +405,17 @@ public partial class KnockoutBoard : CompositeDrawable
 
             InternalChildren = new Drawable[]
             {
+                // NO row background. The reference draws rows straight over the playfield — its
+                // DrawBackground paints only the playfield boundary, never a strip per row — and a
+                // dark bar behind each line is the difference between an overlay and a panel.
                 background = new Box
                 {
                     RelativeSizeAxes = Axes.Both,
-                    Colour = Color4.Black.Opacity(0.45f),
+                    Colour = Color4.Transparent,
                 },
 
-                // Who and how well, reading left to right the way the reference lays it out.
+                // Who and how well, reading left to right the way the reference lays it out:
+                // accuracy, pp, the grade IMAGE, then the name with its mods.
                 left = new FillFlowContainer
                 {
                     AutoSizeAxes = Axes.Both,
@@ -289,7 +427,7 @@ public partial class KnockoutBoard : CompositeDrawable
                     Children = new Drawable[]
                     {
                         // The dot is the only thing tying this row to a cursor weaving about the
-                        // playfield, which is why it is the same colour and never re-used.
+                        // playfield, and the reference render carries one at the head of each row.
                         dot = new Circle
                         {
                             Anchor = Anchor.CentreLeft,
@@ -297,9 +435,24 @@ public partial class KnockoutBoard : CompositeDrawable
                             Colour = entrant.Colour,
                         },
                         accuracy = text("100.00%", FontWeight.SemiBold),
-                        performance = text("0pp", FontWeight.Regular),
+                        performance = text("0.00pp", FontWeight.Regular),
+
+                        // The grade as the SKIN's own ranking graphic, with the letter behind it for
+                        // when the skin has no such texture — see gradeSprite.
+                        gradeImage = new Sprite
+                        {
+                            Anchor = Anchor.CentreLeft,
+                            Origin = Anchor.CentreLeft,
+                            Alpha = 0,
+                        },
                         grade = text("S", FontWeight.Bold),
+
+                        // Name in the PLAYER's colour, mods in white beside it. Two sprites rather
+                        // than one string because they are coloured differently, which is exactly
+                        // what the reference does: it sets the player colour, draws the name, resets
+                        // to white and draws the mods at 0.8 scale.
                         playerName = text(entrant.Name, FontWeight.SemiBold, entrant.Colour),
+                        mods = text(entrant.Mods, FontWeight.SemiBold),
                     },
                 },
 
@@ -332,6 +485,10 @@ public partial class KnockoutBoard : CompositeDrawable
             foreach (var sprite in new[] { accuracy, performance, grade, playerName, combo, score })
                 sprite.Font = sprite.Font.With(size: metrics.FontSize);
 
+            // Mods a little smaller than the name, as the reference draws them (0.8 of the row's
+            // text scale) — they qualify the name rather than competing with it.
+            mods.Font = mods.Font.With(size: metrics.FontSize * 0.8f);
+
             // Spacing follows the text, or a dense board turns into one run-on line.
             left.Spacing = new Vector2(metrics.FontSize * 0.42f, 0);
             right.Spacing = new Vector2(metrics.FontSize * 0.5f, 0);
@@ -348,11 +505,25 @@ public partial class KnockoutBoard : CompositeDrawable
             // Dashes rather than the last known figures. Beyond what has been simulated the
             // timeline's answer is simply the most recent thing it recorded, which reads as a real
             // score for a moment the player has not reached — a wrong number, not a missing one.
-            score.Text = pending ? "--------" : point.Score.ToString("00000000");
-            accuracy.Text = pending ? "--.--%" : (point.Accuracy * 100).ToString("0.00") + "%";
+            // The numbers ROLL toward their new value rather than snapping to it, which is what the
+            // reference does — its score, pp and accuracy are all target-gliders. Snapping reads as
+            // a table refreshing; rolling reads as a score climbing.
+            rollingScore = pending ? point.Score : roll(rollingScore, point.Score);
+            rollingAccuracy = pending ? point.Accuracy : roll(rollingAccuracy, point.Accuracy);
+            rollingPerformance = pending ? point.Performance : roll(rollingPerformance, point.Performance);
+
+            score.Text = pending ? "--------" : ((long)Math.Round(rollingScore)).ToString("00000000");
+            accuracy.Text = pending ? "--.--%" : (rollingAccuracy * 100).ToString("0.00") + "%";
             combo.Text = pending ? "--x" : point.Combo.ToString("N0") + "x";
-            performance.Text = pending ? "--pp" : point.Performance.ToString("0") + "pp";
-            grade.Text = pending ? "-" : point.Grade;
+
+            // Two decimals, as the reference shows it — "310.00pp", not "310pp".
+            performance.Text = pending ? "--.--pp" : rollingPerformance.ToString("0.00") + "pp";
+
+            // The letter a PLAYER would recognise, while CurrentGrade keeps the raw rank the skin
+            // names its graphics after. lazer calls a perfect play X, which on screen reads as a
+            // cross rather than as the best grade there is.
+            grade.Text = pending ? "-" : displayGrade(point.Grade);
+            CurrentGrade = pending ? string.Empty : point.Grade;
 
             ShownPending = pending;
 

@@ -151,9 +151,13 @@ public partial class MultiReplayCombine : CompositeDrawable
 
         var entrants = replays
                        .Select((replay, index) => new KnockoutBoard.Entrant(
-                           MultiReplayGrid.DisplayName(replay),
+                           // The bare name, with the mods handed over SEPARATELY: the board draws
+                           // the name in the player's colour and the mods in white, so the two
+                           // cannot be one string.
+                           replay.PlayerName.Length > 0 ? replay.PlayerName : "unknown",
                            ColourFor(index, replays.Count),
-                           simulator.Timelines[index]))
+                           simulator.Timelines[index],
+                           replay.ModAcronyms.Count > 0 ? "+" + string.Join(string.Empty, replay.ModAcronyms) : string.Empty))
                        .ToList();
 
         AddInternal(board = new KnockoutBoard(entrants)

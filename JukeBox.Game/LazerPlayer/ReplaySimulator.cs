@@ -320,18 +320,6 @@ public partial class ReplaySimulator : CompositeDrawable
         private readonly IWorkingBeatmap beatmap;
         private readonly Dictionary<string, DifficultyAttributes> attributeCache;
 
-        /// <summary>
-        /// The rank as a PLAYER would name it. lazer's enum calls a perfect play X and a
-        /// silver-S SH, which are correct internally and wrong on screen: the board showed "X" for
-        /// 100%, which reads as a cross rather than as the best grade there is.
-        /// </summary>
-        private static string gradeLetter(ScoreRank rank) => rank switch
-        {
-            ScoreRank.X or ScoreRank.XH => "SS",
-            ScoreRank.S or ScoreRank.SH => "S",
-            _ => rank.ToString(),
-        };
-
         private ReplayPerformance? performanceFor(LazerChartLayer layer)
             => layer.Ruleset == null ? null : ReplayPerformance.Create(layer.Ruleset, beatmap, layer.ActiveMods, attributeCache);
 
@@ -373,7 +361,12 @@ public partial class ReplaySimulator : CompositeDrawable
                     combo,
                     score.Accuracy.Value,
                     broke,
-                    gradeLetter(score.Rank.Value),
+                    // The RAW rank name, not a display letter. Skins name their grade graphics after
+                    // it — a perfect play's texture is "ranking-X-small", never "ranking-SS-small" —
+                    // so converting here would leave the skin lookup asking for a file that cannot
+                    // exist, and every board would silently fall back to text. The row converts for
+                    // display; see KnockoutBoard.Row.
+                    score.Rank.Value.ToString(),
                     performance?.PointsFor(score) ?? 0,
                     lost));
             };
