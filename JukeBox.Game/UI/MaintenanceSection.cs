@@ -11,7 +11,9 @@ using JukeBox.Game.Playback;
 using osu.Framework.Allocation;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
+using osu.Framework.Graphics.Cursor;
 using osu.Framework.Graphics.Sprites;
+using osu.Framework.Localisation;
 using osu.Game.Graphics;
 using osu.Game.Graphics.Sprites;
 using osu.Game.Overlays;
@@ -72,23 +74,15 @@ internal partial class MaintenanceSection : LazerSection
     [Resolved(canBeNull: true)]
     private IDialogOverlay? dialogOverlay { get; set; }
 
-    /// <summary>
-    /// Total vertical margin lazer puts on every <see cref="SettingsButton"/> — <c>Vertical = -5</c>,
-    /// so -10 across the pair. It is NEGATIVE, and a <see cref="FillFlowContainer"/> steps by a
-    /// child's LayoutSize (DrawSize + margin), so that margin comes straight off the gap between
-    /// two buttons. A plain <c>Spacing</c> of 8 renders as a 2px OVERLAP rather than an 8px gap —
-    /// measured, not guessed, and invisible in the source either way.
-    /// </summary>
-    private const float settings_button_total_vertical_margin = -10;
+    /// <summary>Row height for one installed skin — lazer's own settings-row rhythm.</summary>
+    private const float skin_row_height = 32;
 
-    /// <summary>
-    /// Cancels the margin above first, then adds the gap actually wanted, so the space between two
-    /// rendered buttons really is <see cref="Theme.RowSpacing"/>.
-    /// </summary>
-    private static readonly Vector2 button_spacing = new Vector2(0, Theme.RowSpacing - settings_button_total_vertical_margin);
+    /// <summary>The remove button is square and small: it sits beside a name, not over it.</summary>
+    private const float remove_button_size = 22;
 
     private DangerousSettingsButton clearCacheButton = null!;
     private OsuSpriteText status = null!;
+    private OsuSpriteText emptyNote = null!;
     private FillFlowContainer skinRows = null!;
 
     /// <summary>Test hook: the button that starts a cache clear.</summary>
@@ -97,40 +91,57 @@ internal partial class MaintenanceSection : LazerSection
     /// <summary>Test hook: what the section last reported.</summary>
     internal string Status => status.Text.ToString();
 
+    private IEnumerable<SkinRow> rows => skinRows.Children.OfType<SkinRow>();
+
     /// <summary>Test hook: the per-skin removal buttons, in listed order.</summary>
-    internal IReadOnlyList<DangerousSettingsButton> SkinRemoveButtons
-        => skinRows.Children.OfType<DangerousSettingsButton>().ToList();
+    internal IReadOnlyList<RemoveSkinButton> SkinRemoveButtons => rows.Select(r => r.RemoveButton).ToList();
+
+    /// <summary>Test hook: the skin names as the rows actually render them.</summary>
+    internal IReadOnlyList<string> SkinNames => rows.Select(r => r.DisplayedName).ToList();
+
+    /// <summary>Test hook: the rows themselves, for geometry.</summary>
+    internal IReadOnlyList<SkinRow> SkinRows => rows.ToList();
+
+    /// <summary>Test hook: whether the "nothing imported" line is showing.</summary>
+    internal bool EmptyNoteShown => emptyNote.Alpha > 0;
 
     [BackgroundDependencyLoader]
     private void load()
     {
         Children = new Drawable[]
         {
-            // The buttons need a gap or they render as one continuous pink slab — three touching
-            // danger buttons read as a single enormous one. Nested flows rather than per-button
-            // margins, so every gap, including the one between the cache button and the first
-            // skin, comes from the same constant.
-            new FillFlowContainer
+            // Skins are a LIST, and a list of things reads as rows — a name you can read and a way
+            // to remove it. The previous shape gave each skin a full-width danger button carrying
+            // its whole name, which stacked into a wall of pink and centre-cropped anything long
+            // ("e skin \"StepOsu!Mania+v3.4Reborn(DownVe"), so the one thing the row existed to
+            // tell you was the first thing it lost.
+            new LazerSubsection("Installed skins")
             {
-                RelativeSizeAxes = Axes.X,
-                AutoSizeAxes = Axes.Y,
-                Direction = FillDirection.Vertical,
-                Spacing = button_spacing,
                 Children = new Drawable[]
                 {
-                    clearCacheButton = new DangerousSettingsButton
-                    {
-                        Text = "Clear beatmap cache",
-                        Action = confirmClearCache,
-                    },
                     skinRows = new FillFlowContainer
                     {
                         RelativeSizeAxes = Axes.X,
                         AutoSizeAxes = Axes.Y,
                         Direction = FillDirection.Vertical,
-                        Spacing = button_spacing,
+                    },
+                    emptyNote = new OsuSpriteText
+                    {
+                        Text = "Nothing imported yet — drop a .osk on the window.",
+                        Font = OsuFont.GetFont(size: Theme.CaptionTextSize),
+                        Colour = Theme.TextTertiary,
+                        Margin = new MarginPadding { Left = SettingsPanel.CONTENT_MARGINS, Vertical = 4 },
                     },
                 },
+            },
+
+            // The one action that still looks dangerous, and the only one that is irreversible for
+            // data the app cannot fetch again. Danger styling spent on every row made none of it
+            // mean anything; spent here alone it reads as the warning it is.
+            clearCacheButton = new DangerousSettingsButton
+            {
+                Text = "Clear beatmap cache",
+                Action = confirmClearCache,
             },
             status = new OsuSpriteText
             {
@@ -154,23 +165,103 @@ internal partial class MaintenanceSection : LazerSection
     {
         skinRows.Clear();
 
-        if (skinLibrary == null)
-            return;
-
-        // Deliberately one button per skin rather than a picker plus a single Remove: the whole
-        // point of the library is that the skins are individually named, and a row that says
-        // exactly which skin it deletes cannot be misread the way a "remove the selected one"
-        // button can.
-        foreach (var skin in skinLibrary.Skins)
+        if (skinLibrary != null)
         {
-            var target = skin;
-
-            skinRows.Add(new DangerousSettingsButton
-            {
-                Text = $"Remove skin \"{target.Label}\"",
-                Action = () => confirmRemoveSkin(target),
-            });
+            // Deliberately one row per skin rather than a picker plus a single Remove: the whole
+            // point of the library is that the skins are individually named, and a row that says
+            // exactly which skin it deletes cannot be misread the way a "remove the selected one"
+            // button can.
+            foreach (var skin in skinLibrary.Skins)
+                skinRows.Add(new SkinRow(skin, () => confirmRemoveSkin(skin), skin_row_height, remove_button_size));
         }
+
+        // A bare "Installed skins" heading over nothing reads as a bug, so say what is missing and
+        // how to fix it.
+        emptyNote.Alpha = skinRows.Children.Count == 0 ? 1 : 0;
+    }
+
+    /// <summary>
+    /// One installed skin: its name, and a way to remove it. A named type rather than an anonymous
+    /// container so the row can report what it is showing — the name and the button are separate
+    /// drawables, and a caller reaching into the tree for either would be guessing.
+    /// </summary>
+    internal partial class SkinRow : Container
+    {
+        private readonly TruncatingSpriteText name;
+
+        public SkinRow(ImportedSkin skin, Action remove, float height, float buttonSize)
+        {
+            RelativeSizeAxes = Axes.X;
+            Height = height;
+            Padding = new MarginPadding { Horizontal = SettingsPanel.CONTENT_MARGINS };
+
+            Children = new Drawable[]
+            {
+                new Container
+                {
+                    RelativeSizeAxes = Axes.Both,
+
+                    // Reserve the button's column so a long name is cut with an ellipsis rather
+                    // than sliding under it. Losing the END of a name is survivable; losing its
+                    // middle to a centred crop, which is what the old full-width buttons did, is
+                    // not — that is the half that tells two skins apart.
+                    Padding = new MarginPadding { Right = buttonSize + Theme.RowSpacing },
+                    // TruncatingSpriteText, not OsuSpriteText with Truncate set — the framework
+                    // throws outright on the latter ("Use TruncatingSpriteText instead"), which is
+                    // its way of saying eliding needs a type that measures before it lays out.
+                    Child = name = new TruncatingSpriteText
+                    {
+                        Anchor = Anchor.CentreLeft,
+                        Origin = Anchor.CentreLeft,
+                        RelativeSizeAxes = Axes.X,
+                        Text = skin.Label,
+                        Font = OsuFont.GetFont(size: Theme.RowTitleTextSize),
+                        Colour = Theme.TextPrimary,
+                    },
+                },
+                RemoveButton = new RemoveSkinButton(skin.Label)
+                {
+                    Anchor = Anchor.CentreRight,
+                    Origin = Anchor.CentreRight,
+                    Size = new Vector2(buttonSize),
+                    Action = remove,
+                },
+            };
+        }
+
+        public RemoveSkinButton RemoveButton { get; }
+
+        /// <summary>What this row is actually showing.</summary>
+        public string DisplayedName => name.Text.ToString();
+
+        /// <summary>
+        /// The name drawable, so a caller can check it never reaches the button. Not called
+        /// <c>Name</c>: <see cref="Drawable"/> already has a <c>Name</c> (its debug label), and
+        /// shadowing it would make <c>row.Name</c> mean one thing here and another everywhere else.
+        /// </summary>
+        internal Drawable NameDrawable => name;
+    }
+
+    /// <summary>
+    /// The remove control for one skin. Its own type so a caller can find the buttons and read
+    /// which skin each belongs to.
+    /// </summary>
+    internal partial class RemoveSkinButton : IconButton, IHasTooltip
+    {
+        public RemoveSkinButton(string skinLabel)
+        {
+            SkinLabel = skinLabel;
+            Icon = FontAwesome.Solid.TrashAlt;
+
+            // Red only on hover: a column of permanently-red icons reads as a list of errors.
+            IconColour = Theme.TextSecondary;
+            HoverColour = Theme.Error;
+        }
+
+        /// <summary>Which skin this removes — the tooltip, and what tests assert on.</summary>
+        public string SkinLabel { get; }
+
+        public LocalisableString TooltipText => $"Remove \"{SkinLabel}\"";
     }
 
     private void confirmClearCache()

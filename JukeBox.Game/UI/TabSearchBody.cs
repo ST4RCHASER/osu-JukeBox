@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
+using osu.Framework.Graphics.Sprites;
 using osu.Framework.Input.Events;
 using osu.Game.Graphics.Containers;
 using osu.Game.Overlays;
@@ -137,7 +138,28 @@ internal partial class TabSearchBody : CompositeDrawable, ITabSearch
     /// </summary>
     private partial class TabSearchTextBox : SettingsSearchTextBox
     {
+        /// <summary>
+        /// How far the placeholder has to rise to sit where typed text sits.
+        ///
+        /// <para>
+        /// The two are laid out by different machinery and it shows. Typed characters are
+        /// positioned per GLYPH, so their ink lands on the box's centre line. The placeholder is a
+        /// single <see cref="SpriteText"/> whose LINE BOX is centred instead — and a line box
+        /// reserves more room above the x-height (for ascenders) than below it (for descenders),
+        /// so the words themselves come out low. Measured against a 35px box: the placeholder's
+        /// x-height band centred 2px under the typed text's.
+        /// </para>
+        /// </summary>
+        private const float placeholder_optical_offset = -2;
+
         public Action? Escaped;
+
+        protected override SpriteText CreatePlaceholder()
+        {
+            var placeholder = base.CreatePlaceholder();
+            placeholder.Y = placeholder_optical_offset;
+            return placeholder;
+        }
 
         protected override bool OnKeyDown(KeyDownEvent e)
         {

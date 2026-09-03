@@ -811,47 +811,105 @@ namespace JukeBox.Game.Tests.Visual
 
             AddStep("show overlay", () => overlay.Show());
 
-            AddUntilStep("one button each, by name", () => overlay.MaintenanceSection.SkinRemoveButtons
-                .Select(b => b.Text.ToString())
-                .SequenceEqual(new[] { "Remove skin \"Aristia\"", "Remove skin \"Rafis\"" }));
+            AddUntilStep("one row each, showing the skin's own name", () => overlay.MaintenanceSection.SkinNames
+                .SequenceEqual(new[] { "Aristia", "Rafis" }));
+
+            AddAssert("and each remove button knows which skin it is for", () => overlay.MaintenanceSection.SkinRemoveButtons
+                .Select(b => b.SkinLabel)
+                .SequenceEqual(new[] { "Aristia", "Rafis" }));
         }
 
         /// <summary>
-        /// The danger buttons must not touch. lazer's SettingsButton carries a NEGATIVE vertical
-        /// margin (-5, so -10 across the pair) which a FillFlowContainer takes straight off the
-        /// step between children — so the obvious Spacing of 8 renders as a 2px overlap and three
-        /// buttons read as one continuous pink slab. Measured off the rendered rectangles, because
-        /// that is the only place the bug was visible.
+        /// Skin rows must not overlap. The section used to be a stack of full-width danger buttons,
+        /// and lazer's SettingsButton carries a NEGATIVE vertical margin (-5, so -10 across the
+        /// pair) which a FillFlowContainer takes straight off the step between children — the
+        /// obvious Spacing of 8 rendered as a 2px OVERLAP. The rows are plain containers now and so
+        /// cannot hit that specific trap, but "the list does not stack on top of itself" is worth
+        /// keeping asserted against the rendered rectangles either way — together with the row
+        /// heights, without which the non-overlap check passes on a collapsed list.
         /// </summary>
         [Test]
-        public void TheDangerButtonsAreEvenlySpacedAndNeverOverlap()
+        public void SkinRowsStackWithoutOverlapping()
         {
-            AddStep("install two skins", () =>
+            AddStep("install three skins", () =>
             {
                 installSkin("aristia-archive", "Aristia");
                 installSkin("rafis-2019", "Rafis");
+                installSkin("nomod-2020", "Nomod");
                 skinLibrary.Refresh();
             });
 
             AddStep("show overlay", () => overlay.Show());
-            AddUntilStep("all three buttons laid out", () => overlay.MaintenanceSection.SkinRemoveButtons.Count == 2
-                                                            && overlay.MaintenanceSection.ClearCacheButton.DrawHeight > 0);
+            AddUntilStep("all three rows laid out", () => overlay.MaintenanceSection.SkinRemoveButtons.Count == 3);
             AddWaitStep("let the flow settle", 3);
 
-            AddAssert("every gap is the row spacing, and positive", () =>
+            // Non-overlap alone is vacuously true of collapsed rows — zero-height rectangles never
+            // overlap — so the height each row actually occupies is asserted first. A row must at
+            // least contain its own remove button, or the button is spilling into its neighbours.
+            AddAssert("each row is tall enough to hold its button", () =>
             {
-                var rects = maintenanceButtonRects();
+                var rects = skinRowRects();
+                var buttons = overlay.MaintenanceSection.SkinRemoveButtons;
+
+                return rects.Count == 3
+                       && rects.Select((r, i) => r.Height >= buttons[i].DrawHeight).All(ok => ok);
+            });
+
+            AddAssert("each row sits below the last, never on it", () =>
+            {
+                var rects = skinRowRects();
 
                 for (int i = 1; i < rects.Count; i++)
                 {
-                    float gap = rects[i].Top - rects[i - 1].Bottom;
-
-                    if (gap <= 0 || Math.Abs(gap - Theme.RowSpacing) > 0.5f)
+                    if (rects[i].Top < rects[i - 1].Bottom - 0.5f)
                         return false;
                 }
 
                 return rects.Count == 3;
             });
+        }
+
+        /// <summary>
+        /// The bug the redesign exists to kill: a long skin name used to be centre-cropped by a
+        /// fixed-width button, so what survived was the MIDDLE of the name — the half that tells
+        /// two versions of the same skin apart was the half thrown away. The name is now given the
+        /// row and ellipsised, which means it must never reach the remove button.
+        /// </summary>
+        [Test]
+        public void ALongSkinNameIsElidedRatherThanRunningUnderTheButton()
+        {
+            AddStep("install a skin with a very long name", () =>
+            {
+                installSkin("long-one", "StepOsu!Mania+v3.4Reborn(DownVelocity)+HDCursor+NoLaneCover");
+                skinLibrary.Refresh();
+            });
+
+            AddStep("show overlay", () => overlay.Show());
+            AddUntilStep("the row is laid out", () => overlay.MaintenanceSection.SkinRemoveButtons.Count == 1);
+            AddWaitStep("let the flow settle", 3);
+
+            AddAssert("the name stops before the button", () =>
+            {
+                var row = overlay.MaintenanceSection.SkinRows.Single();
+                float nameRight = row.NameDrawable.ScreenSpaceDrawQuad.AABBFloat.Right;
+                float buttonLeft = row.RemoveButton.ScreenSpaceDrawQuad.AABBFloat.Left;
+
+                return nameRight <= buttonLeft + 0.5f;
+            });
+        }
+
+        // An empty library must say so rather than leaving a bare heading over nothing.
+        [Test]
+        public void WithNoSkinsInstalledTheSectionSaysSo()
+        {
+            // The library caches its listing, and the fixture's teardown deletes folders without
+            // telling it — so re-read the (now empty) directory rather than inheriting whatever
+            // the previous test installed.
+            AddStep("re-read the skins directory", () => skinLibrary.Refresh());
+            AddStep("show overlay", () => overlay.Show());
+
+            AddUntilStep("no rows", () => overlay.MaintenanceSection.SkinRemoveButtons.Count == 0);
+            AddAssert("and the empty note is shown", () => overlay.MaintenanceSection.EmptyNoteShown);
         }
 
         [Test]
@@ -925,11 +983,10 @@ namespace JukeBox.Game.Tests.Visual
 
         private PopupDialog? currentDialog() => dialogOverlay.CurrentDialog;
 
-        /// <summary>The Maintenance section's buttons as rendered, top to bottom.</summary>
-        private List<osu.Framework.Graphics.Primitives.RectangleF> maintenanceButtonRects()
-            => new[] { overlay.MaintenanceSection.ClearCacheButton }
-               .Concat(overlay.MaintenanceSection.SkinRemoveButtons)
-               .Select(b => b.ScreenSpaceDrawQuad.AABBFloat)
+        /// <summary>The Maintenance section's skin rows as rendered, top to bottom.</summary>
+        private List<osu.Framework.Graphics.Primitives.RectangleF> skinRowRects()
+            => overlay.MaintenanceSection.SkinRows
+               .Select(r => r.ScreenSpaceDrawQuad.AABBFloat)
                .OrderBy(r => r.Top)
                .ToList();
 

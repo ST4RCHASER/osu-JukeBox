@@ -66,6 +66,14 @@ public partial class SettingsOverlay : FocusedOverlayContainer, ITabSearch
 {
     private const float panel_width = 360;
 
+    /// <summary>
+    /// Half of lazer's <c>SettingsButton.Margin.Vertical = -5</c>. It is NEGATIVE and a
+    /// <see cref="FillFlowContainer"/> steps by LayoutSize, so a button silently subtracts this
+    /// much from whatever gap the drawable above it asked for. Anything spacing itself against a
+    /// settings button has to add it back.
+    /// </summary>
+    private const float settings_button_top_margin = 5;
+
     /// <summary>Where a user creates the OAuth application the official search backend needs — the
     /// account page's OAuth section, deep-linked so it opens already scrolled to it.</summary>
     internal const string oauth_application_url = "https://osu.ppy.sh/home/account/edit#oauth";
@@ -697,10 +705,19 @@ public partial class SettingsOverlay : FocusedOverlayContainer, ITabSearch
                                 AutoSizeAxes = Axes.Y,
                                 Padding = new MarginPadding
                                 {
-                                    Left = SettingsPanel.CONTENT_PADDING.Left,
-                                    Right = SettingsPanel.CONTENT_PADDING.Right,
+                                    // CONTENT_MARGINS (20), not CONTENT_PADDING (12/22). Every
+                                    // settings ROW — labels and buttons alike — puts its content at
+                                    // 20, so a paragraph at 12 hangs eight pixels left of the
+                                    // button beneath it and of every label around it, which is
+                                    // what made this block read as falling out of the panel.
+                                    Horizontal = SettingsPanel.CONTENT_MARGINS,
                                     Top = 8,
-                                    Bottom = 8,
+
+                                    // The button below carries Margin.Vertical = -5, and a flow
+                                    // steps by LayoutSize, so it takes 5 straight back off this
+                                    // gap: a Bottom of 8 rendered as 3, which is why the paragraph
+                                    // sat on top of the button. Add the 5 back.
+                                    Bottom = Theme.SectionSpacing + settings_button_top_margin,
                                 },
                                 Colour = Theme.TextTertiary,
                                 Text = "Create an OAuth application on your osu! account page and paste its id and "

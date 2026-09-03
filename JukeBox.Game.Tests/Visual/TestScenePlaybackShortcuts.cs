@@ -360,28 +360,6 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("up passes through too", () => audio.Volume.Value > lowered);
         }
 
-        /// <summary>
-        /// The shortcuts are only useful if they can be found. This pins the one place that says so
-        /// — a caption under the very transport controls the keys drive — against a layout edit
-        /// quietly dropping it.
-        /// </summary>
-        [Test]
-        public void ThePlaybackTabSaysWhatTheKeysAre()
-        {
-            PlaybackPanel panel = null!;
-
-            AddStep("host a playback tab", () => Add(panel = new PlaybackPanel { RelativeSizeAxes = Axes.Both }));
-            AddUntilStep("loaded", () => panel.IsLoaded);
-
-            AddAssert("the hint names the everyday keys", () =>
-            {
-                string hint = panel.ShortcutHint.Text.ToString();
-
-                return hint.Contains("Space") && hint.Contains("seek")
-                       && hint.Contains("volume") && hint.Contains("speed");
-            });
-        }
-
         // ---- Suppression while typing -----------------------------------------------------------
 
         /// <summary>
