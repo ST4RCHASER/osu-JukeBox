@@ -70,6 +70,7 @@ public partial class PlaybackPanel : CompositeDrawable
     private PlaybackSpeedSlider playbackRateRow = null!;
     private SpriteText virtualAudioNote = null!;
     private SpectatePanel spectatePanel = null!;
+    private PlayersPanel playersPanel = null!;
 
     /// <summary>Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the tab's pieces,
     /// so tests can assert what this section contains without depending on its internal layout.</summary>
@@ -80,6 +81,8 @@ public partial class PlaybackPanel : CompositeDrawable
     internal PlaybackSpeedSlider PlaybackRateSlider => playbackRateRow;
 
     internal SpectatePanel Spectate => spectatePanel;
+
+    internal PlayersPanel Players => playersPanel;
 
     [BackgroundDependencyLoader]
     private void load()
@@ -137,6 +140,10 @@ public partial class PlaybackPanel : CompositeDrawable
                         // same reason the transport is: the queue takes whatever height is left,
                         // so anything below it would be pushed off a short window.
                         spectatePanel = new SpectatePanel(),
+                        // The per-player controls (mode, knockout, colour, mods), shown only while
+                        // several replays of one map are on screen — the panel hides itself
+                        // otherwise, so the tab stays uncluttered for ordinary listening.
+                        playersPanel = new PlayersPanel(),
                         // No shortcut caption here by request: the keys stay bound (see
                         // Input.PlaybackShortcuts) but the transport reads as controls rather than
                         // controls plus documentation. Discoverability was traded away knowingly.

@@ -172,10 +172,6 @@ public partial class SettingsOverlay : FocusedOverlayContainer, ITabSearch
     private SettingsSlider<double> playfieldZoomRow = null!;
     private SettingsCheckbox removeChartMaskCheckbox = null!;
     private SettingsCheckbox removeStoryboardMaskCheckbox = null!;
-    private SettingsEnumDropdown<JukeBox.Game.Replays.MultiReplayMode> multiReplayModeDropdown = null!;
-    private SettingsEnumDropdown<JukeBox.Game.Replays.KnockoutMode> knockoutModeDropdown = null!;
-    private SettingsEnumDropdown<JukeBox.Game.Replays.KnockoutSort> knockoutSortDropdown = null!;
-    private SettingsCheckbox knockoutLiveSortCheckbox = null!;
     private SettingsEnumDropdown<MirrorSource> mirrorDropdown = null!;
     private SettingsEnumDropdown<SearchApi> searchApiDropdown = null!;
     private SettingsTextBox clientIdTextBox = null!;
@@ -578,16 +574,10 @@ public partial class SettingsOverlay : FocusedOverlayContainer, ITabSearch
         gameplayRows.Add(removeChartMaskCheckbox = new SettingsCheckbox { LabelText = "Remove playfield/chart mask" });
         gameplayRows.Add(removeStoryboardMaskCheckbox = new SettingsCheckbox { LabelText = "Remove storyboard mask" });
 
-        // Only ever visible when several replays of one map are playing, but it lives here rather
-        // than appearing and vanishing with them: it is a standing preference for how the user likes
-        // to watch, and a control that only exists sometimes is a control nobody can find.
-        gameplayRows.Add(multiReplayModeDropdown = new SettingsEnumDropdown<JukeBox.Game.Replays.MultiReplayMode> { LabelText = "Multiple replays" });
-
-        // Combine mode's scoreboard. Same reasoning as above for living here permanently rather
-        // than appearing with the replays.
-        gameplayRows.Add(knockoutModeDropdown = new SettingsEnumDropdown<JukeBox.Game.Replays.KnockoutMode> { LabelText = "Knockout" });
-        gameplayRows.Add(knockoutSortDropdown = new SettingsEnumDropdown<JukeBox.Game.Replays.KnockoutSort> { LabelText = "Rank players by" });
-        gameplayRows.Add(knockoutLiveSortCheckbox = new SettingsCheckbox { LabelText = "Re-order the board as they play" });
+        // The multi-replay controls (Multiple replays / Knockout / Rank players by / Re-order) used
+        // to live here, but they belong with the players they act on — they now sit in the Players
+        // section of the Playback tab (see PlayersPanel), one source of truth alongside the
+        // per-player colour and mods.
 
         sections.Add(new LazerSection("Gameplay", FontAwesome.Regular.DotCircle) { Children = gameplayRows });
 
@@ -1034,10 +1024,6 @@ public partial class SettingsOverlay : FocusedOverlayContainer, ITabSearch
         playfieldZoomRow.Current = config.GetBindable<double>(JukeBoxSetting.PlayfieldZoom);
         removeChartMaskCheckbox.Current = config.GetBindable<bool>(JukeBoxSetting.RemoveChartMask);
         removeStoryboardMaskCheckbox.Current = config.GetBindable<bool>(JukeBoxSetting.RemoveStoryboardMask);
-        multiReplayModeDropdown.Current = config.GetBindable<JukeBox.Game.Replays.MultiReplayMode>(JukeBoxSetting.MultiReplayMode);
-        knockoutModeDropdown.Current = config.GetBindable<JukeBox.Game.Replays.KnockoutMode>(JukeBoxSetting.KnockoutMode);
-        knockoutSortDropdown.Current = config.GetBindable<JukeBox.Game.Replays.KnockoutSort>(JukeBoxSetting.KnockoutSortBy);
-        knockoutLiveSortCheckbox.Current = config.GetBindable<bool>(JukeBoxSetting.KnockoutLiveSort);
         uiScaleRow.Current = config.GetBindable<double>(JukeBoxSetting.UiScale);
         globalOffsetRow.Current = config.GetBindable<double>(JukeBoxSetting.GlobalAudioOffset);
         mirrorDropdown.Current = config.GetBindable<MirrorSource>(JukeBoxSetting.PreferredMirror);
