@@ -76,11 +76,19 @@ public partial class KnockoutBoard : CompositeDrawable
     internal static bool IsPending(ReplayTimeline timeline, double time)
         => !timeline.Complete && time > timeline.SimulatedTo;
 
+    /// <summary>
+    /// Fixed rather than auto-sized, for two reasons. A row's background is a Box filling it, and a
+    /// Box sized relative to a parent that is sizing itself to its children collapses to nothing —
+    /// which it did, leaving the knockout highlight invisible on screen while every test still
+    /// passed. And a board whose width changes with the longest name jitters as the rows re-order.
+    /// </summary>
+    private const float board_width = 300;
+
     public KnockoutBoard(IReadOnlyList<Entrant> entrants)
     {
         this.entrants = entrants;
 
-        AutoSizeAxes = Axes.X;
+        Width = board_width;
         Height = row_height * entrants.Count;
     }
 
@@ -158,7 +166,7 @@ public partial class KnockoutBoard : CompositeDrawable
             PlayerIndex = playerIndex;
             TargetY = playerIndex * row_height;
 
-            AutoSizeAxes = Axes.X;
+            RelativeSizeAxes = Axes.X;
             Height = row_height;
 
             InternalChildren = new Drawable[]
@@ -166,7 +174,6 @@ public partial class KnockoutBoard : CompositeDrawable
                 background = new Box
                 {
                     RelativeSizeAxes = Axes.Both,
-                    Width = 1,
                     Colour = Color4.Black.Opacity(0.45f),
                 },
                 new FillFlowContainer

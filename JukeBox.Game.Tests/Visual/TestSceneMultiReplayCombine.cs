@@ -293,6 +293,42 @@ namespace JukeBox.Game.Tests.Visual
 
         private KnockoutBoard.Row rowFor(int playerIndex) => combine.Board.Rows.Single(r => r.PlayerIndex == playerIndex);
 
+        /// <summary>
+        /// Every eliminated player must be DRAWN as eliminated, not merely ranked below the
+        /// survivors. Found by looking at a real capture: three players had broken combo, the board
+        /// ordered all three below the one clean play — so the rule and the sort agreed — yet one of
+        /// them was still drawn bright, because a row only restyles when its own state CHANGES and
+        /// that comparison can be missed.
+        /// </summary>
+        [Test]
+        public void EveryPlayerWhoBrokeComboIsDrawnAsOutNotJustRankedBelow()
+        {
+            AddStep("build four who break at different points", () => build(4, misses: new[]
+            {
+                Array.Empty<int>(),
+                new[] { 3 },
+                new[] { 6 },
+                new[] { 9 },
+            }));
+
+            AddUntilStep("recorded", () => combine.Simulator.AllComplete);
+
+            AddStep("knockout on, late in the map", () =>
+            {
+                combine.Rules = new KnockoutRules(KnockoutMode.ComboBreak, GraceEndSeconds: 0);
+                showAt(timeOf(object_count - 1) + 500);
+            });
+
+            AddAssert("only the clean player is drawn alive", () =>
+                rowFor(0).ShownAlive
+                && !rowFor(1).ShownAlive
+                && !rowFor(2).ShownAlive
+                && !rowFor(3).ShownAlive);
+
+            AddAssert("and the ranking agrees with the drawing", () =>
+                combine.Board.DisplayOrder[0] == 0);
+        }
+
         [Test]
         public void MixedSpeedsWarnHereToo()
         {
