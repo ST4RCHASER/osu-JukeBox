@@ -561,23 +561,26 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
     /// </para>
     ///
     /// <para>
-    /// osu! only, unavoidably: the other three rulesets have no cursor to draw. Returns false when
+    /// osu! only, unavoidably: the other three rulesets have no cursor to draw. Returns null when
     /// there is nothing to attach to, so callers can say so rather than silently showing one cursor.
     /// </para>
     /// </summary>
     /// <param name="replay">The frames to draw a cursor from.</param>
     /// <param name="tint">Colour for this player's cursor and trail.</param>
-    internal bool AddCursorOverlay(osu.Game.Replays.Replay replay, osuTK.Graphics.Color4 tint)
+    /// <returns>The overlay, so the caller can keep changing it — knockout scales the survivors'
+    /// cursors up as the field thins and fades out the eliminated, which needs a handle on the
+    /// thing it drew rather than just the news that it exists.</returns>
+    internal osu.Game.Rulesets.Osu.UI.ReplayAnalysisOverlay? AddCursorOverlay(osu.Game.Replays.Replay replay, osuTK.Graphics.Color4 tint)
     {
         if (drawableRuleset is not osu.Game.Rulesets.Osu.UI.DrawableOsuRuleset osuRuleset)
-            return false;
+            return null;
 
         var overlay = new osu.Game.Rulesets.Osu.UI.ReplayAnalysisOverlay(replay) { Colour = tint };
 
         osuRuleset.PlayfieldAdjustmentContainer.Add(overlay);
         osuRuleset.Overlays.Add(overlay.CreateProxy().With(p => p.Depth = float.NegativeInfinity));
 
-        return true;
+        return overlay;
     }
 
     private void attachOsuReplayAnalysis()

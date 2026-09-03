@@ -220,6 +220,27 @@ public enum JukeBoxSetting
     MultiReplayMode,
 
     /// <summary>
+    /// When a player stops being in the running in combine mode
+    /// (<see cref="Game.Replays.KnockoutMode"/>). Defaults to nobody ever being eliminated: the
+    /// user dropped those replays in to watch them, and a mode that stops showing most of them
+    /// within the first chorus is something to opt into rather than to discover.
+    /// </summary>
+    KnockoutMode,
+
+    /// <summary>
+    /// What the combine-mode scoreboard is ordered by (<see cref="Game.Replays.KnockoutSort"/>).
+    /// Score by default, which is what a scoreboard means without further qualification.
+    /// </summary>
+    KnockoutSortBy,
+
+    /// <summary>
+    /// Whether the combine-mode scoreboard re-orders itself as the plays diverge. On by default —
+    /// watching someone get overtaken is most of the appeal — but it is genuinely distracting for
+    /// anyone trying to read the board rather than the playfield, so it can be held still.
+    /// </summary>
+    KnockoutLiveSort,
+
+    /// <summary>
     /// Lets the rendered CHART (playfield) draw past the player box's edges instead of being
     /// clipped at them — the box's mask is what normally crops a ruleset's own overflow (catch's
     /// fruit spawn line and catcher, taiko's post-hit fly-up, a zoomed-in playfield) once it
@@ -535,6 +556,13 @@ public class JukeBoxConfigManager : IniConfigManager<JukeBoxSetting>
         // "how did these plays differ" at a glance, where the grid answers "what did each look
         // like". Grid is one dropdown away.
         SetDefault(JukeBoxSetting.MultiReplayMode, Replays.MultiReplayMode.Combine);
+
+        // Elimination OFF by default. The user dropped those replays in to watch them, and a rule
+        // that removes most of them in the first chorus has to be asked for. Live sorting IS on,
+        // because a board that re-orders is the difference between a scoreboard and a caption.
+        SetDefault(JukeBoxSetting.KnockoutMode, Replays.KnockoutMode.Showcase);
+        SetDefault(JukeBoxSetting.KnockoutSortBy, Replays.KnockoutSort.Score);
+        SetDefault(JukeBoxSetting.KnockoutLiveSort, true);
 
         // Both on, because both describe what the app ALREADY does: it fills an empty queue from
         // the radio, and — since MainScreen starts the jukebox unconditionally and the queue is

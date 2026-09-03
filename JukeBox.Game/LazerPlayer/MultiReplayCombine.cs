@@ -18,9 +18,24 @@ using osuTK.Graphics;
 namespace JukeBox.Game.LazerPlayer;
 
 /// <summary>
-/// Everyone's replay over ONE chart: the beatmap is rendered once and every player's cursor is
-/// drawn on top of it in their own colour, with a rail of names and accuracies down the left and
-/// their combo and score down the right.
+/// Everyone's replay over ONE chart, in the shape danser-go calls Knockout: the beatmap is
+/// rendered once, every player's cursor is drawn on top of it in their own colour, and a live
+/// scoreboard down the side re-orders itself as they overtake each other.
+///
+/// <para>
+/// The board is the point rather than a caption on it. Its numbers come from each player's
+/// recorded <see cref="Replays.ReplayTimeline"/> read at the current playback time — see
+/// <see cref="ReplaySimulator"/> — so a row shows what that player HAD at this moment in the song,
+/// not what they finished with. That is also what makes it survive seeking, which a running total
+/// cannot.
+/// </para>
+///
+/// <para>
+/// Elimination is off by default (<see cref="Replays.KnockoutMode.Showcase"/>): every play runs to
+/// the end and the board just sorts. Turning it on is what makes it a contest — players are out on
+/// their first combo break, sink to the bottom of the board greyed out, and the survivors' cursors
+/// grow as the field thins.
+/// </para>
 ///
 /// <para>
 /// The cursors are lazer's own <c>ReplayAnalysisOverlay</c>, mounted inside the single hosted
@@ -43,7 +58,15 @@ public partial class MultiReplayCombine : CompositeDrawable
     private readonly IReadOnlyList<ReplayAttachment> replays;
 
     private LazerChartLayer chart = null!;
+    private ReplaySimulator simulator = null!;
+    private KnockoutBoard board = null!;
     private bool attached;
+
+    /// <summary>
+    /// The cursors, indexed by replay. The FIRST is null — that player drives the chart itself and
+    /// already has a cursor from the ruleset, so there is nothing extra of theirs to scale.
+    /// </summary>
+    private readonly List<osu.Game.Rulesets.Osu.UI.ReplayAnalysisOverlay?> cursors = new List<osu.Game.Rulesets.Osu.UI.ReplayAnalysisOverlay?>();
 
     /// <summary>Test hook: cursors actually mounted, which is one FEWER than the replay count — the
     /// first replay drives the chart itself and already has a cursor.</summary>
@@ -51,6 +74,31 @@ public partial class MultiReplayCombine : CompositeDrawable
 
     /// <summary>Test hook: the one hosted chart every cursor is drawn over.</summary>
     internal LazerChartLayer Chart => chart;
+
+    /// <summary>Test hook: the live scoreboard.</summary>
+    internal KnockoutBoard Board => board;
+
+    /// <summary>Test hook: the off-screen playthrough feeding the board.</summary>
+    internal ReplaySimulator Simulator => simulator;
+
+    /// <summary>
+    /// The knockout rules in force. Assigning reaches the board immediately, so a user changing the
+    /// mode mid-song sees it apply rather than having to reload the map — the plays are already
+    /// recorded, so who is out is a re-reading of data that is all there.
+    /// </summary>
+    public KnockoutRules Rules
+    {
+        get => rules;
+        set
+        {
+            rules = value;
+
+            if (board != null)
+                board.Rules = value;
+        }
+    }
+
+    private KnockoutRules rules = new KnockoutRules();
 
     /// <summary>Whether the chart's hit sounds play. One chart, so no flam to avoid here.</summary>
     public bool HitSoundsEnabled
@@ -78,7 +126,9 @@ public partial class MultiReplayCombine : CompositeDrawable
             AlwaysPresent = true,
         };
 
-        var children = new List<Drawable> { chart, buildRail(Anchor.TopLeft), buildRail(Anchor.TopRight) };
+        simulator = new ReplaySimulator(osuFile, replays);
+
+        var children = new List<Drawable> { chart, simulator };
 
         if (MultiReplayLayout.RateMismatchWarning(replays) is { } warning)
             children.Add(rateWarning(warning));
@@ -86,99 +136,100 @@ public partial class MultiReplayCombine : CompositeDrawable
         InternalChildren = children.ToArray();
     }
 
+    /// <summary>
+    /// Builds the board once the simulator has its timelines, which it creates when IT loads.
+    /// Deliberately not done in this class's LoadComplete: a parent's LoadComplete is not
+    /// guaranteed to run after its children's, and reading the timelines a frame too early is an
+    /// index out of range rather than something that degrades quietly.
+    /// </summary>
+    private void buildBoardWhenReady()
+    {
+        if (board != null || simulator.Timelines.Count < replays.Count)
+            return;
+
+        var entrants = replays
+                       .Select((replay, index) => new KnockoutBoard.Entrant(
+                           MultiReplayGrid.DisplayName(replay),
+                           ColourFor(index, replays.Count),
+                           simulator.Timelines[index]))
+                       .ToList();
+
+        AddInternal(board = new KnockoutBoard(entrants)
+        {
+            Anchor = Anchor.TopLeft,
+            Origin = Anchor.TopLeft,
+            Margin = new MarginPadding(6),
+            Rules = rules,
+        });
+    }
+
     protected override void Update()
     {
         base.Update();
 
-        // The ruleset only exists once the chart has finished its own async load, so the cursors
-        // cannot be attached in load(). Done once, then never again.
+        buildBoardWhenReady();
+        attachCursors();
+        updateCursors();
+    }
+
+    /// <summary>
+    /// Mounts everyone else's cursor onto the one chart. The ruleset only exists once the chart has
+    /// finished its own async load, so this cannot happen in load(). Done once, then never again.
+    /// </summary>
+    private void attachCursors()
+    {
         if (attached || chart.DrawableRuleset == null)
             return;
 
         attached = true;
 
+        // The first player drives the chart, so their cursor comes from the ruleset itself and gets
+        // a null slot here — the list stays indexed by replay so a cursor is never mismatched to
+        // the wrong player's fate.
+        cursors.Add(null);
+
         for (int i = 1; i < replays.Count; i++)
         {
             var replay = replays[i].Score?.Replay;
+            var overlay = replay == null ? null : chart.AddCursorOverlay(replay, ColourFor(i, replays.Count));
 
-            if (replay != null && chart.AddCursorOverlay(replay, ColourFor(i, replays.Count)))
+            cursors.Add(overlay);
+
+            if (overlay != null)
                 CursorsAttached++;
         }
     }
 
     /// <summary>
-    /// One player per row, sorted by score like the reference. The left rail carries who they are,
-    /// the right what they did; both are the same rows in the same order, so a name lines up with
-    /// its own numbers.
+    /// Grows the surviving cursors as the field thins and fades out the eliminated. In showcase
+    /// mode nobody is ever eliminated, so this settles at the smallest size and stops mattering —
+    /// which is the intent, since a showcase is about seeing all of the plays at once.
     /// </summary>
-    private Drawable buildRail(Anchor side)
+    private void updateCursors()
     {
-        bool left = side == Anchor.TopLeft;
+        if (!attached || board == null)
+            return;
 
-        var ordered = replays
-                      .Select((replay, index) => (replay, colour: ColourFor(index, replays.Count)))
-                      .OrderByDescending(r => r.replay.Score?.ScoreInfo.TotalScore ?? 0)
-                      .ToList();
+        double time = Clock.CurrentTime;
+        var timelines = simulator.Timelines;
 
-        var rows = new FillFlowContainer
+        if (timelines.Count == 0)
+            return;
+
+        int alive = rules.AliveCount(timelines, time);
+        float scale = KnockoutRules.CursorScale(alive, timelines.Count);
+
+        for (int i = 0; i < cursors.Count && i < timelines.Count; i++)
         {
-            Anchor = side,
-            Origin = side,
-            AutoSizeAxes = Axes.Both,
-            Direction = FillDirection.Vertical,
-            Spacing = new Vector2(0, 1),
-            Margin = new MarginPadding(6),
-        };
+            if (cursors[i] is not { } cursor)
+                continue;
 
-        foreach (var (replay, colour) in ordered)
-            rows.Add(left ? leftRow(replay, colour) : rightRow(replay));
+            bool stillIn = rules.AliveAt(timelines[i], time);
 
-        return rows;
+            cursor.Scale = new Vector2(stillIn ? scale : 1);
+            cursor.Alpha = stillIn ? 1 : 0;
+        }
     }
-
-    private static Drawable leftRow(ReplayAttachment replay, Color4 colour) => new FillFlowContainer
-    {
-        AutoSizeAxes = Axes.Both,
-        Direction = FillDirection.Horizontal,
-        Spacing = new Vector2(5, 0),
-        Children = new Drawable[]
-        {
-            // The dot is the whole key to the picture: it is the ONLY thing tying a row to the
-            // cursor weaving about on the playfield.
-            new Circle
-            {
-                Anchor = Anchor.CentreLeft,
-                Origin = Anchor.CentreLeft,
-                Size = new Vector2(8),
-                Colour = colour,
-            },
-            text(MultiReplayGrid.FormatAccuracy(replay), 12, FontWeight.SemiBold),
-            text(Rank(replay), 12, FontWeight.Bold),
-            text(MultiReplayGrid.DisplayName(replay), 12, FontWeight.Regular, colour),
-        },
-    };
-
-    private static Drawable rightRow(ReplayAttachment replay) => new FillFlowContainer
-    {
-        AutoSizeAxes = Axes.Both,
-        Direction = FillDirection.Horizontal,
-        Spacing = new Vector2(6, 0),
-        Children = new Drawable[]
-        {
-            text(MultiReplayGrid.FormatCombo(replay), 12, FontWeight.SemiBold),
-            text(MultiReplayGrid.FormatScore(replay), 12, FontWeight.Bold),
-        },
-    };
-
-    private static OsuSpriteText text(string content, float size, FontWeight weight, Color4? colour = null) => new OsuSpriteText
-    {
-        Anchor = Anchor.CentreLeft,
-        Origin = Anchor.CentreLeft,
-        Text = content,
-        Font = OsuFont.Torus.With(size: size, weight: weight),
-        Colour = colour ?? Color4.White,
-        Shadow = true,
-    };
 
     private static Drawable rateWarning(string warning) => new Container
     {

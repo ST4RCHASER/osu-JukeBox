@@ -1,0 +1,244 @@
+#nullable enable
+
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text;
+using JukeBox.Game.LazerPlayer;
+using JukeBox.Game.Replays;
+using JukeBox.Game.Tests.Import;
+using NUnit.Framework;
+using osu.Framework.Graphics;
+using osu.Framework.Graphics.Containers;
+
+namespace JukeBox.Game.Tests.Visual
+{
+    /// <summary>
+    /// The off-screen playthrough that produces each player's recorded timeline.
+    ///
+    /// <para>
+    /// Driven with REAL replays that hit and miss at known objects, because the whole value of the
+    /// timeline is that it says what happened and when. A fixture that misses everything (or hits
+    /// everything) cannot tell a correct recording from an empty one.
+    /// </para>
+    /// </summary>
+    [TestFixture]
+    public partial class TestSceneReplaySimulator : JukeBoxTestScene
+    {
+        private string tmp = null!;
+        private string beatmapPath = null!;
+        private Container host = null!;
+        private ReplaySimulator simulator = null!;
+
+        private const int object_count = 12;
+        private const int first_object_ms = 1000;
+        private const int spacing_ms = 400;
+
+        [SetUp]
+        public void SetUp() => Schedule(() =>
+        {
+            tmp = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+            Directory.CreateDirectory(tmp);
+            beatmapPath = Path.Combine(tmp, "map [Hard].osu");
+            File.WriteAllText(beatmapPath, map());
+
+            Clear();
+            Add(host = new Container { RelativeSizeAxes = Axes.Both });
+        });
+
+        [TearDown]
+        public void TearDown()
+        {
+            try
+            {
+                if (Directory.Exists(tmp))
+                    Directory.Delete(tmp, true);
+            }
+            catch (IOException)
+            {
+            }
+        }
+
+        private ReplayAttachment replay(string player, params int[] misses)
+        {
+            string osr = Path.Combine(tmp, player + ".osr");
+            ReplayFixture.WriteHitting(osr, beatmapPath, player, misses);
+
+            return new ReplayAttachment
+            {
+                PlayerName = player,
+                SourcePath = osr,
+                OsuFile = beatmapPath,
+                Score = new JukeBoxScoreDecoder(beatmapPath).Decode(osr),
+                RateTempo = 1,
+                RateFrequency = 1,
+            };
+        }
+
+        private void simulate(params ReplayAttachment[] replays)
+            => host.Child = simulator = new ReplaySimulator(beatmapPath, replays);
+
+        /// <summary>Time of the nth hit object, which is where its judgement lands.</summary>
+        private static double timeOf(int index) => first_object_ms + index * spacing_ms;
+
+        [Test]
+        public void ItRecordsACleanPlayAsPerfectThroughout()
+        {
+            AddStep("simulate one clean play", () => simulate(replay("clean")));
+            AddUntilStep("recorded to the end", () => simulator.AllComplete);
+
+            AddAssert("every object is on the timeline", () =>
+                simulator.Timelines[0].Points.Count == object_count);
+
+            AddAssert("combo climbs one per object", () =>
+                simulator.Timelines[0].Points.Select(p => p.Combo).SequenceEqual(Enumerable.Range(1, object_count)));
+
+            AddAssert("and nothing ever broke", () =>
+                simulator.Timelines[0].Points.All(p => !p.BrokeCombo && Math.Abs(p.Accuracy - 1) < 0.001));
+        }
+
+        /// <summary>
+        /// The property the design exists for: the recorded answer depends on the TIME asked about
+        /// and nothing else. A running total would only match if it happened to have been fed in
+        /// step with the question.
+        /// </summary>
+        [Test]
+        public void TheTimelineAnswersByTimeNotByPlaybackOrder()
+        {
+            AddStep("simulate a clean play", () => simulate(replay("clean")));
+            AddUntilStep("recorded", () => simulator.AllComplete);
+
+            AddAssert("early, mid and late read differently and in order", () =>
+            {
+                var timeline = simulator.Timelines[0];
+
+                return timeline.At(timeOf(0)).Combo == 1
+                       && timeline.At(timeOf(5)).Combo == 6
+                       && timeline.At(timeOf(11)).Combo == object_count;
+            });
+
+            AddAssert("and asking backwards gives the same answers", () =>
+            {
+                var timeline = simulator.Timelines[0];
+
+                int late = timeline.At(timeOf(11)).Combo;
+                int mid = timeline.At(timeOf(5)).Combo;
+                int early = timeline.At(timeOf(0)).Combo;
+
+                return early == 1 && mid == 6 && late == object_count;
+            });
+        }
+
+        /// <summary>
+        /// A miss has to land at the object it happened on, not merely somewhere. This is what the
+        /// knockout rule reads, so an off-by-one here is a player eliminated at the wrong moment.
+        /// </summary>
+        [Test]
+        public void AMissIsRecordedAsABreakAtTheObjectItHappenedOn()
+        {
+            AddStep("simulate a play that misses the seventh object", () => simulate(replay("fumbler", 6)));
+            AddUntilStep("recorded", () => simulator.AllComplete);
+
+            AddAssert("exactly one break, at that object", () =>
+            {
+                var breaks = simulator.Timelines[0].Points.Where(p => p.BrokeCombo).ToList();
+
+                return breaks.Count == 1 && Math.Abs(breaks[0].Time - timeOf(6)) < 200;
+            });
+
+            // Read either side of the BREAK's own recorded time rather than the object's. A miss is
+            // judged when its hit window expires, which is tens of milliseconds after the object,
+            // so asking at the object time still reads the play as intact.
+            AddAssert("combo is held right up to the break, then gone", () =>
+            {
+                var timeline = simulator.Timelines[0];
+                double breakAt = timeline.Points.First(p => p.BrokeCombo).Time;
+
+                return timeline.At(breakAt - 1).Combo == 6
+                       && timeline.At(breakAt).Combo == 0;
+            });
+
+            AddAssert("and is rebuilt from one afterwards", () =>
+                simulator.Timelines[0].Points.Last().Combo == object_count - 1 - 6);
+        }
+
+        /// <summary>
+        /// A miss on the FIRST object is not a combo break — there was no combo to break. Getting
+        /// this wrong knocks a player out before the map has started.
+        /// </summary>
+        [Test]
+        public void AMissOnTheVeryFirstObjectIsNotABreak()
+        {
+            AddStep("simulate a play that misses the opener", () => simulate(replay("slowstarter", 0)));
+            AddUntilStep("recorded", () => simulator.AllComplete);
+
+            AddAssert("no break recorded", () => simulator.Timelines[0].Points.All(p => !p.BrokeCombo));
+            AddAssert("but the accuracy did drop", () => simulator.Timelines[0].Points[0].Accuracy < 1);
+        }
+
+        [Test]
+        public void EachPlayerGetsTheirOwnRecordAndNobodyElses()
+        {
+            AddStep("simulate three plays that fail at different points", () =>
+                simulate(replay("clean"), replay("early", 2), replay("late", 9)));
+
+            AddUntilStep("all recorded", () => simulator.AllComplete);
+
+            AddAssert("the breaks land where each player's own misses were", () =>
+            {
+                double?[] breaks = simulator.Timelines
+                                            .Select(t => t.Points.FirstOrDefault(p => p.BrokeCombo).Time as double?)
+                                            .ToArray();
+
+                bool cleanNeverBroke = !simulator.Timelines[0].Points.Any(p => p.BrokeCombo);
+
+                return cleanNeverBroke
+                       && Math.Abs(simulator.Timelines[1].Points.First(p => p.BrokeCombo).Time - timeOf(2)) < 200
+                       && Math.Abs(simulator.Timelines[2].Points.First(p => p.BrokeCombo).Time - timeOf(9)) < 200;
+            });
+        }
+
+        /// <summary>
+        /// Knockout read off the recorded plays: the rule and the recording have to agree about who
+        /// is still in it at a given moment, which is the entire feature in one assertion.
+        /// </summary>
+        [Test]
+        public void TheKnockoutRuleReadsTheRecordedPlaysCorrectly()
+        {
+            AddStep("simulate a clean play and two that break", () =>
+                simulate(replay("survivor"), replay("early", 2), replay("late", 9)));
+
+            AddUntilStep("all recorded", () => simulator.AllComplete);
+
+            AddAssert("the field thins in the right order", () =>
+            {
+                var rules = new KnockoutRules(KnockoutMode.ComboBreak, GraceEndSeconds: 0);
+                var timelines = simulator.Timelines;
+
+                return rules.AliveCount(timelines, 0) == 3
+                       && rules.AliveCount(timelines, timeOf(5)) == 2
+                       && rules.AliveCount(timelines, timeOf(11)) == 1
+                       && rules.AliveAt(timelines[0], timeOf(11));
+            });
+
+            AddAssert("and showcase keeps everyone in", () =>
+                new KnockoutRules().AliveCount(simulator.Timelines, timeOf(11)) == 3);
+        }
+
+        private static string map()
+        {
+            var sb = new StringBuilder();
+
+            sb.Append("osu file format v14\n\n[General]\nAudioFilename: audio.wav\nMode: 0\n\n");
+            sb.Append("[Metadata]\nTitle:Sim\nArtist:A\nCreator:C\nVersion:Hard\n\n");
+            sb.Append("[Difficulty]\nHPDrainRate:5\nCircleSize:4\nOverallDifficulty:8\nApproachRate:9\nSliderMultiplier:1.4\nSliderTickRate:1\n\n");
+            sb.Append("[TimingPoints]\n0,500,4,2,0,60,1,0\n\n[HitObjects]\n");
+
+            for (int i = 0; i < object_count; i++)
+                sb.Append($"{100 + i * 37 % 350},{80 + i * 53 % 240},{(int)timeOf(i)},1,0,0:0:0:0:\n");
+
+            return sb.ToString();
+        }
+    }
+}

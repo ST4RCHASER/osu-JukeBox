@@ -64,6 +64,10 @@ public partial class BeatmapVisuals : CompositeDrawable
 
     private readonly Bindable<MultiReplayMode> multiReplayMode = new Bindable<MultiReplayMode>();
 
+    private readonly Bindable<KnockoutMode> knockoutMode = new Bindable<KnockoutMode>();
+    private readonly Bindable<KnockoutSort> knockoutSortBy = new Bindable<KnockoutSort>();
+    private readonly BindableBool knockoutLiveSort = new BindableBool();
+
     // One clip per layer, each sized to MainScreen's player box (see updateLayerClips) and each
     // masking only while that box has stopped doing it itself. They exist for the two
     // "Remove ... mask" settings: a child can never escape an ancestor's mask, so releasing the
@@ -564,6 +568,9 @@ public partial class BeatmapVisuals : CompositeDrawable
         {
             config.BindWith(JukeBoxSetting.RenderChart, renderChart);
             config.BindWith(JukeBoxSetting.MultiReplayMode, multiReplayMode);
+        config.BindWith(JukeBoxSetting.KnockoutMode, knockoutMode);
+        config.BindWith(JukeBoxSetting.KnockoutSortBy, knockoutSortBy);
+        config.BindWith(JukeBoxSetting.KnockoutLiveSort, knockoutLiveSort);
             config.BindWith(JukeBoxSetting.PlayHitSounds, playHitSounds);
             config.BindWith(JukeBoxSetting.BackgroundDim, backgroundDim);
             config.BindWith(JukeBoxSetting.BackgroundBlur, backgroundBlur);
@@ -604,6 +611,13 @@ public partial class BeatmapVisuals : CompositeDrawable
         // Live-react to settings changes without a rebuild (initial state already applied in load()).
         renderChart.BindValueChanged(_ => updateLazerLayer());
         multiReplayMode.BindValueChanged(_ => rebuildForMultiReplayMode());
+
+        // Knockout settings do NOT rebuild. Who is out is a question about plays that have already
+        // been recorded, so changing the rule mid-song is a re-reading of data that is all there —
+        // rebuilding would throw away the simulation and make the user watch it happen again.
+        knockoutMode.BindValueChanged(_ => updateKnockoutRules());
+        knockoutSortBy.BindValueChanged(_ => updateKnockoutRules());
+        knockoutLiveSort.BindValueChanged(_ => updateKnockoutRules());
         playHitSounds.BindValueChanged(_ => updateLazerLayer());
 
         // Opacity is pure alpha on the layer already on screen — no rebuild, unlike mods or a
@@ -835,7 +849,11 @@ public partial class BeatmapVisuals : CompositeDrawable
             {
                 Logger.Log($"Playing {forThisDifficulty.Count} replays of '{Path.GetFileName(osuFile)}' over one chart");
 
-                chartContainer.Add(multiCombine = new MultiReplayCombine(osuFile!, forThisDifficulty) { AlwaysPresent = true });
+                chartContainer.Add(multiCombine = new MultiReplayCombine(osuFile!, forThisDifficulty)
+                {
+                    AlwaysPresent = true,
+                    Rules = currentKnockoutRules(),
+                });
             }
             else if (forThisDifficulty.Count > 1)
             {
@@ -890,6 +908,22 @@ public partial class BeatmapVisuals : CompositeDrawable
             multiCombine.HitSoundsEnabled = hitSounds;
             updateChartVisibility();
         }
+    }
+
+    /// <summary>The knockout rules as the settings currently have them.</summary>
+    private KnockoutRules currentKnockoutRules() => new KnockoutRules(
+        knockoutMode.Value,
+        LiveSort: knockoutLiveSort.Value,
+        SortBy: knockoutSortBy.Value);
+
+    /// <summary>
+    /// Pushes a changed rule to a combine view that is already on screen, with no rebuild — see the
+    /// binding in LoadComplete for why. Does nothing in grid mode, which has no board.
+    /// </summary>
+    private void updateKnockoutRules()
+    {
+        if (multiCombine != null)
+            multiCombine.Rules = currentKnockoutRules();
     }
 
     /// <summary>
