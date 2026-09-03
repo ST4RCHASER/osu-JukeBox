@@ -183,7 +183,7 @@ public partial class SettingsOverlay : FocusedOverlayContainer, ITabSearch
 
     // ---- Account (osu! sign-in) ----
     private SettingsButton accountButton = null!;
-    private OsuTextFlowContainer accountStatus = null!;
+    private TruncatingSpriteText accountStatus = null!;
     private OsuTextFlowContainer accountHint = null!;
 
     // Wraps the three official-API-only rows so "Search API = Mirror" hides the whole block in one
@@ -846,7 +846,31 @@ public partial class SettingsOverlay : FocusedOverlayContainer, ITabSearch
         {
             Children = new Drawable[]
             {
-                accountStatus = descriptionText(string.Empty),
+                // A single OsuSpriteText, not descriptionText's OsuTextFlowContainer: this label's
+                // Text is swapped at runtime during sign-in, and a text-flow rebuilds its per-word
+                // child sprites on every change. Those word sprites are tracked by the settings
+                // SearchContainer (TabSearchBody), whose child bookkeeping throws
+                // KeyNotFoundException when they churn under it — a hard crash on the sign-in path.
+                // A single sprite changes its string without adding/removing children, so nothing
+                // churns; Truncate keeps a long status inside the panel instead of overflowing.
+                new Container
+                {
+                    RelativeSizeAxes = Axes.X,
+                    AutoSizeAxes = Axes.Y,
+                    Padding = new MarginPadding
+                    {
+                        Left = SettingsPanel.CONTENT_PADDING.Left,
+                        Right = SettingsPanel.CONTENT_PADDING.Right,
+                        Top = 8,
+                        Bottom = 8,
+                    },
+                    Child = accountStatus = new TruncatingSpriteText
+                    {
+                        RelativeSizeAxes = Axes.X,
+                        Font = OsuFont.GetFont(size: 12),
+                        Colour = Theme.TextTertiary,
+                    },
+                },
                 accountButton = new SettingsButton { Text = "Connect osu! account" },
                 accountHint = descriptionText(accountHintText),
             },
