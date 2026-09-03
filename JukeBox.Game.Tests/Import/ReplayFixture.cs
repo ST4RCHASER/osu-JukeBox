@@ -85,6 +85,21 @@ namespace JukeBox.Game.Tests.Import
         /// <param name="missAtIndices">Zero-based indices of the objects this player misses, by
         /// simply never pressing on them.</param>
         public static void WriteHitting(string path, string beatmapPath, string playerName, params int[] missAtIndices)
+            => WriteHitting(path, beatmapPath, playerName, Vector2.Zero, missAtIndices);
+
+        /// <summary>
+        /// As <see cref="WriteHitting(string,string,string,int[])"/>, but with this player's cursor
+        /// sitting <paramref name="cursorOffset"/> away from the centre of each object.
+        ///
+        /// <para>
+        /// Without an offset every fixture player traces the SAME path, so their cursors land
+        /// exactly on top of one another. That is harmless for scoring and useless for anything
+        /// about cursors: "each player has their own" cannot be seen, by eye or in a screenshot,
+        /// when they are all in the same pixel. Keep it well inside the hit radius, or the player
+        /// starts missing objects they were meant to hit.
+        /// </para>
+        /// </summary>
+        public static void WriteHitting(string path, string beatmapPath, string playerName, Vector2 cursorOffset, params int[] missAtIndices)
         {
             var beatmap = new FlatWorkingBeatmap(beatmapPath);
             var misses = new HashSet<int>(missAtIndices);
@@ -94,7 +109,8 @@ namespace JukeBox.Game.Tests.Import
 
             for (int i = 0; i < objects.Count; i++)
             {
-                var (time, position) = objects[i];
+                var (time, centre) = objects[i];
+                var position = centre + cursorOffset;
 
                 // Approach with the button up, press ON the object, hold briefly, release. A miss
                 // is the same movement with the press left out — the cursor is in the right place

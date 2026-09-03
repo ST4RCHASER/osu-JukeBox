@@ -191,6 +191,60 @@ namespace JukeBox.Game.Tests.Visual
         }
 
         /// <summary>
+        /// A cursor must be drawn where ITS player's hand was. Colour alone does not prove that:
+        /// four correctly-coloured cursors reading one player's replay would look right in every
+        /// assertion above and be a lie on screen.
+        /// </summary>
+        [Test]
+        public void EachCursorFollowsItsOwnPlayersReplay()
+        {
+            // Each player's cursor sits a different distance from the object centres, so their
+            // positions have to differ at any moment they are all on screen.
+            AddStep("build three who play from different places", () => buildWithOffsets(3));
+            AddUntilStep("cursors attached", () => combine.CursorsAttached == 3);
+
+            AddStep("run the play", () => playTo(timeOf(4)));
+
+            AddAssert("all three cursors are somewhere", () =>
+                combine.ChildrenOfType<PlayerCursor>().All(c => c.HasPosition));
+
+            AddAssert("and no two are in the same place", () =>
+            {
+                var positions = combine.ChildrenOfType<PlayerCursor>()
+                                       .SelectMany(c => c.ChildrenOfType<Container>())
+                                       .Select(c => c.Position)
+                                       .ToList();
+
+                return positions.Distinct().Count() >= 3;
+            });
+        }
+
+        private void buildWithOffsets(int count)
+        {
+            var replays = Enumerable.Range(0, count).Select(i =>
+            {
+                string osr = Path.Combine(tmp, $"player{i}.osr");
+                var offset = new osuTK.Vector2(i * 15, i * -10);
+
+                ReplayFixture.WriteHitting(osr, beatmapPath, $"player{i}", offset);
+
+                return new ReplayAttachment
+                {
+                    PlayerName = $"player{i}",
+                    SourcePath = osr,
+                    OsuFile = beatmapPath,
+                    Score = new JukeBoxScoreDecoder(beatmapPath).Decode(osr),
+                    RateTempo = 1,
+                    RateFrequency = 1,
+                };
+            }).ToList();
+
+            host.Child = combine = new MultiReplayCombine(beatmapPath, replays);
+            host.Clock = framed = new FramedClock(manual);
+            manual.CurrentTime = 0;
+        }
+
+        /// <summary>
         /// The playfield's own cursor is white and cannot be tinted, so it goes — otherwise the
         /// driving player has two cursors and the wrong one is colourless.
         /// </summary>
