@@ -220,6 +220,15 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
         => ((ISkinSource?)beatmapSkinGate ?? skinProvider)?.AllSources.ToArray() ?? Array.Empty<ISkin>();
 
     /// <summary>
+    /// The composed skin, for the rail to look up its own graphics (the grade "ranking-X-small"
+    /// textures). This is the SAME chain the chart renders under — the user's selected skin with the
+    /// classic legacy skin behind it — so the grade the rail draws matches the play on screen, and a
+    /// grade texture resolves even under a non-legacy selection (classic supplies it). Null until the
+    /// chart has finished building its skin.
+    /// </summary>
+    internal ISkinSource? GradeSkin => (ISkinSource?)beatmapSkinGate ?? skinProvider;
+
+    /// <summary>
     /// The same chain with each entry unwrapped to the skin underneath it: every source is wrapped
     /// in the ruleset's own skin transformer (see <see cref="LazerSkinProvider"/>), and it is the
     /// skin inside that a test means when it says "Classic comes after the user's skin".

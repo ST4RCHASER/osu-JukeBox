@@ -208,7 +208,14 @@ public partial class MultiReplayCombine : CompositeDrawable
         // Feed the preload progress to the rail so it can show "simulating N%" until every play is
         // recorded — after which the whole board is a pure lookup.
         if (board != null)
+        {
             board.LoadingProgress = simulator.Progress;
+
+            // The rail looks up its grade textures in the SAME skin the chart renders under, so a
+            // grade shows the active skin's own "ranking-X-small" graphic (small, not the giant badge)
+            // and matches the play on screen. Null until the chart's skin is built.
+            board.GradeSkin = chart.GradeSkin;
+        }
     }
 
     /// <summary>

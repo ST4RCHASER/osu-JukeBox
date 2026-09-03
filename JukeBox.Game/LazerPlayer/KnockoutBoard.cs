@@ -8,10 +8,13 @@ using osu.Framework.Extensions.Color4Extensions;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Shapes;
+using osu.Framework.Graphics.Sprites;
+using osu.Framework.Graphics.Textures;
 using osu.Framework.Input.Events;
 using osu.Game.Graphics;
 using osu.Game.Graphics.Sprites;
 using osu.Game.Online.Leaderboards;
+using osu.Game.Skinning;
 using osu.Game.Rulesets.Osu;
 using osu.Game.Rulesets.Osu.Replays;
 using osu.Game.Rulesets.Replays;
@@ -64,6 +67,52 @@ public partial class KnockoutBoard : CompositeDrawable
     /// plays are still being recorded and the numbers are not to be trusted yet. Set by the combine
     /// layer from its simulator; defaults to 1 (ready) for a board with no preload behind it.</summary>
     public double LoadingProgress { get; set; } = 1;
+
+    /// <summary>
+    /// The skin the rail looks its grade textures up in — the SAME chain the chart renders under
+    /// (the user's selected skin with the classic legacy skin behind it), set by the combine once the
+    /// chart's skin is built. So a grade that has a "ranking-X-small" texture in the active skin is
+    /// drawn as THAT texture; only a skin with none falls back to the DrawableRank badge. Null (no
+    /// combine, or before the chart loads) means every grade uses the badge fallback.
+    /// </summary>
+    public ISkinSource? GradeSkin
+    {
+        get => gradeSkin;
+        set
+        {
+            if (ReferenceEquals(gradeSkin, value))
+                return;
+
+            gradeSkin = value;
+
+            // A new skin means every grade must be re-fetched, so drop the cache.
+            gradeTextures.Clear();
+        }
+    }
+
+    private ISkinSource? gradeSkin;
+
+    /// <summary>The grade each row currently has a graphic for, so the skin is only queried again
+    /// when a row's grade actually changes — a texture lookup walks the chain, and doing it for 47
+    /// rows every frame is a lot of work for the same answer.</summary>
+    private readonly Dictionary<int, string> gradeTextures = new Dictionary<int, string>();
+
+    /// <summary>Points each row's grade at the active skin's own graphic, or the badge fallback.</summary>
+    private void applyGradeTextures()
+    {
+        foreach (var row in rows)
+        {
+            string wanted = row.WantedGrade;
+
+            if (gradeTextures.TryGetValue(row.PlayerIndex, out string? shown) && shown == wanted)
+                continue;
+
+            gradeTextures[row.PlayerIndex] = wanted;
+
+            var texture = wanted.Length == 0 ? null : gradeSkin?.GetTexture($"ranking-{wanted}-small");
+            row.ApplyGradeGraphic(texture, wanted);
+        }
+    }
 
     /// <summary>
     /// Raised with a player's index while their row is hovered, and with null when it is not. The
@@ -277,6 +326,10 @@ public partial class KnockoutBoard : CompositeDrawable
 
             row.UpdateFrom(entrants[order[rank]].Timeline, Rules, time, rank + 1, !eliminated.Contains(order[rank]));
         }
+
+        // After the rows have read their grades, so a grade that improves mid-song swaps its graphic.
+        // Cheap: it only asks the skin when a row's grade has actually changed.
+        applyGradeTextures();
     }
 
     /// <summary>The last order the board settled on while every player's numbers were known, held
@@ -360,25 +413,31 @@ public partial class KnockoutBoard : CompositeDrawable
         private int frameHint;
 
         private static readonly Color4 key_dim = new Color4(0.22f, 0.22f, 0.26f, 1f);
-        private static readonly Color4 key1_lit = new Color4(0.45f, 0.85f, 1f, 1f);
-        private static readonly Color4 key2_lit = new Color4(1f, 0.55f, 0.9f, 1f);
 
         // The fixed-width cells the drawables live in. Their widths and X positions are set per
-        // density in Apply, which is what makes the row a table rather than a run-on line. The name
-        // block flows (name, mods, then the hit badge) so the badge sits right after the mods the way
-        // danser draws it, rather than in a fixed column.
+        // density in Apply, which is what makes the row a table rather than a run-on line. The hit
+        // badge sits in its own fixed column AFTER the score (rightmost) so it is always in the same
+        // findable place, not chased around by the length of the name.
         private readonly Container accCell = null!;
         private readonly Container ppCell = null!;
         private readonly Container gradeCell = null!;
         private readonly FillFlowContainer nameCell = null!;
         private readonly Container comboCell = null!;
         private readonly Container scoreCell = null!;
+        private readonly Container judgeCell = null!;
 
         private Color4 playerColour;
 
-        /// <summary>The grade currently drawn, so the rank graphic is only rebuilt when it changes.</summary>
+        /// <summary>The grade currently drawn, so the graphic is only rebuilt when it changes.</summary>
         private string currentGrade = string.Empty;
-        private DrawableRank? rankGraphic;
+
+        // The grade lives in a masking cell so it can NEVER draw outside the grade column, whichever
+        // of the two ways it is drawn: the active skin's own "ranking-X-small" texture (fit-scaled
+        // into the cell), or — only when the skin has no such texture — lazer's DrawableRank badge,
+        // constrained to fill the cell rather than blowing up to fill the rail (which is what it did).
+        private readonly Sprite gradeImage = null!;
+        private readonly Container rankFallback = null!;
+        private bool gradeIsImage;
 
         /// <summary>Test hook: how many times this row has been flashed for a combo break. The
         /// combine board no longer flashes (it shows a judgement column instead); kept for the grid's
@@ -443,7 +502,7 @@ public partial class KnockoutBoard : CompositeDrawable
         /// <summary>Test hook: whether the grade is drawn as a rank GRAPHIC (danser/leaderboard
         /// badge) rather than a bare letter. Always true once a grade exists — the badge renders for
         /// every skin, which is the fix for the letter showing through Argon.</summary>
-        internal bool GradeIsImage => rankGraphic != null;
+        internal bool GradeIsImage => gradeIsImage;
 
         internal string ModsText => mods.Text.ToString()!;
 
@@ -531,12 +590,36 @@ public partial class KnockoutBoard : CompositeDrawable
                 accCell = numberCell(out accuracy, "100.00%", FontWeight.SemiBold, Anchor.CentreLeft),
                 ppCell = numberCell(out performance, "0.00pp", FontWeight.Regular, Anchor.CentreLeft),
 
-                gradeCell = new Container { Anchor = Anchor.CentreLeft, Origin = Anchor.CentreLeft, RelativeSizeAxes = Axes.Y },
+                gradeCell = new Container
+                {
+                    Anchor = Anchor.CentreLeft,
+                    Origin = Anchor.CentreLeft,
+                    RelativeSizeAxes = Axes.Y,
+                    Masking = true,
+                    Children = new Drawable[]
+                    {
+                        gradeImage = new Sprite
+                        {
+                            Anchor = Anchor.Centre,
+                            Origin = Anchor.Centre,
+                            RelativeSizeAxes = Axes.Both,
+                            FillMode = FillMode.Fit,
+                            Alpha = 0,
+                        },
+                        rankFallback = new Container
+                        {
+                            Anchor = Anchor.Centre,
+                            Origin = Anchor.Centre,
+                            RelativeSizeAxes = Axes.Both,
+                            Masking = true,
+                            Alpha = 0,
+                        },
+                    },
+                },
 
-                // Name, mods and the recent-hit badge FLOW left to right from a fixed start x — the
-                // badge lands right after the mods (danser draws "100"/"50" there), and the whole
-                // block is free to run toward the numbers because the right group is right-pinned and
-                // cannot be pushed out of line by a long name.
+                // Name and mods FLOW left to right from a fixed start x, free to run toward the
+                // numbers because the right group is right-pinned and cannot be pushed out of line by
+                // a long name.
                 nameCell = new FillFlowContainer
                 {
                     Anchor = Anchor.CentreLeft,
@@ -565,21 +648,14 @@ public partial class KnockoutBoard : CompositeDrawable
                             Colour = Color4.White,
                             Shadow = true,
                         },
-                        judgement = new OsuSpriteText
-                        {
-                            Anchor = Anchor.CentreLeft,
-                            Origin = Anchor.CentreLeft,
-                            Text = string.Empty,
-                            Font = OsuFont.Torus.With(weight: FontWeight.Bold, fixedWidth: true),
-                            Colour = Color4.White,
-                            Shadow = true,
-                        },
                     },
                 },
 
-                // Right group — pinned to the right edge, reading combo then score.
+                // Right group — pinned to the right edge, reading combo, score, then the recent-hit
+                // badge (100/50/X) in its own fixed column AFTER the score.
                 comboCell = numberCell(out combo, "0x", FontWeight.Regular, Anchor.CentreRight),
                 scoreCell = numberCell(out score, "00000000", FontWeight.Bold, Anchor.CentreRight),
+                judgeCell = numberCell(out judgement, string.Empty, FontWeight.Bold, Anchor.CentreRight),
             };
         }
 
@@ -620,8 +696,19 @@ public partial class KnockoutBoard : CompositeDrawable
                 key2Held = osu.Actions.Contains(OsuAction.RightButton);
             }
 
-            ((Box)key1.Child).Colour = key1Held ? key1_lit : key_dim;
-            ((Box)key2.Child).Colour = key2Held ? key2_lit : key_dim;
+            // Lit bars carry the player's OWN colour (the same colour as their name and cursor), so
+            // the key display reads as "this player" at a glance. The two bars are one shade apart so
+            // they stay distinguishable.
+            ((Box)key1.Child).Colour = key1Held ? playerColour : key_dim;
+            ((Box)key2.Child).Colour = key2Held ? key2Colour() : key_dim;
+        }
+
+        /// <summary>The second key bar's lit colour: the player's colour a shade darker, so the two
+        /// bars read as a pair without a hard-coded palette.</summary>
+        private Color4 key2Colour()
+        {
+            var c = playerColour;
+            return new Color4(c.R * 0.7f, c.G * 0.7f, c.B * 0.7f, 1f);
         }
 
         /// <summary>A fixed-width numeric cell: the text is right-aligned inside it in a tabular
@@ -651,7 +738,6 @@ public partial class KnockoutBoard : CompositeDrawable
         public void Apply(RailMetrics metrics)
         {
             Height = metrics.RowHeight;
-            metricsHeight = metrics.RowHeight;
 
             float fs = metrics.FontSize;
 
@@ -674,12 +760,14 @@ public partial class KnockoutBoard : CompositeDrawable
             float gradeW = fs * 2.1f;
             float comboW = 7f * d;
             float scoreW = 8.5f * d;
+            float judgeW = 3.5f * d;
 
             accCell.Width = accW;
             ppCell.Width = ppW;
             gradeCell.Width = gradeW;
             comboCell.Width = comboW;
             scoreCell.Width = scoreW;
+            judgeCell.Width = judgeW;
 
             // Key bars: two narrow pills at the far left, each a little over half the row tall.
             float keyW = fs * 0.34f;
@@ -695,13 +783,15 @@ public partial class KnockoutBoard : CompositeDrawable
             gradeCell.X = ppCell.X + ppW + gap;
             nameCell.X = gradeCell.X + gradeW + gap;
 
-            // Right group X is measured back from the right edge (negative, right-anchored).
+            // Right group X is measured back from the right edge (negative, right-anchored): the hit
+            // badge is rightmost (AFTER the score), then the score, then the combo.
             float rm = 5;
-            scoreCell.X = -rm;
-            comboCell.X = -(rm + scoreW + gap);
+            judgeCell.X = -rm;
+            scoreCell.X = -(rm + judgeW + gap);
+            comboCell.X = -(rm + judgeW + gap + scoreW + gap);
 
-            if (rankGraphic != null)
-                rankGraphic.Size = new Vector2(gradeW, metrics.RowHeight * 0.72f);
+            // The grade graphic fills the (small, masking) grade cell via RelativeSizeAxes, so it
+            // scales with the density automatically — no per-graphic resize here.
         }
 
         /// <summary>Reads this player's state at <paramref name="time"/> onto the row.</summary>
@@ -737,7 +827,7 @@ public partial class KnockoutBoard : CompositeDrawable
             combo.Text = (pending ? 0 : point.Combo).ToString("N0") + "x";
             performance.Text = rollingPerformance.ToString("0.00") + "pp";
 
-            applyGrade(pending ? string.Empty : point.Grade, metricsHeight);
+            WantedGrade = pending ? string.Empty : point.Grade;
 
             // The recent-judgement column: the most recent non-perfect result, but only while it is
             // still RECENT — a miss lingers a moment then clears, rather than sticking for the song.
@@ -759,13 +849,11 @@ public partial class KnockoutBoard : CompositeDrawable
             // everywhere (cursor gone, name fallen, row faded), not just greyed a little.
             RestingAlpha = alive ? 1 : 0.3f;
 
+            // NO background strip behind a row, alive or out — the user wants the rows drawn straight
+            // over the playfield with nothing behind the text. The alive/out difference is carried by
+            // the row's own alpha (above), not by a coloured bar.
             this.FadeTo(RestingAlpha, 300, Easing.OutQuint);
-            background.FadeColour(alive ? Color4.Black.Opacity(0.45f) : Color4.DarkRed.Opacity(0.5f), 300, Easing.OutQuint);
         }
-
-        /// <summary>Row height as of the last <see cref="Apply"/>, so a grade rebuilt between resizes
-        /// is created at the right size.</summary>
-        private float metricsHeight;
 
         /// <summary>How long after a judgement it still shows in the column.</summary>
         private const double recent_judgement_ms = 600;
@@ -775,24 +863,52 @@ public partial class KnockoutBoard : CompositeDrawable
         /// skin. The old skin-texture lookup returned nothing under Argon (it has no ranking-*-small
         /// textures) and every row fell back to a bare letter, which is what the user saw.
         /// </summary>
-        private void applyGrade(string grade, float height)
+        /// <summary>The grade this row wants drawn, set each update; the board reads it, resolves the
+        /// skin texture and calls <see cref="ApplyGradeGraphic"/>.</summary>
+        internal string WantedGrade { get; private set; } = string.Empty;
+
+        /// <summary>
+        /// Draws the grade: the active skin's <paramref name="texture"/> when it has one (fit into the
+        /// masking cell), otherwise lazer's DrawableRank badge constrained to the same cell. Either
+        /// way it is a small graphic confined to the grade column — never a bare letter, never the
+        /// column-filling giant the unconstrained DrawableRank drew.
+        /// </summary>
+        public void ApplyGradeGraphic(Texture? texture, string grade)
         {
-            if (grade == currentGrade)
-                return;
-
             currentGrade = grade;
-            gradeCell.Clear();
-            rankGraphic = null;
 
-            if (grade.Length == 0 || !Enum.TryParse<ScoreRank>(grade, out var rank))
-                return;
-
-            gradeCell.Add(rankGraphic = new DrawableRank(rank)
+            if (grade.Length == 0)
             {
-                Anchor = Anchor.Centre,
-                Origin = Anchor.Centre,
-                Size = new Vector2(gradeCell.DrawWidth > 0 ? gradeCell.DrawWidth : height * 1.6f, height * 0.72f),
-            });
+                gradeImage.Alpha = 0;
+                rankFallback.Alpha = 0;
+                rankFallback.Clear();
+                gradeIsImage = false;
+                return;
+            }
+
+            if (texture != null)
+            {
+                gradeImage.Texture = texture;
+                gradeImage.Alpha = 1;
+                rankFallback.Alpha = 0;
+                rankFallback.Clear();
+                gradeIsImage = true;
+                return;
+            }
+
+            if (Enum.TryParse<ScoreRank>(grade, out var rank))
+            {
+                rankFallback.Clear();
+                rankFallback.Add(new DrawableRank(rank) { RelativeSizeAxes = Axes.Both });
+                rankFallback.Alpha = 1;
+                gradeImage.Alpha = 0;
+                gradeIsImage = true;
+                return;
+            }
+
+            gradeImage.Alpha = 0;
+            rankFallback.Alpha = 0;
+            gradeIsImage = false;
         }
 
         /// <summary>Score in danser's abbreviated form: 16.85M at a million, 15.30K at a thousand,
