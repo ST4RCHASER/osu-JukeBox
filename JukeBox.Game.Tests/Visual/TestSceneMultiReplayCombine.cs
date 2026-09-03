@@ -388,28 +388,31 @@ namespace JukeBox.Game.Tests.Visual
         }
 
         /// <summary>
-        /// The user's other request: on a combo break the player's NAME blinks and flashes red for
-        /// about a second, "like osu touny". A transient cue rather than the elimination state — it
-        /// fires with knockout switched off, which is the default.
+        /// Combine mode does NOT flash the name on a break (that stays the grid's cue). Instead the
+        /// player who just missed shows a recent-judgement "X" in the column after their score, so
+        /// you can see who is dropping without the name jumping about. Asserted on the drawn column,
+        /// not on a flash counter.
         /// </summary>
         [Test]
-        public void ABrokenComboFlashesThatPlayersName()
+        public void ARecentMissShowsInTheJudgementColumnRatherThanFlashingTheName()
         {
-            AddStep("build two, one of whom breaks at the fifth object", () =>
+            AddStep("build two, one of whom misses the fifth object", () =>
                 build(2, misses: new[] { Array.Empty<int>(), new[] { 4 } }));
 
             AddUntilStep("recorded", () => combine.Simulator.AllComplete);
 
-            AddStep("play up to just before the break", () => playTo(timeOf(3)));
-            AddAssert("nothing has flashed yet", () => combine.Board.Rows.All(r => r.ComboBreakFlashes == 0));
+            AddStep("show just before the miss", () => showAt(timeOf(3)));
+            AddAssert("nobody shows a judgement yet", () => combine.Board.Rows.All(r => r.JudgementText.Length == 0));
 
-            AddStep("play across it", () => playTo(timeOf(7)));
+            AddStep("show just after the miss is judged", () => showAt(timeOf(4) + 250));
 
-            AddAssert("the player who broke is flashed, and only them", () =>
-                rowFor(1).ComboBreakFlashes == 1 && rowFor(0).ComboBreakFlashes == 0);
+            AddAssert("the player who missed shows an X, and only them", () =>
+                rowFor(1).JudgementText == "X" && rowFor(0).JudgementText.Length == 0);
 
-            AddAssert("with knockout OFF, so they carry on playing", () =>
-                combine.Rules.Mode == KnockoutMode.Showcase && rowFor(1).ShownAlive);
+            AddAssert("and the name was NOT flashed", () => combine.Board.Rows.All(r => r.ComboBreakFlashes == 0));
+
+            AddStep("show well after the miss", () => showAt(timeOf(9)));
+            AddAssert("the X has cleared once it is no longer recent", () => rowFor(1).JudgementText.Length == 0);
         }
 
         /// <summary>
@@ -761,6 +764,63 @@ namespace JukeBox.Game.Tests.Visual
         /// none is present.</summary>
         private OsuSpriteText? breakBubble() =>
             combine.Cursors[1]?.ChildrenOfType<OsuSpriteText>().FirstOrDefault(t => t.Colour == Color4.Red);
+
+        private void buildWithNames(params string[] names)
+        {
+            var replays = names.Select(n => replayFor(n)).ToList();
+            builtReplays = replays;
+            host.Child = combine = new MultiReplayCombine(beatmapPath, replays);
+            host.Clock = framed = new FramedClock(manual);
+            manual.CurrentTime = 0;
+        }
+
+        /// <summary>
+        /// The grade is drawn as a rank GRAPHIC (lazer's leaderboard badge), not a bare letter. The
+        /// old skin-texture lookup returned nothing under Argon and every row fell back to a letter,
+        /// which is what the user reported.
+        /// </summary>
+        [Test]
+        public void TheGradeIsDrawnAsAGraphicNotALetter()
+        {
+            AddStep("build two clean plays", () => build(2));
+            AddUntilStep("recorded", () => combine.Simulator.AllComplete);
+            AddStep("show the end", () => showAt(timeOf(object_count - 1) + 500));
+
+            AddAssert("every row shows a grade graphic", () => combine.Board.Rows.All(r => r.GradeIsImage));
+        }
+
+        /// <summary>
+        /// The numeric columns use a tabular figure font, so a rolling value changes its digits in
+        /// place without the text reflowing — the "numbers shake" report.
+        /// </summary>
+        [Test]
+        public void TheNumericColumnsAreTabularSoRollingDoesNotShake()
+        {
+            AddStep("build two", () => build(2));
+            AddUntilStep("recorded", () => combine.Simulator.AllComplete);
+            AddStep("show a moment", () => showAt(timeOf(5)));
+
+            AddAssert("all numeric columns are fixed-width", () => combine.Board.Rows.All(r => r.NumbersAreFixedWidth));
+        }
+
+        /// <summary>
+        /// The score column lines up down the board no matter how long each player's name is — the
+        /// "ragged columns" report. With the old left-to-right flow a long name shoved the numbers
+        /// after it; the right group is now pinned, so this holds for wildly different name lengths.
+        /// </summary>
+        [Test]
+        public void TheScoreColumnAlignsWhateverTheNameLengths()
+        {
+            AddStep("build three with very different name lengths", () => buildWithNames("a", "abcdefghijklmnop", "xy"));
+            AddUntilStep("recorded", () => combine.Simulator.AllComplete);
+            AddStep("show the end", () => showAt(timeOf(object_count - 1) + 500));
+
+            AddAssert("every row's score shares one right edge", () =>
+            {
+                var edges = combine.Board.Rows.Select(r => r.ScoreRightEdge).ToList();
+                return edges.Max() - edges.Min() < 0.5f;
+            });
+        }
 
         /// <summary>
         /// A per-player cursor colour override set BEFORE the view builds reaches all three places

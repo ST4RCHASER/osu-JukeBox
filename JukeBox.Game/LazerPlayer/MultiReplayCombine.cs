@@ -169,7 +169,7 @@ public partial class MultiReplayCombine : CompositeDrawable
                            replay.PlayerName.Length > 0 ? replay.PlayerName : "unknown",
                            effectiveColour(index),
                            simulator.Timelines[index],
-                           replay.ModAcronyms.Count > 0 ? "+" + string.Join(string.Empty, replay.ModAcronyms) : string.Empty))
+                           railMods(replay)))
                        .ToList();
 
         AddInternal(board = new KnockoutBoard(entrants)
@@ -338,7 +338,9 @@ public partial class MultiReplayCombine : CompositeDrawable
                 if (rules.WorthAnnouncing(point.ComboLost))
                     cursor.FlashComboBreak();
 
-                board?.FlashComboBreak(player);
+                // The board itself does NOT flash the name in combine mode: the rail shows a recent
+                // judgement column (X / 50 / 100) instead, which reads as "who is dropping" without
+                // the name jumping around. The name flash stays the GRID's cue (see MultiReplayGrid).
                 break;
             }
         }
@@ -354,6 +356,16 @@ public partial class MultiReplayCombine : CompositeDrawable
     /// </summary>
     internal static Color4 ColourFor(int index, int count)
         => Color4.FromHsv(new Vector4((float)index / Math.Max(count, 1), 0.85f, 1, 1));
+
+    /// <summary>This player's rail mod string ("+HDDT"), keeping CL/TD that the general mod display
+    /// drops — worth seeing when comparing plays side by side. Empty for a no-mod play.</summary>
+    private static string railMods(ReplayAttachment replay)
+    {
+        var acronyms = Replays.ReplayMods.RailAcronyms(
+            replay.Score?.ScoreInfo.Mods ?? System.Array.Empty<osu.Game.Rulesets.Mods.Mod>());
+
+        return acronyms.Count > 0 ? "+" + string.Join(string.Empty, acronyms) : string.Empty;
+    }
 
     /// <summary>This player's colour as drawn: their per-player override if set, otherwise the
     /// hue-spread default for their slot.</summary>

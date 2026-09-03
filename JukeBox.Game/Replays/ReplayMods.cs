@@ -115,4 +115,18 @@ public static class ReplayMods
                .OrderBy(a => Array.IndexOf(display_order, a) is var i && i >= 0 ? i : display_order.Length)
                .ThenBy(a => a, StringComparer.Ordinal)
                .ToArray();
+
+    /// <summary>
+    /// Mod names for the multi-replay RAIL, which — unlike <see cref="Acronyms"/> — keeps
+    /// <c>CL</c> (Classic) and <c>TD</c> (Touch Device). When you are comparing 47 plays side by
+    /// side, "this one was on a tablet" and "this one was under stable's rules" are exactly the sort
+    /// of thing worth seeing, where on a single now-playing card they are just noise. TD already
+    /// flows through <see cref="Acronyms"/>; CL is the one the general path drops.
+    /// </summary>
+    public static IReadOnlyList<string> RailAcronyms(IEnumerable<Mod> mods)
+        => mods.Where(m => m is not ModAutoplay)
+               .Select(m => m.Acronym)
+               .OrderBy(a => Array.IndexOf(display_order, a) is var i && i >= 0 ? i : display_order.Length)
+               .ThenBy(a => a, StringComparer.Ordinal)
+               .ToArray();
 }

@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using osu.Game.Rulesets.Scoring;
 
 namespace JukeBox.Game.Replays;
 
@@ -17,6 +18,9 @@ namespace JukeBox.Game.Replays;
 /// <param name="ComboLost">On a break, the combo that was destroyed — zero otherwise. How big a
 /// break was is what decides whether it is worth announcing on the playfield; the combo AFTER a
 /// break is always zero and says nothing about how much it cost.</param>
+/// <param name="Judgement">The result THIS judgement landed — a miss, a 50, a 100, a 300. The
+/// combine board shows the recent non-perfect ones (X/50/100) beside a player so you can see who is
+/// dropping, in place of the name flash the grid uses.</param>
 public readonly record struct TimelinePoint(
     double Time,
     long Score,
@@ -25,7 +29,8 @@ public readonly record struct TimelinePoint(
     bool BrokeCombo,
     string Grade = "",
     double Performance = 0,
-    int ComboLost = 0);
+    int ComboLost = 0,
+    HitResult Judgement = HitResult.None);
 
 /// <summary>
 /// A player's whole play, recorded once as a list of states over time, so that what the scoreboard

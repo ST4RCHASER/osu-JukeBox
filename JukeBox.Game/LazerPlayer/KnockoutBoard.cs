@@ -4,10 +4,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using JukeBox.Game.Replays;
-using osu.Framework.Allocation;
-using osu.Framework.Graphics.Sprites;
-using osu.Framework.Graphics.Textures;
-using osu.Game.Skinning;
 using osu.Framework.Extensions.Color4Extensions;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
@@ -15,6 +11,9 @@ using osu.Framework.Graphics.Shapes;
 using osu.Framework.Input.Events;
 using osu.Game.Graphics;
 using osu.Game.Graphics.Sprites;
+using osu.Game.Online.Leaderboards;
+using osu.Game.Rulesets.Scoring;
+using osu.Game.Scoring;
 using osuTK;
 using osuTK.Graphics;
 
@@ -47,6 +46,11 @@ public partial class KnockoutBoard : CompositeDrawable
 
     private readonly IReadOnlyList<Entrant> entrants;
     private readonly List<Row> rows = new List<Row>();
+
+    /// <summary>The longest name in the field, in characters. Every row's name column is sized to it
+    /// so the columns after the name line up down the board instead of stepping in and out with each
+    /// player's name length.</summary>
+    private readonly int maxNameChars;
 
     /// <summary>The rules in force. Assign to change mode or sorting; the board follows.</summary>
     public KnockoutRules Rules { get; set; } = new KnockoutRules();
@@ -130,6 +134,7 @@ public partial class KnockoutBoard : CompositeDrawable
     public KnockoutBoard(IReadOnlyList<Entrant> entrants)
     {
         this.entrants = entrants;
+        maxNameChars = entrants.Count == 0 ? 4 : entrants.Max(e => e.Name.Length);
 
         // Sized to its CONTAINER, not to its content. Sizing to content is what produced a board
         // over a thousand pixels tall for 47 players, running off the bottom of the player box and
@@ -145,7 +150,7 @@ public partial class KnockoutBoard : CompositeDrawable
 
         for (int i = 0; i < entrants.Count; i++)
         {
-            var row = new Row(i, entrants[i])
+            var row = new Row(i, entrants[i], maxNameChars)
             {
                 // Hover is reported up through the board so a single listener on the combine layer
                 // can act on it, rather than every row holding a reference to the cursor overlay.
@@ -167,39 +172,6 @@ public partial class KnockoutBoard : CompositeDrawable
     }
 
     private OsuSpriteText overflowNote = null!;
-
-    [Resolved(canBeNull: true)]
-    private ISkinSource? skin { get; set; }
-
-    /// <summary>The grade each row is currently showing a texture for, so the skin is only asked
-    /// again when the answer would change.</summary>
-    private readonly Dictionary<int, string> gradeTextures = new Dictionary<int, string>();
-
-    /// <summary>
-    /// Points each row's grade at the skin's own "ranking-&lt;grade&gt;-small" graphic.
-    ///
-    /// <para>
-    /// Re-checked whenever a row's grade changes rather than every frame: a texture lookup walks
-    /// the whole skin chain, and a board of forty-seven rows doing that per frame is a great deal
-    /// of work to arrive at the same answer.
-    /// </para>
-    /// </summary>
-    private void applyGradeTextures()
-    {
-        foreach (var row in rows)
-        {
-            string wanted = row.CurrentGrade;
-
-            if (gradeTextures.TryGetValue(row.PlayerIndex, out string? shown) && shown == wanted)
-                continue;
-
-            gradeTextures[row.PlayerIndex] = wanted;
-
-            var texture = wanted.Length == 0 ? null : skin?.GetTexture($"ranking-{wanted}-small");
-
-            row.ApplyGradeTexture(texture, Metrics.RowHeight * 0.8f);
-        }
-    }
 
     protected override void Update()
     {
@@ -242,10 +214,6 @@ public partial class KnockoutBoard : CompositeDrawable
 
             row.UpdateFrom(entrants[standings[rank]].Timeline, Rules, time, rank + 1, !eliminated.Contains(standings[rank]));
         }
-
-        // After the rows have read their grades, so a grade that improves mid-song swaps its
-        // graphic. Cheap: it only asks the skin when a row's grade has actually changed.
-        applyGradeTextures();
     }
 
     /// <summary>
@@ -264,10 +232,6 @@ public partial class KnockoutBoard : CompositeDrawable
 
         foreach (var row in rows)
             row.Apply(metrics);
-
-        // A resize changes the size every grade graphic should be drawn at, so they are all
-        // re-fetched rather than left at the previous scale.
-        gradeTextures.Clear();
 
         int hidden = entrants.Count - metrics.VisibleRows;
 
@@ -302,15 +266,41 @@ public partial class KnockoutBoard : CompositeDrawable
 
         protected override void OnHoverLost(HoverLostEvent e) => FocusRequested?.Invoke(null);
 
-        private readonly OsuSpriteText rank = null!;
-        private readonly OsuSpriteText score = null!;
-        private readonly OsuSpriteText accuracy = null!;
-        private readonly OsuSpriteText combo = null!;
-        private readonly OsuSpriteText playerName = null!;
+        private readonly int maxNameChars;
+
         private readonly Box background = null!;
+
+        // Numeric columns, in a FIXED-WIDTH figure font and RIGHT-aligned inside fixed-width cells,
+        // so a rolling value changes the digits in place without the text reflowing and without the
+        // columns stepping in and out down the board.
+        private readonly OsuSpriteText accuracy = null!;
+        private readonly OsuSpriteText performance = null!;
+        private readonly OsuSpriteText combo = null!;
+        private readonly OsuSpriteText score = null!;
+        private readonly OsuSpriteText judgement = null!;
+
+        private readonly OsuSpriteText playerName = null!;
+        private readonly OsuSpriteText mods = null!;
+
+        // The fixed-width cells the drawables live in. Their widths and X positions are set per
+        // density in Apply, which is what makes the row a table rather than a run-on line.
+        private readonly Container accCell = null!;
+        private readonly Container ppCell = null!;
+        private readonly Container gradeCell = null!;
+        private readonly Container nameCell = null!;
+        private readonly Container comboCell = null!;
+        private readonly Container scoreCell = null!;
+        private readonly Container judgeCell = null!;
+
         private Color4 playerColour;
 
-        /// <summary>Test hook: how many times this row has been flashed for a combo break.</summary>
+        /// <summary>The grade currently drawn, so the rank graphic is only rebuilt when it changes.</summary>
+        private string currentGrade = string.Empty;
+        private DrawableRank? rankGraphic;
+
+        /// <summary>Test hook: how many times this row has been flashed for a combo break. The
+        /// combine board no longer flashes (it shows a judgement column instead); kept for the grid's
+        /// own use and for the tests that still cover the flash directly.</summary>
         internal int ComboBreakFlashes { get; private set; }
 
         /// <summary>Re-tints this row's name to a new player colour, live. The flash restores to
@@ -329,8 +319,6 @@ public partial class KnockoutBoard : CompositeDrawable
             playerName.FadeColour(Color4.Red).Then().FadeColour(playerColour, 900, Easing.In);
             playerName.ScaleTo(1.4f).Then().ScaleTo(1, 900, Easing.OutQuint);
 
-            // The blink is what catches the eye; a colour fade on its own is easy to miss on a board
-            // that is already re-ordering.
             playerName.FadeTo(0.2f, 80).Then().FadeTo(1, 80)
                       .Then().FadeTo(0.2f, 80).Then().FadeTo(1, 80);
         }
@@ -349,17 +337,24 @@ public partial class KnockoutBoard : CompositeDrawable
 
         internal string AccuracyText => accuracy.Text.ToString()!;
 
-        private readonly OsuSpriteText performance = null!;
-        private readonly OsuSpriteText grade = null!;
-        private readonly OsuSpriteText mods = null!;
-        private readonly Sprite gradeImage = null!;
-        private readonly FillFlowContainer left = null!;
-        private readonly FillFlowContainer right = null!;
+        /// <summary>Test hook: the recent-judgement column (X / 50 / 100), empty when there is
+        /// nothing recent worth showing.</summary>
+        internal string JudgementText => judgement.Text.ToString()!;
 
-        /// <summary>Test hook: whether the grade is showing the skin's graphic rather than a letter.</summary>
-        internal bool GradeIsImage => gradeImage.Alpha > 0;
+        /// <summary>Test hook: the score column's right edge on screen. Fixed as the value rolls
+        /// (right-aligned in a fixed-width cell), which is what stops the digits shaking.</summary>
+        internal float ScoreRightEdge => score.ScreenSpaceDrawQuad.TopRight.X;
 
-        /// <summary>Test hooks for the row's drawn appearance, which is what the reference pins.</summary>
+        /// <summary>Test hook: whether the numeric columns use a tabular (fixed-width) figure font,
+        /// so a changing digit keeps the same advance and nothing reflows.</summary>
+        internal bool NumbersAreFixedWidth
+            => accuracy.Font.FixedWidth && performance.Font.FixedWidth && combo.Font.FixedWidth && score.Font.FixedWidth;
+
+        /// <summary>Test hook: whether the grade is drawn as a rank GRAPHIC (danser/leaderboard
+        /// badge) rather than a bare letter. Always true once a grade exists — the badge renders for
+        /// every skin, which is the fix for the letter showing through Argon.</summary>
+        internal bool GradeIsImage => rankGraphic != null;
+
         internal string ModsText => mods.Text.ToString()!;
 
         internal Color4 ModsColour => mods.Colour;
@@ -372,44 +367,11 @@ public partial class KnockoutBoard : CompositeDrawable
 
         internal string PerformanceText => performance.Text.ToString()!;
 
-        /// <summary>
-        /// Swaps the letter for the skin's own ranking graphic, when the skin has one.
-        ///
-        /// <para>
-        /// The reference asks its skin for "ranking-&lt;grade&gt;-small" and draws that, so a skin
-        /// that restyles its grades restyles the board too. The letter stays as the fallback: a skin
-        /// without those textures should still say what the grade is rather than show a gap.
-        /// </para>
-        /// </summary>
-        public void ApplyGradeTexture(Texture? texture, float height)
-        {
-            if (texture == null)
-            {
-                gradeImage.Alpha = 0;
-                grade.Alpha = 1;
-                return;
-            }
-
-            gradeImage.Texture = texture;
-            gradeImage.Size = new Vector2(texture.DisplayWidth / texture.DisplayHeight * height, height);
-            gradeImage.Alpha = 1;
-            grade.Alpha = 0;
-        }
-
         /// <summary>The alpha this row rests at — dimmed once its player is out.</summary>
         public float RestingAlpha { get; private set; } = 1;
 
-        /// <summary>The RAW rank this row is showing, which is what the skin names its graphic
-        /// after — "X" for a perfect play, not "SS".</summary>
-        public string CurrentGrade { get; private set; } = string.Empty;
-
-        /// <summary>The rank as a player names it, for the text fallback.</summary>
-        private static string displayGrade(string rank) => rank switch
-        {
-            "X" or "XH" => "SS",
-            "SH" => "S",
-            _ => rank,
-        };
+        /// <summary>The RAW rank this row is showing ("X" for a perfect play).</summary>
+        public string CurrentGrade => currentGrade;
 
         private double rollingScore;
         private double rollingAccuracy = 1;
@@ -424,16 +386,11 @@ public partial class KnockoutBoard : CompositeDrawable
         {
             double delta = target - current;
 
-            // Close enough to have arrived: without this the value creeps forever and the text
-            // re-renders every frame for a difference nobody can see.
             if (Math.Abs(delta) < 0.01)
                 return target;
 
-            // The CLOCK's frame time, not the drawable's Time.Elapsed. A row is updated by its
-            // parent's Update, which runs before the row's own update for the frame, so Time.Elapsed
-            // reads zero there — and a rate of zero means the number never moves at all. That is not
-            // a subtle wrongness: every rolled figure sat at its starting value forever while the
-            // un-rolled ones beside it were correct.
+            // The CLOCK's frame time, not the drawable's Time.Elapsed — a row is updated by its
+            // parent before its own update runs, where Time.Elapsed reads zero.
             double elapsed = Math.Max(Clock.ElapsedFrameTime, 0);
 
             if (elapsed <= 0)
@@ -444,96 +401,142 @@ public partial class KnockoutBoard : CompositeDrawable
             return current + delta * Math.Clamp(rate, 0, 1);
         }
 
-        public Row(int playerIndex, Entrant entrant)
+        public Row(int playerIndex, Entrant entrant, int maxNameChars)
         {
             PlayerIndex = playerIndex;
             playerColour = entrant.Colour;
+            this.maxNameChars = maxNameChars;
 
             RelativeSizeAxes = Axes.X;
 
             InternalChildren = new Drawable[]
             {
-                // NO row background. The reference draws rows straight over the playfield — its
-                // DrawBackground paints only the playfield boundary, never a strip per row — and a
-                // dark bar behind each line is the difference between an overlay and a panel.
                 background = new Box
                 {
                     RelativeSizeAxes = Axes.Both,
                     Colour = Color4.Transparent,
                 },
 
-                // Who and how well, reading left to right the way the reference lays it out:
-                // accuracy, pp, the grade IMAGE, then the name with its mods.
-                left = new FillFlowContainer
+                // Left group — fixed columns anchored to the left, so accuracy, pp, the grade badge
+                // and the name all start at the same x on every row rather than the pp width shoving
+                // the ones after it around.
+                accCell = numberCell(out accuracy, "100.00%", FontWeight.SemiBold, Anchor.CentreLeft),
+                ppCell = numberCell(out performance, "0.00pp", FontWeight.Regular, Anchor.CentreLeft),
+
+                gradeCell = new Container { Anchor = Anchor.CentreLeft, Origin = Anchor.CentreLeft, RelativeSizeAxes = Axes.Y },
+
+                nameCell = new Container
                 {
-                    AutoSizeAxes = Axes.Both,
-                    Direction = FillDirection.Horizontal,
-                    Spacing = new Vector2(5, 0),
                     Anchor = Anchor.CentreLeft,
                     Origin = Anchor.CentreLeft,
-                    Margin = new MarginPadding { Left = 5 },
+                    RelativeSizeAxes = Axes.Y,
                     Children = new Drawable[]
                     {
-                        // No dot: the player colour lives on the NAME instead (see playerName
-                        // below), matching the target render — a coloured circle here was redundant
-                        // once the name carries the colour.
-                        accuracy = text("100.00%", FontWeight.SemiBold),
-                        performance = text("0.00pp", FontWeight.Regular),
-
-                        // The grade as the SKIN's own ranking graphic, with the letter behind it for
-                        // when the skin has no such texture — see gradeSprite.
-                        gradeImage = new Sprite
+                        playerName = new OsuSpriteText
                         {
                             Anchor = Anchor.CentreLeft,
                             Origin = Anchor.CentreLeft,
-                            Alpha = 0,
+                            Text = entrant.Name,
+                            Font = OsuFont.Torus.With(weight: FontWeight.SemiBold),
+                            Colour = entrant.Colour,
+                            Shadow = true,
                         },
-                        grade = text("S", FontWeight.Bold),
-
-                        // Name in the PLAYER's colour, mods in white beside it. Two sprites rather
-                        // than one string because they are coloured differently, which is exactly
-                        // what the reference does: it sets the player colour, draws the name, resets
-                        // to white and draws the mods at 0.8 scale.
-                        playerName = text(entrant.Name, FontWeight.SemiBold, entrant.Colour),
-                        mods = text(entrant.Mods, FontWeight.SemiBold),
+                        // Mods sit just past the name. They are allowed to overflow the fixed name
+                        // cell toward the numbers — the right group is pinned to the right edge, so a
+                        // long mod string cannot push the score column out of line.
+                        mods = new OsuSpriteText
+                        {
+                            Anchor = Anchor.CentreLeft,
+                            Origin = Anchor.CentreLeft,
+                            Text = entrant.Mods,
+                            Font = OsuFont.Torus.With(weight: FontWeight.SemiBold),
+                            Colour = Color4.White,
+                            Shadow = true,
+                        },
                     },
                 },
 
-                // What they have, pinned to the right edge so the numbers line up down the board
-                // however long the names are.
-                right = new FillFlowContainer
-                {
-                    AutoSizeAxes = Axes.Both,
-                    Direction = FillDirection.Horizontal,
-                    Spacing = new Vector2(6, 0),
-                    Anchor = Anchor.CentreRight,
-                    Origin = Anchor.CentreRight,
-                    Margin = new MarginPadding { Right = 5 },
-                    Children = new Drawable[]
-                    {
-                        combo = text("0x", FontWeight.Regular),
-                        score = text("00000000", FontWeight.Bold),
-                    },
-                },
+                // Right group — pinned to the right edge, reading combo, score, then the recent
+                // judgement after the score.
+                comboCell = numberCell(out combo, "0x", FontWeight.Regular, Anchor.CentreRight),
+                scoreCell = numberCell(out score, "00000000", FontWeight.Bold, Anchor.CentreRight),
+                judgeCell = numberCell(out judgement, string.Empty, FontWeight.Bold, Anchor.CentreRight),
             };
         }
 
-        /// <summary>Re-sizes this row for the current density.</summary>
+        /// <summary>A fixed-width numeric cell: the text is right-aligned inside it in a tabular
+        /// (fixed-width) figure font, so rolling digits change in place.</summary>
+        private static Container numberCell(out OsuSpriteText text, string sample, FontWeight weight, Anchor anchor)
+        {
+            text = new OsuSpriteText
+            {
+                Anchor = Anchor.CentreRight,
+                Origin = Anchor.CentreRight,
+                Text = sample,
+                Font = OsuFont.Torus.With(weight: weight, fixedWidth: true),
+                Colour = Color4.White,
+                Shadow = true,
+            };
+
+            return new Container
+            {
+                Anchor = anchor,
+                Origin = anchor,
+                RelativeSizeAxes = Axes.Y,
+                Child = text,
+            };
+        }
+
+        /// <summary>Re-sizes and re-lays-out the row's columns for the current density.</summary>
         public void Apply(RailMetrics metrics)
         {
             Height = metrics.RowHeight;
-            performance.Alpha = metrics.ShowPerformance ? 1 : 0;
+            metricsHeight = metrics.RowHeight;
 
-            foreach (var sprite in new[] { accuracy, performance, grade, playerName, combo, score })
-                sprite.Font = sprite.Font.With(size: metrics.FontSize);
+            float fs = metrics.FontSize;
 
-            // Mods a little smaller than the name, as the reference draws them (0.8 of the row's
-            // text scale) — they qualify the name rather than competing with it.
-            mods.Font = mods.Font.With(size: metrics.FontSize * 0.8f);
+            foreach (var sprite in new[] { accuracy, performance, combo, score, judgement })
+                sprite.Font = sprite.Font.With(size: fs);
 
-            // Spacing follows the text, or a dense board turns into one run-on line.
-            left.Spacing = new Vector2(metrics.FontSize * 0.42f, 0);
-            right.Spacing = new Vector2(metrics.FontSize * 0.5f, 0);
+            playerName.Font = playerName.Font.With(size: fs);
+            mods.Font = mods.Font.With(size: fs * 0.8f);
+
+            // Column widths, all derived from the font size so the table scales with the board. The
+            // numeric ones are counted in fixed-width figure glyphs (~0.55 em each); the name is sized
+            // to the LONGEST name in the field so the columns after it line up on every row.
+            float d = fs * 0.55f;
+            float gap = fs * 0.5f;
+
+            float accW = 7f * d;
+            float ppW = 8.5f * d;
+            float gradeW = fs * 2.1f;
+            float nameW = Math.Max(maxNameChars, 3) * fs * 0.62f;
+            float comboW = 7f * d;
+            float scoreW = 8.5f * d;
+            float judgeW = 3.2f * d;
+
+            accCell.Width = accW;
+            ppCell.Width = ppW;
+            gradeCell.Width = gradeW;
+            nameCell.Width = nameW;
+            comboCell.Width = comboW;
+            scoreCell.Width = scoreW;
+            judgeCell.Width = judgeW;
+
+            float lm = 5;
+            accCell.X = lm;
+            ppCell.X = lm + accW + gap;
+            gradeCell.X = ppCell.X + ppW + gap;
+            nameCell.X = gradeCell.X + gradeW + gap;
+
+            // Right group X is measured back from the right edge (negative, right-anchored).
+            float rm = 5;
+            judgeCell.X = -rm;
+            scoreCell.X = -(rm + judgeW + gap);
+            comboCell.X = -(rm + judgeW + gap + scoreW + gap);
+
+            if (rankGraphic != null)
+                rankGraphic.Size = new Vector2(gradeW, metrics.RowHeight * 0.72f);
         }
 
         /// <summary>Reads this player's state at <paramref name="time"/> onto the row.</summary>
@@ -544,12 +547,6 @@ public partial class KnockoutBoard : CompositeDrawable
             var point = timeline.At(time);
             bool pending = IsPending(timeline, time);
 
-            // Dashes rather than the last known figures. Beyond what has been simulated the
-            // timeline's answer is simply the most recent thing it recorded, which reads as a real
-            // score for a moment the player has not reached — a wrong number, not a missing one.
-            // The numbers ROLL toward their new value rather than snapping to it, which is what the
-            // reference does — its score, pp and accuracy are all target-gliders. Snapping reads as
-            // a table refreshing; rolling reads as a score climbing.
             rollingScore = pending ? point.Score : roll(rollingScore, point.Score);
             rollingAccuracy = pending ? point.Accuracy : roll(rollingAccuracy, point.Accuracy);
             rollingPerformance = pending ? point.Performance : roll(rollingPerformance, point.Performance);
@@ -557,15 +554,18 @@ public partial class KnockoutBoard : CompositeDrawable
             score.Text = pending ? "--------" : ((long)Math.Round(rollingScore)).ToString("00000000");
             accuracy.Text = pending ? "--.--%" : (rollingAccuracy * 100).ToString("0.00") + "%";
             combo.Text = pending ? "--x" : point.Combo.ToString("N0") + "x";
-
-            // Two decimals, as the reference shows it — "310.00pp", not "310pp".
             performance.Text = pending ? "--.--pp" : rollingPerformance.ToString("0.00") + "pp";
 
-            // The letter a PLAYER would recognise, while CurrentGrade keeps the raw rank the skin
-            // names its graphics after. lazer calls a perfect play X, which on screen reads as a
-            // cross rather than as the best grade there is.
-            grade.Text = pending ? "-" : displayGrade(point.Grade);
-            CurrentGrade = pending ? string.Empty : point.Grade;
+            applyGrade(pending ? string.Empty : point.Grade, metricsHeight);
+
+            // The recent-judgement column: the most recent non-perfect result, but only while it is
+            // still RECENT — a miss lingers a moment then clears, rather than sticking for the song.
+            var recent = !pending && time - point.Time >= 0 && time - point.Time < recent_judgement_ms
+                ? point.Judgement
+                : HitResult.None;
+
+            judgement.Text = judgementText(recent);
+            judgement.Colour = judgementColour(recent);
 
             ShownPending = pending;
 
@@ -575,20 +575,56 @@ public partial class KnockoutBoard : CompositeDrawable
             ShownAlive = alive;
             RestingAlpha = alive ? 1 : 0.45f;
 
-            // Knocked out reads as dimmed and desaturated rather than removed: a player who
-            // vanishes has not been seen to lose.
             this.FadeTo(RestingAlpha, 300, Easing.OutQuint);
             background.FadeColour(alive ? Color4.Black.Opacity(0.45f) : Color4.DarkRed.Opacity(0.5f), 300, Easing.OutQuint);
         }
 
-        private static OsuSpriteText text(string content, FontWeight weight, Color4? colour = null) => new OsuSpriteText
+        /// <summary>Row height as of the last <see cref="Apply"/>, so a grade rebuilt between resizes
+        /// is created at the right size.</summary>
+        private float metricsHeight;
+
+        /// <summary>How long after a judgement it still shows in the column.</summary>
+        private const double recent_judgement_ms = 600;
+
+        /// <summary>
+        /// Draws the grade as a rank GRAPHIC — lazer's own leaderboard badge, which renders for every
+        /// skin. The old skin-texture lookup returned nothing under Argon (it has no ranking-*-small
+        /// textures) and every row fell back to a bare letter, which is what the user saw.
+        /// </summary>
+        private void applyGrade(string grade, float height)
         {
-            Anchor = Anchor.CentreLeft,
-            Origin = Anchor.CentreLeft,
-            Text = content,
-            Font = OsuFont.Torus.With(size: RailDensity.MAX_ROW_HEIGHT * 0.55f, weight: weight),
-            Colour = colour ?? Color4.White,
-            Shadow = true,
+            if (grade == currentGrade)
+                return;
+
+            currentGrade = grade;
+            gradeCell.Clear();
+            rankGraphic = null;
+
+            if (grade.Length == 0 || !Enum.TryParse<ScoreRank>(grade, out var rank))
+                return;
+
+            gradeCell.Add(rankGraphic = new DrawableRank(rank)
+            {
+                Anchor = Anchor.Centre,
+                Origin = Anchor.Centre,
+                Size = new Vector2(gradeCell.DrawWidth > 0 ? gradeCell.DrawWidth : height * 1.6f, height * 0.72f),
+            });
+        }
+
+        private static string judgementText(HitResult result) => result switch
+        {
+            HitResult.Miss => "X",
+            HitResult.Meh => "50",
+            HitResult.Ok => "100",
+            _ => string.Empty,
+        };
+
+        private static Color4 judgementColour(HitResult result) => result switch
+        {
+            HitResult.Miss => new Color4(1f, 0.3f, 0.3f, 1f),
+            HitResult.Meh => new Color4(1f, 0.7f, 0.2f, 1f),
+            HitResult.Ok => new Color4(0.4f, 1f, 0.5f, 1f),
+            _ => Color4.White,
         };
     }
 }

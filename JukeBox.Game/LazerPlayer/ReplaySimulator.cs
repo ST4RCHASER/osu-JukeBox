@@ -413,7 +413,10 @@ public partial class ReplaySimulator : CompositeDrawable
                     // display; see KnockoutBoard.Row.
                     score.Rank.Value.ToString(),
                     performance?.PointsFor(score) ?? 0,
-                    lost));
+                    lost,
+                    // What this judgement actually landed, so the combine board can show a recent
+                    // miss/50/100 beside the player.
+                    result.Type));
             };
         }
     }
