@@ -244,7 +244,7 @@ public partial class MultiReplayGrid : CompositeDrawable
                     },
                 },
                 comboLabels[index] = label(FormatCombo(replay), 18, FontWeight.Bold, Anchor.BottomLeft),
-                label(DisplayName(replay), 15, FontWeight.SemiBold, Anchor.BottomRight),
+                nameLabels[index] = label(DisplayName(replay), 15, FontWeight.SemiBold, Anchor.BottomRight),
             },
         });
 
@@ -261,6 +261,45 @@ public partial class MultiReplayGrid : CompositeDrawable
     private readonly Dictionary<int, OsuSpriteText> scoreLabels = new Dictionary<int, OsuSpriteText>();
     private readonly Dictionary<int, OsuSpriteText> accuracyLabels = new Dictionary<int, OsuSpriteText>();
     private readonly Dictionary<int, OsuSpriteText> comboLabels = new Dictionary<int, OsuSpriteText>();
+    private readonly Dictionary<int, OsuSpriteText> nameLabels = new Dictionary<int, OsuSpriteText>();
+
+    /// <summary>Test hook: how many times each cell's name has been flashed for a combo break.</summary>
+    private readonly Dictionary<int, int> comboBreakFlashes = new Dictionary<int, int>();
+
+    internal int ComboBreakFlashesFor(int cell) => comboBreakFlashes.GetValueOrDefault(cell);
+
+    /// <summary>
+    /// Flashes a cell's player NAME red and swells it for about a second when the playhead crosses
+    /// one of that player's combo breaks — the tournament-overlay cue the user asked for.
+    ///
+    /// <para>
+    /// Only forward crossings count. Seeking backwards past a break and playing it again flashes
+    /// again, which is right; jumping backwards fires nothing, or a scrub would set every cell
+    /// flashing at once.
+    /// </para>
+    /// </summary>
+    private void flashNewBreaks(int cell, ReplayTimeline timeline, double time)
+    {
+        if (lastFlashCheck is not { } previous || time <= previous || !nameLabels.TryGetValue(cell, out var label))
+            return;
+
+        foreach (var point in timeline.Points)
+        {
+            if (!point.BrokeCombo || point.Time <= previous || point.Time > time)
+                continue;
+
+            comboBreakFlashes[cell] = comboBreakFlashes.GetValueOrDefault(cell) + 1;
+
+            label.FadeColour(Color4.Red).Then().FadeColour(Color4.White, 900, Easing.In);
+            label.ScaleTo(1.5f).Then().ScaleTo(1, 900, Easing.OutQuint);
+            label.FadeTo(0.2f, 80).Then().FadeTo(1, 80)
+                 .Then().FadeTo(0.2f, 80).Then().FadeTo(1, 80);
+
+            break;
+        }
+    }
+
+    private double? lastFlashCheck;
 
     private void loadBackgroundTexture()
     {
@@ -345,7 +384,11 @@ public partial class MultiReplayGrid : CompositeDrawable
             scoreLabel.Text = point.Score.ToString("00000000");
             accuracyLabels[i].Text = (point.Accuracy * 100).ToString("0.00") + "%";
             comboLabels[i].Text = point.Combo.ToString("N0") + "x";
+
+            flashNewBreaks(i, timeline, time);
         }
+
+        lastFlashCheck = time;
     }
 
     private ReplaySimulator? simulator;

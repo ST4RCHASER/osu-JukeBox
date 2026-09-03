@@ -583,6 +583,60 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
         return overlay;
     }
 
+    /// <summary>
+    /// Mounts one of OUR cursors — coloured, name-tagged — over this chart, in the same place
+    /// lazer's analysis overlay goes so it inherits the playfield's transform.
+    /// </summary>
+    /// <returns>False when there is no osu! playfield to mount onto.</returns>
+    internal bool AddPlayerCursor(PlayerCursor cursor)
+    {
+        if (drawableRuleset is not osu.Game.Rulesets.Osu.UI.DrawableOsuRuleset osuRuleset)
+            return false;
+
+        osuRuleset.PlayfieldAdjustmentContainer.Add(cursor);
+
+        // Proxied into the overlay layer so cursors draw ABOVE the hit objects. Without it a cursor
+        // spends half the map behind the circles it is meant to be pointing at.
+        osuRuleset.Overlays.Add(cursor.CreateProxy().With(p => p.Depth = float.NegativeInfinity));
+
+        return true;
+    }
+
+    /// <summary>
+    /// Hides the playfield's own cursor — the single white one the ruleset draws for whichever
+    /// replay is driving it.
+    ///
+    /// <para>
+    /// Combine mode draws every player itself, the driver included, so leaving this one on gives
+    /// one player two cursors, the wrong one of which is white. It was also the ONLY cursor visible
+    /// while the analysis overlays were drawing nothing, which is what made combine look like it
+    /// had one colourless cursor.
+    /// </para>
+    /// </summary>
+    internal bool HidePlayfieldCursor()
+    {
+        suppressPlayfieldCursor = true;
+        applyPlayfieldCursorVisibility();
+
+        return drawableRuleset is osu.Game.Rulesets.Osu.UI.DrawableOsuRuleset { Playfield.Cursor: not null };
+    }
+
+    private bool suppressPlayfieldCursor;
+
+    /// <summary>
+    /// The single place the playfield cursor's visibility is decided, so the suppression and the
+    /// user's hide-cursor setting cannot fight each other by running in an unlucky order.
+    /// </summary>
+    private void applyPlayfieldCursorVisibility()
+    {
+        if (drawableRuleset is not osu.Game.Rulesets.Osu.UI.DrawableOsuRuleset osuRuleset)
+            return;
+
+        bool hidden = suppressPlayfieldCursor || cursorHideEnabled?.Value == true;
+
+        osuRuleset.Playfield.Cursor?.FadeTo(hidden ? 0 : 1);
+    }
+
     private void attachOsuReplayAnalysis()
     {
         if (drawableRuleset is not osu.Game.Rulesets.Osu.UI.DrawableOsuRuleset osuRuleset || gameplayScore?.Replay == null)
@@ -595,7 +649,11 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
         if (rulesetConfigs?.GetConfigFor(Ruleset!) is osu.Game.Rulesets.Osu.Configuration.OsuRulesetConfigManager osuConfig)
         {
             cursorHideEnabled = osuConfig.GetBindable<bool>(osu.Game.Rulesets.Osu.Configuration.OsuRulesetSetting.ReplayCursorHideEnabled);
-            cursorHideEnabled.BindValueChanged(e => osuRuleset.Playfield.Cursor?.FadeTo(e.NewValue ? 0 : 1), true);
+
+            // suppressPlayfieldCursor wins over the setting. Combine mode draws every player's
+            // cursor itself and switches this one off; without the check here, this binding fires
+            // with the setting at its default and turns it straight back on.
+            cursorHideEnabled.BindValueChanged(_ => applyPlayfieldCursorVisibility(), true);
         }
     }
 

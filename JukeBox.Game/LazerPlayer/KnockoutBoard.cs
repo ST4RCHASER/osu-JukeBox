@@ -48,6 +48,22 @@ public partial class KnockoutBoard : CompositeDrawable
     internal IReadOnlyList<Row> Rows => rows;
 
     /// <summary>
+    /// Flashes that player's NAME red for about a second, the way a tournament overlay marks a
+    /// dropped combo.
+    ///
+    /// <para>
+    /// Distinct from being knocked out, and deliberately so: this fires on EVERY break, including
+    /// with elimination switched off, and the player carries on afterwards. Elimination is the
+    /// permanent state — dimmed and sunk to the bottom; this is the moment it happened.
+    /// </para>
+    /// </summary>
+    public void FlashComboBreak(int playerIndex)
+    {
+        if (playerIndex >= 0 && playerIndex < rows.Count)
+            rows[playerIndex].FlashComboBreak();
+    }
+
+    /// <summary>
     /// Test hook: player indices top to bottom as the board has ranked them.
     ///
     /// <para>
@@ -145,7 +161,26 @@ public partial class KnockoutBoard : CompositeDrawable
         private readonly OsuSpriteText score = null!;
         private readonly OsuSpriteText accuracy = null!;
         private readonly OsuSpriteText combo = null!;
+        private readonly OsuSpriteText playerName = null!;
         private readonly Box background = null!;
+        private readonly Color4 playerColour;
+
+        /// <summary>Test hook: how many times this row has been flashed for a combo break.</summary>
+        internal int ComboBreakFlashes { get; private set; }
+
+        /// <summary>Flashes the name red and swells it, then settles back to the player's colour.</summary>
+        public void FlashComboBreak()
+        {
+            ComboBreakFlashes++;
+
+            playerName.FadeColour(Color4.Red).Then().FadeColour(playerColour, 900, Easing.In);
+            playerName.ScaleTo(1.4f).Then().ScaleTo(1, 900, Easing.OutQuint);
+
+            // The blink is what catches the eye; a colour fade on its own is easy to miss on a board
+            // that is already re-ordering.
+            playerName.FadeTo(0.2f, 80).Then().FadeTo(1, 80)
+                      .Then().FadeTo(0.2f, 80).Then().FadeTo(1, 80);
+        }
 
         /// <summary>Test hook: whether this row is currently drawn as still in the running.</summary>
         internal bool ShownAlive { get; private set; } = true;
@@ -165,6 +200,7 @@ public partial class KnockoutBoard : CompositeDrawable
         {
             PlayerIndex = playerIndex;
             TargetY = playerIndex * row_height;
+            playerColour = entrant.Colour;
 
             RelativeSizeAxes = Axes.X;
             Height = row_height;
@@ -197,7 +233,7 @@ public partial class KnockoutBoard : CompositeDrawable
                             Size = new Vector2(8),
                             Colour = entrant.Colour,
                         },
-                        text(entrant.Name, 12, FontWeight.SemiBold, entrant.Colour),
+                        playerName = text(entrant.Name, 12, FontWeight.SemiBold, entrant.Colour),
                         score = text("00000000", 12, FontWeight.Bold),
                         accuracy = text("100.00%", 12, FontWeight.Regular),
                         combo = text("0x", 12, FontWeight.Regular),

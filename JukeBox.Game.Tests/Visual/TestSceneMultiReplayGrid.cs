@@ -52,6 +52,13 @@ namespace JukeBox.Game.Tests.Visual
             backgroundPath = Path.Combine(tmp, "bg.png");
             File.WriteAllBytes(backgroundPath, onePixelPng);
 
+            // A REAL storyboard in a separate .osb, which is where most maps put theirs. Testing
+            // against a map with no storyboard at all cannot tell "each cell plays the storyboard"
+            // from "each cell has an empty storyboard layer" — and those look identical from the
+            // outside, which is exactly the state the grid shipped in.
+            osbPath = Path.Combine(tmp, "map.osb");
+            File.WriteAllText(osbPath, osbWithSprites());
+
             Clear();
             Add(host = new Container { RelativeSizeAxes = Axes.Both });
         });
@@ -95,6 +102,13 @@ namespace JukeBox.Game.Tests.Visual
                                     .ToList();
 
             host.Child = grid = new MultiReplayGrid(cachedSet(), beatmapPath, replays);
+
+            // The test takes the clock IMMEDIATELY, at zero. Left on the scene's real-time clock
+            // while the simulation finishes, the song plays itself for a few seconds in the
+            // background — far enough to cross a combo break and fire its flash before the test has
+            // looked at anything.
+            host.Clock = seekClock ??= new FramedClock(seekSource);
+            seekSource.CurrentTime = 0;
         }
 
         /// <summary>
@@ -107,11 +121,29 @@ namespace JukeBox.Game.Tests.Visual
             SetId = 1,
             Directory = tmp,
             BackgroundFile = backgroundPath,
+            OsbFile = osbPath,
             PreferredOsuFile = beatmapPath,
             OsuFiles = { beatmapPath },
         };
 
         private string backgroundPath = null!;
+        private string osbPath = null!;
+
+        /// <summary>A storyboard with sprites that move for the whole map, in a standalone .osb.</summary>
+        private static string osbWithSprites()
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.Append("[Events]\n");
+
+            for (int i = 0; i < 6; i++)
+            {
+                sb.Append("Sprite,Background,Centre,\"bg.png\",320,240\n");
+                sb.Append($" M,0,0,60000,{i * 40},{i * 30},{320 + i * 10},{240 - i * 10}\n");
+                sb.Append(" F,0,0,60000,0.3,0.9\n");
+            }
+
+            return sb.ToString();
+        }
 
         /// <summary>Smallest valid PNG — one opaque pixel.</summary>
         private static readonly byte[] onePixelPng = Convert.FromBase64String(
@@ -262,6 +294,37 @@ namespace JukeBox.Game.Tests.Visual
         }
 
         /// <summary>
+        /// The user's report: "background are show now but storyboard are still not playing per grid".
+        ///
+        /// <para>
+        /// The test that was supposed to cover this counted storyboard LAYERS, not storyboards — an
+        /// empty layer counts the same as one full of sprites, and an empty layer is precisely the
+        /// failure being reported. This asserts on decoded elements and on a built drawable tree,
+        /// against a storyboard in a standalone .osb, which is where real maps keep theirs.
+        /// </para>
+        /// </summary>
+        [Test]
+        public void EveryCellActuallyPlaysTheMapsStoryboard()
+        {
+            AddStep("build four", () => buildGrid(4));
+            AddUntilStep("grid loaded", () => grid.IsLoaded && grid.Cells.Count == 4);
+
+            AddUntilStep("every cell decoded the storyboard", () =>
+            {
+                var layers = grid.ChildrenOfType<LazerStoryboardLayer>().ToList();
+                return layers.Count == 4 && layers.All(l => l.ElementCount == 6);
+            });
+
+            AddAssert("and every one of them has something to draw", () =>
+                grid.ChildrenOfType<LazerStoryboardLayer>().All(l => l.HasObjects));
+
+            // Built, not merely decoded: the drawable tree is what actually animates, and a decoded
+            // storyboard that never built one is still a black cell.
+            AddUntilStep("with its drawable storyboard built", () =>
+                grid.ChildrenOfType<LazerStoryboardLayer>().All(l => l.LayerAlpha("Background") != null));
+        }
+
+        /// <summary>
         /// The "static, not running" complaint, asserted on what a cell SHOWS rather than on any
         /// internal it happens to read from.
         ///
@@ -322,6 +385,51 @@ namespace JukeBox.Game.Tests.Visual
                 grid.ComboTextFor(0) == "15x");
         }
 
+        /// <summary>
+        /// The user's request, for the grid: when a player breaks combo their NAME flashes red for
+        /// about a second, "like osu touny". Independent of knockout — the grid has no elimination
+        /// rule at all and this still fires.
+        /// </summary>
+        [Test]
+        public void ABrokenComboFlashesThatCellsPlayerName()
+        {
+            AddStep("build three, the middle one breaking at object 6", () => buildGrid(3, misses: new[]
+            {
+                Array.Empty<int>(),
+                new[] { 6 },
+                Array.Empty<int>(),
+            }));
+
+            AddUntilStep("plays recorded", () => grid.Simulator?.AllComplete == true);
+
+            AddStep("play up to just before the break", () => playTo(timeOfObject(4)));
+            AddAssert("nothing has flashed yet", () =>
+                Enumerable.Range(0, 3).All(cell => grid.ComboBreakFlashesFor(cell) == 0));
+
+            AddStep("play across it", () => playTo(timeOfObject(10)));
+
+            AddAssert("only the cell whose player broke is flashed", () =>
+                grid.ComboBreakFlashesFor(1) == 1
+                && grid.ComboBreakFlashesFor(0) == 0
+                && grid.ComboBreakFlashesFor(2) == 0);
+        }
+
+        /// <summary>
+        /// Advances in steps rather than jumping. A break is spotted by the playhead CROSSING it,
+        /// so a jump straight past one steps over the crossing entirely.
+        /// </summary>
+        private void playTo(double time)
+        {
+            host.Clock = seekClock ??= new FramedClock(seekSource);
+
+            while (seekSource.CurrentTime < time)
+            {
+                seekSource.CurrentTime = Math.Min(time, seekSource.CurrentTime + 50);
+                seekClock.ProcessFrame();
+                host.UpdateSubTree();
+            }
+        }
+
         private static double timeOfObject(int index) => fixture_first_object_ms + index * fixture_object_spacing_ms;
 
         private static double endOfMap => timeOfObject(fixture_object_count - 1) + 2000;
@@ -329,7 +437,7 @@ namespace JukeBox.Game.Tests.Visual
         /// <summary>Puts the grid at a moment in the song and lets it settle there.</summary>
         private void showAt(double time)
         {
-            host.Clock = seekClock = new FramedClock(seekSource);
+            host.Clock = seekClock ??= new FramedClock(seekSource);
             seekSource.CurrentTime = time;
 
             for (int i = 0; i < 5; i++)

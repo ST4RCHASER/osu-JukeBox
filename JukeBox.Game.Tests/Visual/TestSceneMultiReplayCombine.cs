@@ -96,12 +96,18 @@ namespace JukeBox.Game.Tests.Visual
                                     .ToList();
 
             host.Child = combine = new MultiReplayCombine(beatmapPath, replays);
+
+            // The test takes the clock IMMEDIATELY, at zero. Left on the scene's real-time clock
+            // while the simulation finishes, the song plays itself for a few seconds in the
+            // background — long enough to cross a combo break and fire its flash before the test
+            // has looked at anything.
+            host.Clock = framed = new FramedClock(manual);
+            manual.CurrentTime = 0;
         }
 
         /// <summary>Puts the board at a chosen moment in the song and lets it settle there.</summary>
         private void showAt(double time)
         {
-            host.Clock = framed = new FramedClock(manual);
             manual.CurrentTime = time;
 
             // Enough frames for the re-order transforms to finish, so the board is asserted where
@@ -113,12 +119,22 @@ namespace JukeBox.Game.Tests.Visual
             }
         }
 
+        /// <summary>
+        /// Every replay becomes a cursor over the ONE rendered chart — the driver included.
+        ///
+        /// <para>
+        /// This used to expect one fewer, on the reasoning that the player driving the chart already
+        /// had a cursor from the ruleset. They did, but it was the playfield's own white one, which
+        /// cannot be tinted — so that player was the odd one out on a board where colour is the only
+        /// thing tying a row to a cursor. All N are ours now.
+        /// </para>
+        /// </summary>
         [Test]
-        public void EveryReplayAfterTheFirstBecomesACursorOverTheOneChart()
+        public void EveryReplayBecomesACursorOverTheOneChart()
         {
             AddStep("build four", () => build(4));
             AddUntilStep("chart loaded", () => combine.IsLoaded && combine.Chart.IsLoaded);
-            AddUntilStep("cursors attached", () => combine.CursorsAttached == 3);
+            AddUntilStep("cursors attached", () => combine.CursorsAttached == 4);
 
             // Counted as "all the chart layers, minus the simulator's hidden ones". The simulator
             // runs a chart per replay off screen, so a bare count of LazerChartLayer would be
@@ -138,15 +154,111 @@ namespace JukeBox.Game.Tests.Visual
             });
         }
 
+        /// <summary>
+        /// The user's report: "cursor color i can still see single not see many color".
+        ///
+        /// <para>
+        /// The cause was that lazer's ReplayAnalysisOverlay builds its cursor and path only when the
+        /// osu! replay-analysis settings are switched on, and they are off by default — so combine
+        /// mounted four EMPTY containers and the only cursor on screen was the playfield's own white
+        /// one. Asserted here on cursors that exist as drawables carrying distinct colours, which an
+        /// empty overlay cannot satisfy however it is tinted.
+        /// </para>
+        /// </summary>
+        [Test]
+        public void EveryPlayerGetsTheirOwnCursorInTheirOwnColour()
+        {
+            AddStep("build four", () => build(4));
+            AddUntilStep("cursors attached", () => combine.CursorsAttached == 4);
+
+            // FOUR, not three. The player driving the chart gets one of ours too — leaving them to
+            // the playfield's own cursor left one player permanently white.
+            AddAssert("one cursor per player", () => combine.ChildrenOfType<PlayerCursor>().Count() == 4);
+
+            AddAssert("all four colours differ", () =>
+                combine.Cursors.Where(c => c != null).Select(c => c!.Colour4).Distinct().Count() == 4);
+
+            AddAssert("and each carries its player's name", () =>
+            {
+                var names = combine.ChildrenOfType<PlayerCursor>()
+                                   .SelectMany(c => c.ChildrenOfType<OsuSpriteText>())
+                                   .Select(t => t.Text.ToString()!)
+                                   .Where(t => t.StartsWith("player", StringComparison.Ordinal))
+                                   .ToList();
+
+                return names.Distinct().Count() == 4;
+            });
+        }
+
+        /// <summary>
+        /// The playfield's own cursor is white and cannot be tinted, so it goes — otherwise the
+        /// driving player has two cursors and the wrong one is colourless.
+        /// </summary>
+        [Test]
+        public void ThePlayfieldsOwnCursorIsHidden()
+        {
+            AddStep("build three", () => build(3));
+            AddUntilStep("cursors attached", () => combine.CursorsAttached == 3);
+
+            // Null is an acceptable answer as well as zero: the ruleset only builds a cursor when
+            // the skin provides one, so a headless run can legitimately have none. What must never
+            // happen is a VISIBLE one, which is the case this rules out.
+            AddAssert("the ruleset's own cursor is not visible", () =>
+                combine.Chart.DrawableRuleset is osu.Game.Rulesets.Osu.UI.DrawableOsuRuleset osuRuleset
+                && osuRuleset.Playfield.Cursor?.Alpha is null or 0);
+        }
+
+        /// <summary>
+        /// The user's other request: on a combo break the player's NAME blinks and flashes red for
+        /// about a second, "like osu touny". A transient cue rather than the elimination state — it
+        /// fires with knockout switched off, which is the default.
+        /// </summary>
+        [Test]
+        public void ABrokenComboFlashesThatPlayersName()
+        {
+            AddStep("build two, one of whom breaks at the fifth object", () =>
+                build(2, misses: new[] { Array.Empty<int>(), new[] { 4 } }));
+
+            AddUntilStep("recorded", () => combine.Simulator.AllComplete);
+
+            AddStep("play up to just before the break", () => playTo(timeOf(3)));
+            AddAssert("nothing has flashed yet", () => combine.Board.Rows.All(r => r.ComboBreakFlashes == 0));
+
+            AddStep("play across it", () => playTo(timeOf(7)));
+
+            AddAssert("the player who broke is flashed, and only them", () =>
+                rowFor(1).ComboBreakFlashes == 1 && rowFor(0).ComboBreakFlashes == 0);
+
+            AddAssert("with knockout OFF, so they carry on playing", () =>
+                combine.Rules.Mode == KnockoutMode.Showcase && rowFor(1).ShownAlive);
+        }
+
+        /// <summary>
+        /// Advances the clock in steps rather than jumping. A break is spotted by the playhead
+        /// CROSSING it, so a jump straight past one would step over the crossing entirely.
+        /// </summary>
+        private void playTo(double time)
+        {
+            while (manual.CurrentTime < time)
+            {
+                manual.CurrentTime = Math.Min(time, manual.CurrentTime + 50);
+                framed.ProcessFrame();
+                host.UpdateSubTree();
+            }
+        }
+
         [Test]
         public void EveryPlayerGetsARowOnTheBoard()
         {
             AddStep("build three", () => build(3));
             AddUntilStep("board built", () => combine.Board?.Rows.Count == 3);
 
-            AddAssert("all three named once", () =>
+            // Scoped to the BOARD's rows. Searching the whole of combine now also finds the name
+            // tags riding the cursors, so every player is legitimately named twice.
+            AddAssert("all three named once on the board", () =>
             {
-                var names = combine.ChildrenOfType<OsuSpriteText>()
+                var names = combine.Board.Rows
+                                   .SelectMany(r => r.ChildrenOfType<OsuSpriteText>())
                                    .Select(t => t.Text.ToString()!)
                                    .Where(t => t.StartsWith("player", StringComparison.Ordinal))
                                    .ToList();

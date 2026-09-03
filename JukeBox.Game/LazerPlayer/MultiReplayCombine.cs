@@ -63,14 +63,16 @@ public partial class MultiReplayCombine : CompositeDrawable
     private bool attached;
 
     /// <summary>
-    /// The cursors, indexed by replay. The FIRST is null — that player drives the chart itself and
-    /// already has a cursor from the ruleset, so there is nothing extra of theirs to scale.
+    /// The cursors, indexed by replay — one per player, the chart's driver included. A slot is null
+    /// only when that replay carried no frames to draw.
     /// </summary>
-    private readonly List<osu.Game.Rulesets.Osu.UI.ReplayAnalysisOverlay?> cursors = new List<osu.Game.Rulesets.Osu.UI.ReplayAnalysisOverlay?>();
+    private readonly List<PlayerCursor?> cursors = new List<PlayerCursor?>();
 
-    /// <summary>Test hook: cursors actually mounted, which is one FEWER than the replay count — the
-    /// first replay drives the chart itself and already has a cursor.</summary>
+    /// <summary>Test hook: cursors actually mounted, one per replay that had frames.</summary>
     internal int CursorsAttached { get; private set; }
+
+    /// <summary>Test hook: the mounted cursors, for asserting they are distinctly coloured.</summary>
+    internal IReadOnlyList<PlayerCursor?> Cursors => cursors;
 
     /// <summary>Test hook: the one hosted chart every cursor is drawn over.</summary>
     internal LazerChartLayer Chart => chart;
@@ -168,8 +170,15 @@ public partial class MultiReplayCombine : CompositeDrawable
     }
 
     /// <summary>
-    /// Mounts everyone else's cursor onto the one chart. The ruleset only exists once the chart has
-    /// finished its own async load, so this cannot happen in load(). Done once, then never again.
+    /// Mounts a cursor for EVERY player onto the one chart. The ruleset only exists once the chart
+    /// has finished its own async load, so this cannot happen in load(). Done once, then never again.
+    ///
+    /// <para>
+    /// Every player including the one driving the chart, which is the change from what shipped. The
+    /// driver used to rely on the playfield's own cursor, which is white and cannot be tinted, so
+    /// even once the others worked one player would still have been the odd one out. The playfield
+    /// cursor is switched off and all N are drawn the same way.
+    /// </para>
     /// </summary>
     private void attachCursors()
     {
@@ -177,20 +186,23 @@ public partial class MultiReplayCombine : CompositeDrawable
             return;
 
         attached = true;
+        chart.HidePlayfieldCursor();
 
-        // The first player drives the chart, so their cursor comes from the ruleset itself and gets
-        // a null slot here — the list stays indexed by replay so a cursor is never mismatched to
-        // the wrong player's fate.
-        cursors.Add(null);
-
-        for (int i = 1; i < replays.Count; i++)
+        for (int i = 0; i < replays.Count; i++)
         {
             var replay = replays[i].Score?.Replay;
-            var overlay = replay == null ? null : chart.AddCursorOverlay(replay, ColourFor(i, replays.Count));
 
-            cursors.Add(overlay);
+            if (replay == null)
+            {
+                cursors.Add(null);
+                continue;
+            }
 
-            if (overlay != null)
+            var cursor = new PlayerCursor(MultiReplayGrid.DisplayName(replays[i]), replay.Frames, ColourFor(i, replays.Count));
+
+            cursors.Add(chart.AddPlayerCursor(cursor) ? cursor : null);
+
+            if (cursors[i] != null)
                 CursorsAttached++;
         }
     }
@@ -223,8 +235,50 @@ public partial class MultiReplayCombine : CompositeDrawable
 
             cursor.Scale = new Vector2(stillIn ? scale : 1);
             cursor.Alpha = stillIn ? 1 : 0;
+
+            flashNewBreaks(i, cursor, timelines[i], time);
+        }
+
+        lastFlashCheck = time;
+    }
+
+    /// <summary>
+    /// Fires the combo-break cue when the playhead crosses a break this player has not been flashed
+    /// for yet.
+    ///
+    /// <para>
+    /// Driven off the recorded timeline rather than off a live judgement, which is what makes it
+    /// work at all here: the breaks are all known before the song starts, so a break is a comparison
+    /// against the clock instead of an event that has to be caught as it happens.
+    /// </para>
+    ///
+    /// <para>
+    /// Only breaks the playhead moves FORWARD across count. Seeking backwards past one and playing
+    /// it again does flash again, which is right — the viewer is watching that moment again. Jumping
+    /// backwards does not fire anything, or scrubbing would set the whole board flashing.
+    /// </para>
+    /// </summary>
+    private void flashNewBreaks(int player, PlayerCursor cursor, ReplayTimeline timeline, double time)
+    {
+        if (lastFlashCheck is not { } previous || time <= previous)
+            return;
+
+        foreach (var point in timeline.Points)
+        {
+            if (!point.BrokeCombo)
+                continue;
+
+            if (point.Time > previous && point.Time <= time)
+            {
+                cursor.FlashComboBreak();
+                board?.FlashComboBreak(player);
+                break;
+            }
         }
     }
+
+    /// <summary>Where the playhead was last frame, so a break can be spotted being crossed.</summary>
+    private double? lastFlashCheck;
 
     /// <summary>
     /// This player's colour, spread evenly around the hue circle so neighbouring cursors are as
