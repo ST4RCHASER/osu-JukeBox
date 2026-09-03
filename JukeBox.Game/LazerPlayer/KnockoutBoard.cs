@@ -12,6 +12,7 @@ using osu.Framework.Extensions.Color4Extensions;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Shapes;
+using osu.Framework.Input.Events;
 using osu.Game.Graphics;
 using osu.Game.Graphics.Sprites;
 using osuTK;
@@ -49,6 +50,14 @@ public partial class KnockoutBoard : CompositeDrawable
 
     /// <summary>The rules in force. Assign to change mode or sorting; the board follows.</summary>
     public KnockoutRules Rules { get; set; } = new KnockoutRules();
+
+    /// <summary>
+    /// Raised with a player's index while their row is hovered, and with null when it is not. The
+    /// combine layer listens so it can bring THAT player's cursor forward and step every other one
+    /// back — the rail row is the handle, the effect lands on the playfield. Left unset (as it is in
+    /// the grid) the rows simply do not answer hover with anything.
+    /// </summary>
+    public Action<int?>? PlayerFocused { get; set; }
 
     /// <summary>Test hook: the rows, in creation order — NOT in board order.</summary>
     internal IReadOnlyList<Row> Rows => rows;
@@ -127,7 +136,12 @@ public partial class KnockoutBoard : CompositeDrawable
 
         for (int i = 0; i < entrants.Count; i++)
         {
-            var row = new Row(i, entrants[i]);
+            var row = new Row(i, entrants[i])
+            {
+                // Hover is reported up through the board so a single listener on the combine layer
+                // can act on it, rather than every row holding a reference to the cursor overlay.
+                FocusRequested = index => PlayerFocused?.Invoke(index),
+            };
 
             rows.Add(row);
             AddInternal(row);
@@ -260,6 +274,24 @@ public partial class KnockoutBoard : CompositeDrawable
 
         /// <summary>Where this row is heading, so a transform is only started when it changes.</summary>
         public float TargetY;
+
+        /// <summary>Raised with this row's player index on hover and with null when the pointer
+        /// leaves, so the combine layer can focus that player's cursor. The board sets it.</summary>
+        internal Action<int?>? FocusRequested;
+
+        // The whole row is the hover target, not just the pixels its text happens to cover — a
+        // composite otherwise only answers hover where a child does, and the gaps between the name
+        // and the numbers would read as "not hovering anyone". The transparent background box gives
+        // it a full-width surface; this makes the empty space part of it too.
+        public override bool ReceivePositionalInputAt(Vector2 screenSpacePos) => DrawRectangle.Contains(ToLocalSpace(screenSpacePos));
+
+        protected override bool OnHover(HoverEvent e)
+        {
+            FocusRequested?.Invoke(PlayerIndex);
+            return true;
+        }
+
+        protected override void OnHoverLost(HoverLostEvent e) => FocusRequested?.Invoke(null);
 
         private readonly OsuSpriteText rank = null!;
         private readonly OsuSpriteText score = null!;

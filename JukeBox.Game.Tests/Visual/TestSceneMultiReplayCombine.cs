@@ -14,6 +14,7 @@ using NUnit.Framework;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Testing;
+using osu.Framework.Testing.Input;
 using osu.Framework.Timing;
 using osu.Game.Graphics.Sprites;
 using osuTK.Graphics;
@@ -39,6 +40,7 @@ namespace JukeBox.Game.Tests.Visual
 
         private MultiReplayCombine combine = null!;
         private Container host = null!;
+        private ManualInputManager input = null!;
 
         private readonly ManualClock manual = new ManualClock();
         private FramedClock framed = null!;
@@ -59,7 +61,15 @@ namespace JukeBox.Game.Tests.Visual
             File.WriteAllText(beatmapPath, osuWithObjects());
 
             Clear();
-            Add(host = new Container { RelativeSizeAxes = Axes.Both });
+
+            // Wrapped in a manual input manager so the hover-to-focus test can drive real pointer
+            // movement over the rail rows. UseParentInput stays on until a test asks to inject, so
+            // every other test is unaffected.
+            Add(input = new ManualInputManager
+            {
+                RelativeSizeAxes = Axes.Both,
+                Child = host = new Container { RelativeSizeAxes = Axes.Both },
+            });
         });
 
         [TearDown]
@@ -407,6 +417,21 @@ namespace JukeBox.Game.Tests.Visual
             }
         }
 
+        /// <summary>Advances the song clock by a wall duration in small frames, so transforms timed
+        /// on it — a focus fade, a break bubble's slide — actually progress rather than sitting
+        /// frozen at whatever moment showAt left the clock.</summary>
+        private void advanceBy(double ms)
+        {
+            double target = manual.CurrentTime + ms;
+
+            while (manual.CurrentTime < target)
+            {
+                manual.CurrentTime = Math.Min(target, manual.CurrentTime + 16);
+                framed.ProcessFrame();
+                host.UpdateSubTree();
+            }
+        }
+
         [Test]
         public void EveryPlayerGetsARowOnTheBoard()
         {
@@ -631,6 +656,78 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("nothing on screen mentions speeds", () => !combine.ChildrenOfType<OsuSpriteText>()
                                                                      .Any(t => t.Text.ToString()!.Contains("speed", StringComparison.OrdinalIgnoreCase)));
         }
+
+        /// <summary>
+        /// Hovering a rail row is how you answer "which of these cursors is whose" on a playfield
+        /// carrying a swarm of them: that player's cursor stays full strength while every other one
+        /// steps back to a whisper, and leaving the row brings them all back. Asserted on the
+        /// cursors' own focus channel, which is the effect on screen — not on the fact that a hover
+        /// callback was wired.
+        /// </summary>
+        [Test]
+        public void HoveringARailRowFocusesThatPlayersCursor()
+        {
+            AddStep("build three", () => build(3));
+            AddUntilStep("cursors attached", () => combine.CursorsAttached == 3);
+            AddStep("settle mid-song", () => showAt(timeOf(5)));
+
+            // Baseline: with nothing hovered every cursor draws at full focus.
+            AddAssert("all cursors start at full focus", () =>
+                combine.Cursors.Where(c => c != null).All(c => c!.FocusAlpha > 0.9f));
+
+            AddStep("hover the second player's row", () =>
+            {
+                input.UseParentInput = false;
+                input.MoveMouseTo(rowFor(1));
+            });
+            AddStep("let the focus fade settle", () => advanceBy(400));
+
+            AddAssert("the hovered player's cursor stays bright", () => combine.Cursors[1]!.FocusAlpha > 0.9f);
+            AddAssert("every other cursor steps back to a whisper", () =>
+                combine.Cursors[0]!.FocusAlpha < 0.2f && combine.Cursors[2]!.FocusAlpha < 0.2f);
+
+            AddStep("move the pointer off the rail", () => input.MoveMouseTo(combine));
+            AddStep("let it settle back", () => advanceBy(400));
+
+            AddAssert("all cursors return to full focus", () =>
+                combine.Cursors.Where(c => c != null).All(c => c!.FocusAlpha > 0.9f));
+        }
+
+        /// <summary>
+        /// The combo-break bubble as danser draws it: the breaker's name appears at the miss and
+        /// SLIDES downward as it fades, rather than blinking in place. Asserted on the drawn marker
+        /// actually travelling down the screen and fading in — a bubble that never moved, or never
+        /// showed, would fail this even though the flash "fired".
+        /// </summary>
+        [Test]
+        public void AComboBreakDropsASlidingBubble()
+        {
+            AddStep("build two, one of whom breaks at the fifth object", () =>
+                build(2, misses: new[] { Array.Empty<int>(), new[] { 4 } }));
+
+            AddUntilStep("recorded", () => combine.Simulator.AllComplete);
+
+            // The playfield bubble is gated to sizeable breaks so it does not flicker at high player
+            // counts; the fixture's twelve-object map can never reach the default 200, so drop the
+            // gate to make the one break here worth announcing.
+            AddStep("announce even a small break", () => combine.Rules = new KnockoutRules(BubbleMinimumCombo: 1));
+            AddStep("play across the break", () => playTo(timeOf(5)));
+
+            AddAssert("a red break bubble is on the breaker's cursor", () => breakBubble() != null);
+            AddAssert("and it has faded in", () => breakBubble()!.Alpha > 0.5f);
+
+            float startY = 0;
+            AddStep("note where it starts", () => startY = breakBubble()!.Y);
+
+            AddStep("let it slide", () => advanceBy(400));
+
+            AddAssert("the bubble has slid downward", () => breakBubble()!.Y > startY + 2);
+        }
+
+        /// <summary>The transient red name marker on the player who broke (index 1), or null when
+        /// none is present.</summary>
+        private OsuSpriteText? breakBubble() =>
+            combine.Cursors[1]?.ChildrenOfType<OsuSpriteText>().FirstOrDefault(t => t.Colour == Color4.Red);
 
         private static string osuWithObjects()
         {

@@ -166,8 +166,23 @@ public partial class MultiReplayCombine : CompositeDrawable
             Origin = Anchor.TopLeft,
             Margin = new MarginPadding(6),
             Rules = rules,
+
+            // Hovering a rail row focuses that player's cursor. The value is only stashed here; the
+            // fade is issued from updateCursors so it runs once per change instead of every frame,
+            // and so a hover that arrives before the cursors are mounted still takes effect once
+            // they are.
+            PlayerFocused = index => focusedPlayer = index,
         });
     }
+
+    /// <summary>The player whose rail row is currently hovered, or null when none is. A focused
+    /// player's cursor stays at full strength while every other fades to a whisper.</summary>
+    private int? focusedPlayer;
+
+    /// <summary>The focus last pushed to the cursors, so the fade is issued only when it changes.
+    /// Never written while the cursors are unattached, so a hover during load is applied once they
+    /// exist rather than being swallowed.</summary>
+    private int? appliedFocus;
 
     protected override void Update()
     {
@@ -250,6 +265,31 @@ public partial class MultiReplayCombine : CompositeDrawable
         }
 
         lastFlashCheck = time;
+
+        applyFocus();
+    }
+
+    /// <summary>
+    /// Fades the focused player's cursor to full and every other to a whisper, or all of them back
+    /// to full when nothing is hovered. Issued only when the focus has actually changed, so the
+    /// fade plays once rather than being restarted every frame — and driven off the cursors' own
+    /// focus channel, which multiplies over the alive/eliminated alpha rather than overwriting it.
+    /// </summary>
+    private void applyFocus()
+    {
+        if (focusedPlayer.Equals(appliedFocus))
+            return;
+
+        for (int i = 0; i < cursors.Count; i++)
+        {
+            if (cursors[i] is not { } cursor)
+                continue;
+
+            float target = focusedPlayer is not { } focused ? 1f : (i == focused ? 1f : 0.1f);
+            cursor.SetFocusAlpha(target);
+        }
+
+        appliedFocus = focusedPlayer;
     }
 
     /// <summary>

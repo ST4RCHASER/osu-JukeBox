@@ -2,10 +2,12 @@
 
 using System.Collections.Generic;
 using JukeBox.Game.Replays;
+using JukeBox.Game.UI;
 using osu.Framework.Extensions.Color4Extensions;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Shapes;
+using osu.Framework.Utils;
 using osu.Game.Graphics;
 using osu.Game.Graphics.Sprites;
 using osu.Game.Rulesets.Replays;
@@ -36,8 +38,8 @@ public partial class PlayerCursor : CompositeDrawable
     private readonly IReadOnlyList<ReplayFrame> frames;
     private readonly Color4 colour;
 
+    private readonly Container content;
     private readonly Container body;
-    private readonly OsuSpriteText nameTag;
     private readonly Circle dot;
 
     /// <summary>osu!'s playfield is defined in these units; replay frames are recorded in them.</summary>
@@ -80,31 +82,52 @@ public partial class PlayerCursor : CompositeDrawable
 
         this.playerName = playerName;
 
-        InternalChildren = new Drawable[]
+        // Everything the cursor draws lives inside one content container whose alpha is the FOCUS
+        // channel: hovering this player's rail row fades every OTHER player's content to a whisper
+        // (see SetFocusAlpha) while the eliminated/alive state stays on this class's own alpha, so
+        // the two dim for independent reasons and multiply rather than fight.
+        InternalChild = content = new Container
         {
-            // The trail is drawn UNDER the cursor and in the playfield's own space, so its segments
-            // land where the cursor has been rather than following the head around.
-            trail = new PlayerCursorTrail(colour),
-
-            body = new Container
+            RelativeSizeAxes = Axes.Both,
+            Children = new Drawable[]
             {
-                AutoSizeAxes = Axes.Both,
-                Origin = Anchor.Centre,
-                Child = dot = new Circle
+                // The trail is drawn UNDER the cursor and in the playfield's own space, so its
+                // segments land where the cursor has been rather than following the head around.
+                trail = new PlayerCursorTrail(colour),
+
+                body = new Container
                 {
-                    Anchor = Anchor.Centre,
+                    AutoSizeAxes = Axes.Both,
                     Origin = Anchor.Centre,
-                    Size = new Vector2(11),
-                    Colour = colour,
-                    // A dark rim, because a saturated dot on a busy playfield of similarly
-                    // saturated hit circles is hard to pick out on its own.
-                    BorderColour = Color4.Black.Opacity(0.6f),
-                    BorderThickness = 2.5f,
-                    Masking = true,
+                    Child = dot = new Circle
+                    {
+                        Anchor = Anchor.Centre,
+                        Origin = Anchor.Centre,
+                        Size = new Vector2(11),
+                        Colour = colour,
+                        // A dark rim, because a saturated dot on a busy playfield of similarly
+                        // saturated hit circles is hard to pick out on its own.
+                        BorderColour = Color4.Black.Opacity(0.6f),
+                        BorderThickness = 2.5f,
+                        Masking = true,
+                    },
                 },
             },
         };
     }
+
+    /// <summary>
+    /// The focus channel: 1 for a normally-drawn cursor, a whisper (0.1) for every player who is
+    /// not the one whose rail row is being hovered. Fades over <see cref="Theme.DurationFast"/> so
+    /// picking a row out of a swarm of 47 cursors reads as the rest stepping back rather than
+    /// snapping off. Applied to the content container, not this drawable's own alpha, so it survives
+    /// the per-frame alive/eliminated alpha the combine layer writes.
+    /// </summary>
+    public void SetFocusAlpha(float target) => content.FadeTo(target, Theme.DurationFast, Easing.OutQuint);
+
+    /// <summary>Test hook: the focus channel's current value, which the alive/eliminated alpha
+    /// multiplies over rather than overwrites.</summary>
+    internal float FocusAlpha => content.Alpha;
 
     private readonly string playerName;
     private readonly PlayerCursorTrail trail;
@@ -149,19 +172,32 @@ public partial class PlayerCursor : CompositeDrawable
     {
         dot.FlashColour(Color4.Red, 900, Easing.OutQuint);
 
+        // Jittered a few pixels off the miss point so two players who break on the same object do
+        // not drop identical names on top of each other into one illegible smear — danser scatters
+        // its death bubbles the same way.
+        var start = body.Position + new Vector2(RNG.NextSingle(-5, 5), RNG.NextSingle(-5, 5));
+
         var marker = new OsuSpriteText
         {
             Origin = Anchor.Centre,
-            Position = body.Position,
+            Position = start,
             Text = playerName,
             Font = OsuFont.Torus.With(size: 14, weight: FontWeight.Bold),
             Colour = Color4.Red,
             Shadow = true,
+            Alpha = 0,
         };
 
-        AddInternal(marker);
+        content.Add(marker);
 
-        marker.ScaleTo(1.5f).Then().ScaleTo(1, 700, Easing.OutQuint);
-        marker.FadeIn(60).Then().Delay(500).FadeOut(400).Expire();
+        // danser's death bubble: it SLIDES down ~50px over two seconds on an OutQuad, rather than
+        // popping and fading in place. The slide is what reads as "dropped" — a name settling
+        // downward off the playfield instead of a label blinking where the cursor happened to be.
+        marker.MoveToY(start.Y + 50, 2000, Easing.OutQuad);
+
+        // Fade in over 200ms, hold, then out from 800ms to 1200ms — the bubble is gone well before
+        // the slide finishes, so its last stretch of travel is spent invisible, exactly as danser
+        // times it.
+        marker.FadeIn(200).Then().Delay(600).FadeOut(400).Expire();
     }
 }
