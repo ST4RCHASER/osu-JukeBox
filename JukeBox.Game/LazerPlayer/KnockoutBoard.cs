@@ -320,14 +320,15 @@ public partial class KnockoutBoard : CompositeDrawable
         private readonly OsuSpriteText mods = null!;
 
         // The fixed-width cells the drawables live in. Their widths and X positions are set per
-        // density in Apply, which is what makes the row a table rather than a run-on line.
+        // density in Apply, which is what makes the row a table rather than a run-on line. The name
+        // block flows (name, mods, then the hit badge) so the badge sits right after the mods the way
+        // danser draws it, rather than in a fixed column.
         private readonly Container accCell = null!;
         private readonly Container ppCell = null!;
         private readonly Container gradeCell = null!;
-        private readonly Container nameCell = null!;
+        private readonly FillFlowContainer nameCell = null!;
         private readonly Container comboCell = null!;
         private readonly Container scoreCell = null!;
-        private readonly Container judgeCell = null!;
 
         private Color4 playerColour;
 
@@ -462,11 +463,18 @@ public partial class KnockoutBoard : CompositeDrawable
 
                 gradeCell = new Container { Anchor = Anchor.CentreLeft, Origin = Anchor.CentreLeft, RelativeSizeAxes = Axes.Y },
 
-                nameCell = new Container
+                // Name, mods and the recent-hit badge FLOW left to right from a fixed start x — the
+                // badge lands right after the mods (danser draws "100"/"50" there), and the whole
+                // block is free to run toward the numbers because the right group is right-pinned and
+                // cannot be pushed out of line by a long name.
+                nameCell = new FillFlowContainer
                 {
                     Anchor = Anchor.CentreLeft,
                     Origin = Anchor.CentreLeft,
+                    AutoSizeAxes = Axes.X,
                     RelativeSizeAxes = Axes.Y,
+                    Direction = FillDirection.Horizontal,
+                    Spacing = new Vector2(4, 0),
                     Children = new Drawable[]
                     {
                         playerName = new OsuSpriteText
@@ -478,9 +486,6 @@ public partial class KnockoutBoard : CompositeDrawable
                             Colour = entrant.Colour,
                             Shadow = true,
                         },
-                        // Mods sit just past the name. They are allowed to overflow the fixed name
-                        // cell toward the numbers — the right group is pinned to the right edge, so a
-                        // long mod string cannot push the score column out of line.
                         mods = new OsuSpriteText
                         {
                             Anchor = Anchor.CentreLeft,
@@ -490,14 +495,21 @@ public partial class KnockoutBoard : CompositeDrawable
                             Colour = Color4.White,
                             Shadow = true,
                         },
+                        judgement = new OsuSpriteText
+                        {
+                            Anchor = Anchor.CentreLeft,
+                            Origin = Anchor.CentreLeft,
+                            Text = string.Empty,
+                            Font = OsuFont.Torus.With(weight: FontWeight.Bold, fixedWidth: true),
+                            Colour = Color4.White,
+                            Shadow = true,
+                        },
                     },
                 },
 
-                // Right group — pinned to the right edge, reading combo, score, then the recent
-                // judgement after the score.
+                // Right group — pinned to the right edge, reading combo then score.
                 comboCell = numberCell(out combo, "0x", FontWeight.Regular, Anchor.CentreRight),
                 scoreCell = numberCell(out score, "00000000", FontWeight.Bold, Anchor.CentreRight),
-                judgeCell = numberCell(out judgement, string.Empty, FontWeight.Bold, Anchor.CentreRight),
             };
         }
 
@@ -532,33 +544,31 @@ public partial class KnockoutBoard : CompositeDrawable
 
             float fs = metrics.FontSize;
 
-            foreach (var sprite in new[] { accuracy, performance, combo, score, judgement })
+            foreach (var sprite in new[] { accuracy, performance, combo, score })
                 sprite.Font = sprite.Font.With(size: fs);
 
             playerName.Font = playerName.Font.With(size: fs);
             mods.Font = mods.Font.With(size: fs * 0.8f);
+            judgement.Font = judgement.Font.With(size: fs * 0.85f);
+            nameCell.Spacing = new Vector2(fs * 0.28f, 0);
 
             // Column widths, all derived from the font size so the table scales with the board. The
-            // numeric ones are counted in fixed-width figure glyphs (~0.55 em each); the name is sized
-            // to the LONGEST name in the field so the columns after it line up on every row.
+            // numeric ones are counted in fixed-width figure glyphs (~0.55 em each); the name block
+            // auto-sizes and flows toward the numbers, so it needs no fixed width of its own.
             float d = fs * 0.55f;
             float gap = fs * 0.5f;
 
             float accW = 7f * d;
             float ppW = 8.5f * d;
             float gradeW = fs * 2.1f;
-            float nameW = Math.Max(maxNameChars, 3) * fs * 0.62f;
             float comboW = 7f * d;
             float scoreW = 8.5f * d;
-            float judgeW = 3.2f * d;
 
             accCell.Width = accW;
             ppCell.Width = ppW;
             gradeCell.Width = gradeW;
-            nameCell.Width = nameW;
             comboCell.Width = comboW;
             scoreCell.Width = scoreW;
-            judgeCell.Width = judgeW;
 
             float lm = 5;
             accCell.X = lm;
@@ -568,9 +578,8 @@ public partial class KnockoutBoard : CompositeDrawable
 
             // Right group X is measured back from the right edge (negative, right-anchored).
             float rm = 5;
-            judgeCell.X = -rm;
-            scoreCell.X = -(rm + judgeW + gap);
-            comboCell.X = -(rm + judgeW + gap + scoreW + gap);
+            scoreCell.X = -rm;
+            comboCell.X = -(rm + scoreW + gap);
 
             if (rankGraphic != null)
                 rankGraphic.Size = new Vector2(gradeW, metrics.RowHeight * 0.72f);
