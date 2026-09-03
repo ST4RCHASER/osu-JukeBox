@@ -97,6 +97,18 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
     /// </summary>
     internal IReadOnlyList<Mod>? OverrideMods { get; init; }
 
+    /// <summary>
+    /// A per-player GAMEPLAY SKIN override, from <see cref="Replays.PlayerOverrideStore"/>. When set,
+    /// this layer builds under that bundled skin instead of the global selection — so one player's
+    /// cell can wear Classic while the rest are on Argon. Null uses the global skin. Init-only: the
+    /// skin chain is built once, so a change is a rebuilt layer (BeatmapVisuals rebuilds on it).
+    /// </summary>
+    internal JukeBoxSkin? OverrideSkin { get; init; }
+
+    /// <summary>Parses a stored skin key back to a bundled skin, or null when it names none.</summary>
+    internal static JukeBoxSkin? ParseSkin(string? key)
+        => Enum.TryParse<JukeBoxSkin>(key, out var skin) ? skin : null;
+
     /// <summary>Test hook: the mods gameplay and scoring actually run under.</summary>
     internal IReadOnlyList<Mod> ActiveMods => mods;
 
@@ -343,15 +355,20 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
         // The user's bundled-skin choice (settings panel; Random is already resolved to a concrete
         // entry by SkinSelection). Selection changes rebuild this whole layer (BeatmapVisuals),
         // so the choice is read once here. Argon when no service is cached (bare test scenes).
-        var selectedChoice = skinSelection?.Effective.Value ?? JukeBoxSkin.Argon;
+        // A per-player skin override wins over the global selection: this player's cell is built
+        // under the bundled skin they were given, everyone else under the shared choice.
+        var selectedChoice = OverrideSkin ?? skinSelection?.Effective.Value ?? JukeBoxSkin.Argon;
         SelectedSkin = selectedChoice;
         osu.Framework.Logging.Logger.Log($"[LazerChartLayer] building {ruleset.ShortName} chart with skin: {selectedChoice}");
 
         // Routed through the service (not the static) so JukeBoxSkin.Custom can resolve the
         // user-imported .osk folder, which needs storage access this layer has no business doing.
-        // With no service cached (bare test scenes) the choice is always Argon anyway.
-        var selected = skinSelection?.CreateEffectiveSkin(resourceProvider)
-                       ?? SkinSelection.CreateSkin(selectedChoice, resourceProvider);
+        // With no service cached (bare test scenes) the choice is always Argon anyway. An override is
+        // always a bundled skin, so it goes straight through the static builder.
+        var selected = OverrideSkin is { } overrideSkin
+            ? SkinSelection.CreateSkin(overrideSkin, resourceProvider)
+            : skinSelection?.CreateEffectiveSkin(resourceProvider)
+              ?? SkinSelection.CreateSkin(selectedChoice, resourceProvider);
         var rulesetResources = new ResourceStoreBackedSkin(ruleset.CreateResourceStore(), host, audio);
         ownedSkins.Add(selected);
         ownedSkins.Add(rulesetResources);

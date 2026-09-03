@@ -84,7 +84,19 @@ public partial class PlayersPanel : CompositeDrawable
     private SettingsEnumDropdown<KnockoutSort> knockoutSortDropdown = null!;
     private SettingsCheckbox knockoutLiveSortCheckbox = null!;
     private SettingsDropdown<string> targetDropdown = null!;
+    private SettingsDropdown<string> skinDropdown = null!;
     private FillFlowContainer swatches = null!;
+
+    /// <summary>The gameplay skins a player can be given, as (menu label, stored key). A null key is
+    /// the reset — fall back to the global skin. Keys are <see cref="JukeBoxSkin"/> names.</summary>
+    private static readonly (string Display, string? Key)[] skin_choices =
+    {
+        ("Default (global skin)", null),
+        ("Argon", "Argon"),
+        ("Argon Pro", "ArgonPro"),
+        ("Triangles", "Triangles"),
+        ("Classic", "Classic"),
+    };
     private readonly Dictionary<string, SettingsCheckbox> modCheckboxes = new Dictionary<string, SettingsCheckbox>();
     private readonly Dictionary<string, BindableBool> modBindables = new Dictionary<string, BindableBool>();
 
@@ -115,6 +127,7 @@ public partial class PlayersPanel : CompositeDrawable
         knockoutSortDropdown = new SettingsEnumDropdown<KnockoutSort> { LabelText = "Rank players by" };
         knockoutLiveSortCheckbox = new SettingsCheckbox { LabelText = "Re-order the board as they play" };
         targetDropdown = new SettingsDropdown<string> { LabelText = "Per-player settings for" };
+        skinDropdown = new SettingsDropdown<string> { LabelText = "Gameplay skin", Items = skin_choices.Select(c => c.Display) };
 
         var content = new List<Drawable>
         {
@@ -124,6 +137,7 @@ public partial class PlayersPanel : CompositeDrawable
             knockoutLiveSortCheckbox,
             targetDropdown,
             colourRow(),
+            skinDropdown,
         };
 
         foreach (var (acronym, label, _) in mod_choices)
@@ -185,6 +199,7 @@ public partial class PlayersPanel : CompositeDrawable
         buildSwatches();
 
         targetDropdown.Current.BindValueChanged(e => onTargetChanged(e.NewValue));
+        skinDropdown.Current.BindValueChanged(e => onSkinChanged(e.NewValue));
 
         // Watch the selected difficulty only, through a bound copy that is unbound on disposal (see
         // Dispose). The set-level Current change is not watched separately: PlaybackController points
@@ -261,9 +276,23 @@ public partial class PlayersPanel : CompositeDrawable
         foreach (var (acronym, _, _) in mod_choices)
             modBindables[acronym].Value = mods.Contains(acronym);
 
+        string? skinKey = target == target_all ? null : overrideStore?.Peek(currentPlayers[target])?.SkinKey;
+        skinDropdown.Current.Value = skin_choices.FirstOrDefault(c => c.Key == skinKey).Display ?? skin_choices[0].Display;
+
         refreshing = false;
 
         highlightSwatch();
+    }
+
+    private void onSkinChanged(string? display)
+    {
+        if (refreshing || display == null)
+            return;
+
+        string? key = skin_choices.FirstOrDefault(c => c.Display == display).Key;
+
+        foreach (var replay in targetReplays())
+            overrideStore?.SetSkin(replay, key);
     }
 
     private void buildSwatches()
@@ -369,6 +398,11 @@ public partial class PlayersPanel : CompositeDrawable
 
     /// <summary>Test hook: toggle a mod for the current target by acronym.</summary>
     internal void SetMod(string acronym, bool on) => modBindables[acronym].Value = on;
+
+    /// <summary>Test hook: pick a gameplay skin for the current target by its stored key (null =
+    /// default/global).</summary>
+    internal void SelectSkinKey(string? key)
+        => skinDropdown.Current.Value = skin_choices.First(c => c.Key == key).Display;
 
     /// <summary>One clickable colour chip. A null colour is the reset chip, drawn as an outlined
     /// ring rather than a filled dot.</summary>

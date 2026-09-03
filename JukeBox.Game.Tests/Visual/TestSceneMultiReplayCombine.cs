@@ -733,6 +733,30 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("the bubble has slid downward", () => breakBubble()!.Y > startY + 2);
         }
 
+        /// <summary>
+        /// A per-player gameplay skin override builds that player's chart under the chosen bundled
+        /// skin. Asserted on the skin the rendered chart actually built with — not on the store field.
+        /// </summary>
+        [Test]
+        public void APerPlayerSkinOverrideBuildsTheChartUnderThatSkin()
+        {
+            AddStep("build two, the driver forced to Classic", () =>
+            {
+                var replays = new[] { replayFor("player0"), replayFor("player1") };
+                overrideStore.SetSkin(replays[0], "Classic");
+
+                builtReplays = replays;
+                host.Child = combine = new MultiReplayCombine(beatmapPath, replays);
+                host.Clock = framed = new FramedClock(manual);
+                manual.CurrentTime = 0;
+            });
+
+            AddUntilStep("chart loaded", () => combine.Chart.IsLoaded);
+
+            AddAssert("the rendered chart was built under Classic", () =>
+                combine.Chart.SelectedSkin == JukeBox.Game.Configuration.JukeBoxSkin.Classic);
+        }
+
         /// <summary>The transient red name marker on the player who broke (index 1), or null when
         /// none is present.</summary>
         private OsuSpriteText? breakBubble() =>

@@ -172,6 +172,29 @@ namespace JukeBox.Game.Tests.Visual
         }
 
         [Test]
+        public void ASkinChoiceOverridesOnlyTheTargetedPlayer()
+        {
+            AddStep("build two", () => build(2));
+            AddUntilStep("panel loaded", () => panel.IsLoaded);
+
+            AddStep("target player 0, pick Classic", () =>
+            {
+                panel.SelectTarget(0);
+                panel.SelectSkinKey("Classic");
+            });
+
+            AddAssert("player 0's skin is overridden", () => overrides.Peek(players[0])?.SkinKey == "Classic");
+            AddAssert("player 1 keeps the global skin", () => overrides.Peek(players[1])?.SkinKey == null);
+
+            AddStep("reset player 0 to the global skin", () =>
+            {
+                panel.SelectTarget(0);
+                panel.SelectSkinKey(null);
+            });
+            AddAssert("the override is cleared", () => overrides.Peek(players[0])?.SkinKey == null);
+        }
+
+        [Test]
         public void TheRateModsAreMutuallyExclusive()
         {
             AddStep("build two", () => build(2));

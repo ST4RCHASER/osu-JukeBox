@@ -183,6 +183,9 @@ public partial class ReplaySimulator : CompositeDrawable
 
                 // A per-player mod override re-scores that one play under the mods the user chose,
                 // leaving everyone else on what they recorded. Null when unset.
+                // Skin is not set here: this play is off-screen and only its numbers are wanted, and
+                // the skin changes nothing about the score. The per-player skin reaches the VISIBLE
+                // renderers (the combine chart and the grid cells) only.
                 OverrideMods = overrideStore?.Peek(replay)?.Mods,
             };
 

@@ -189,6 +189,9 @@ public partial class MultiReplayGrid : CompositeDrawable
 
             // This player's mod override, if the user set one; otherwise their recorded mods.
             OverrideMods = overrideStore?.Peek(replay)?.Mods,
+
+            // And their gameplay skin override, so one cell can wear a different skin.
+            OverrideSkin = LazerChartLayer.ParseSkin(overrideStore?.Peek(replay)?.SkinKey),
         };
 
         cells.Add(layer);
