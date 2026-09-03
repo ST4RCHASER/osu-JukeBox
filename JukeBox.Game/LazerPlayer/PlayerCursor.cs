@@ -36,7 +36,7 @@ namespace JukeBox.Game.LazerPlayer;
 public partial class PlayerCursor : CompositeDrawable
 {
     private readonly IReadOnlyList<ReplayFrame> frames;
-    private readonly Color4 colour;
+    private Color4 colour;
 
     private readonly Container content;
     private readonly Container body;
@@ -70,6 +70,15 @@ public partial class PlayerCursor : CompositeDrawable
 
     /// <summary>Test hook: the player's colour, as drawn.</summary>
     internal Color4 Colour4 => colour;
+
+    /// <summary>Re-tints the cursor and its trail live, for a per-player colour change. The break
+    /// marker stays red — it is a state cue, not part of the player's identity colour.</summary>
+    public void SetColour(Color4 value)
+    {
+        colour = value;
+        dot.Colour = value;
+        trail.SetColour(value);
+    }
 
     public PlayerCursor(string playerName, IReadOnlyList<ReplayFrame> frames, Color4 colour)
     {

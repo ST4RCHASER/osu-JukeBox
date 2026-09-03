@@ -78,6 +78,15 @@ public partial class KnockoutBoard : CompositeDrawable
             rows[playerIndex].FlashComboBreak();
     }
 
+    /// <summary>Re-tints one player's name to a new cursor colour, live — the rail name shares the
+    /// player's cursor colour, so a colour override has to reach here too. Rows are held in player
+    /// order, so the index is the player's.</summary>
+    public void SetPlayerColour(int playerIndex, Color4 colour)
+    {
+        if (playerIndex >= 0 && playerIndex < rows.Count)
+            rows[playerIndex].SetColour(colour);
+    }
+
     /// <summary>
     /// Test hook: player indices top to bottom as the board has ranked them.
     ///
@@ -299,10 +308,18 @@ public partial class KnockoutBoard : CompositeDrawable
         private readonly OsuSpriteText combo = null!;
         private readonly OsuSpriteText playerName = null!;
         private readonly Box background = null!;
-        private readonly Color4 playerColour;
+        private Color4 playerColour;
 
         /// <summary>Test hook: how many times this row has been flashed for a combo break.</summary>
         internal int ComboBreakFlashes { get; private set; }
+
+        /// <summary>Re-tints this row's name to a new player colour, live. The flash restores to
+        /// this same field, so a break mid-change settles to the new colour rather than the old.</summary>
+        public void SetColour(Color4 colour)
+        {
+            playerColour = colour;
+            playerName.Colour = colour;
+        }
 
         /// <summary>Flashes the name red and swells it, then settles back to the player's colour.</summary>
         public void FlashComboBreak()

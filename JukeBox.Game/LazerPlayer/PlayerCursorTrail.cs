@@ -27,7 +27,7 @@ namespace JukeBox.Game.LazerPlayer;
 /// </summary>
 public partial class PlayerCursorTrail : CompositeDrawable
 {
-    private readonly Color4 colour;
+    private Color4 colour;
     private readonly List<Circle> segments = new List<Circle>();
     private readonly List<Vector2> positions = new List<Vector2>();
 
@@ -94,6 +94,16 @@ public partial class PlayerCursorTrail : CompositeDrawable
             segments[i].Size = new Vector2(2 + 5 * age);
             segments[i].Alpha = 0.45f * age;
         }
+    }
+
+    /// <summary>Re-tints the whole tail, for a live per-player colour change. The segments carry
+    /// their own colour (the container stays white), so each one is repainted.</summary>
+    public void SetColour(Color4 value)
+    {
+        colour = value;
+
+        foreach (var segment in segments)
+            segment.Colour = value;
     }
 
     /// <summary>Drops the history — used when the cursor has no position to draw at.</summary>

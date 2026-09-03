@@ -88,6 +88,15 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
     /// </summary>
     internal bool UseRecordedReplayModsOnly { get; init; }
 
+    /// <summary>
+    /// A per-player MOD OVERRIDE, from <see cref="Replays.PlayerOverrideStore"/>. When set (and only
+    /// under <see cref="UseRecordedReplayModsOnly"/>, i.e. in a multi-replay view), it replaces the
+    /// replay's recorded mods for this player's render and score — the user asking "how would this
+    /// play look under these mods instead". Null leaves the recorded mods in force. Init-only: mods
+    /// change beatmap conversion, so a new value means a rebuilt layer, not a mutated one.
+    /// </summary>
+    internal IReadOnlyList<Mod>? OverrideMods { get; init; }
+
     /// <summary>Test hook: the mods gameplay and scoring actually run under.</summary>
     internal IReadOnlyList<Mod> ActiveMods => mods;
 
@@ -449,9 +458,11 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
             var recorded = Replays.ReplayMods.ForGameplay(replayScore);
 
             // With several replays on screen there is no "the" replay for one shared selection to
-            // stand for, so each layer answers with its own recorded mods. See the property.
+            // stand for, so each layer answers with its own recorded mods — unless the user has set a
+            // per-player override for this one, which replaces them for its render and score. See the
+            // property.
             if (UseRecordedReplayModsOnly)
-                return recorded;
+                return OverrideMods ?? recorded;
 
             // Only once the selection has actually taken this replay on (ChartModSelection follows
             // the now-playing item, and a bare test scene has no selection service at all) is it the

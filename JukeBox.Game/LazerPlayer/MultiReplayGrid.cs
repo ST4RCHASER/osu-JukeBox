@@ -106,6 +106,11 @@ public partial class MultiReplayGrid : CompositeDrawable
 
     private TextureStore? backgroundTextures;
 
+    /// <summary>Per-player overrides, so each cell can render (and, through its own simulation,
+    /// score) under this player's chosen mods. Null in a bare test host.</summary>
+    [Resolved(canBeNull: true)]
+    private Replays.PlayerOverrideStore? overrideStore { get; set; }
+
     private readonly List<LazerStoryboardLayer> storyboards = new List<LazerStoryboardLayer>();
 
     /// <summary>Test hook: how many cells actually carry a storyboard/video layer.</summary>
@@ -181,6 +186,9 @@ public partial class MultiReplayGrid : CompositeDrawable
         {
             AlwaysPresent = true,
             UseRecordedReplayModsOnly = true,
+
+            // This player's mod override, if the user set one; otherwise their recorded mods.
+            OverrideMods = overrideStore?.Peek(replay)?.Mods,
         };
 
         cells.Add(layer);

@@ -118,12 +118,19 @@ public partial class MultiReplayCombine : CompositeDrawable
         RelativeSizeAxes = Axes.Both;
     }
 
+    /// <summary>Per-player overrides — the cursor colours are read from here, and the driving
+    /// player's mod override reaches the rendered chart. Null in a bare test host.</summary>
+    [Resolved(canBeNull: true)]
+    private Replays.PlayerOverrideStore? overrideStore { get; set; }
+
     [BackgroundDependencyLoader]
     private void load()
     {
         // The FIRST replay drives the rendered chart — its hits are the ones the map reacts to —
         // and everyone else rides along as a cursor. Someone has to be the one the chart follows.
-        chart = new LazerChartLayer(new FlatWorkingBeatmap(osuFile), osuFile, replays.FirstOrDefault()?.Score)
+        var driver = replays.FirstOrDefault();
+
+        chart = new LazerChartLayer(new FlatWorkingBeatmap(osuFile), osuFile, driver?.Score)
         {
             AlwaysPresent = true,
 
@@ -131,6 +138,10 @@ public partial class MultiReplayCombine : CompositeDrawable
             // Letting the shared Chart-tab selection edit this chart would put the rendered play
             // and the numbers beside it under different mods.
             UseRecordedReplayModsOnly = true,
+
+            // Their per-player mod override, if any, so the rendered chart matches the re-scored
+            // numbers on their rail row.
+            OverrideMods = driver != null ? overrideStore?.Peek(driver)?.Mods : null,
         };
 
         simulator = new ReplaySimulator(osuFile, replays);
@@ -155,7 +166,7 @@ public partial class MultiReplayCombine : CompositeDrawable
                            // the name in the player's colour and the mods in white, so the two
                            // cannot be one string.
                            replay.PlayerName.Length > 0 ? replay.PlayerName : "unknown",
-                           ColourFor(index, replays.Count),
+                           effectiveColour(index),
                            simulator.Timelines[index],
                            replay.ModAcronyms.Count > 0 ? "+" + string.Join(string.Empty, replay.ModAcronyms) : string.Empty))
                        .ToList();
@@ -222,7 +233,7 @@ public partial class MultiReplayCombine : CompositeDrawable
                 continue;
             }
 
-            var cursor = new PlayerCursor(MultiReplayGrid.DisplayName(replays[i]), replay.Frames, ColourFor(i, replays.Count));
+            var cursor = new PlayerCursor(MultiReplayGrid.DisplayName(replays[i]), replay.Frames, effectiveColour(i));
 
             cursors.Add(chart.AddPlayerCursor(cursor) ? cursor : null);
 
@@ -342,6 +353,55 @@ public partial class MultiReplayCombine : CompositeDrawable
     /// </summary>
     internal static Color4 ColourFor(int index, int count)
         => Color4.FromHsv(new Vector4((float)index / Math.Max(count, 1), 0.85f, 1, 1));
+
+    /// <summary>This player's colour as drawn: their per-player override if set, otherwise the
+    /// hue-spread default for their slot.</summary>
+    private Color4 effectiveColour(int index)
+    {
+        var fallback = ColourFor(index, replays.Count);
+        return overrideStore?.EffectiveCursorColour(replays[index], fallback) ?? fallback;
+    }
+
+    protected override void LoadComplete()
+    {
+        base.LoadComplete();
+
+        if (overrideStore != null)
+            overrideStore.Changed += onOverrideChanged;
+    }
+
+    /// <summary>
+    /// Applies a live colour change to the one player it names — cursor, trail and rail name all
+    /// re-tint where they stand. Mod and skin changes need a rebuilt render and are handled a level
+    /// up in the visuals stack, so they are ignored here.
+    /// </summary>
+    private void onOverrideChanged(ReplayAttachment replay, Replays.PlayerOverrideKind kind)
+    {
+        if (kind != Replays.PlayerOverrideKind.Colour)
+            return;
+
+        for (int i = 0; i < replays.Count; i++)
+        {
+            if (!ReferenceEquals(replays[i], replay))
+                continue;
+
+            var colour = effectiveColour(i);
+
+            if (i < cursors.Count)
+                cursors[i]?.SetColour(colour);
+
+            board?.SetPlayerColour(i, colour);
+            break;
+        }
+    }
+
+    protected override void Dispose(bool isDisposing)
+    {
+        if (overrideStore != null)
+            overrideStore.Changed -= onOverrideChanged;
+
+        base.Dispose(isDisposing);
+    }
 
     /// <summary>The play's grade letter, or nothing when the replay never decoded.</summary>
     internal static string Rank(ReplayAttachment replay)

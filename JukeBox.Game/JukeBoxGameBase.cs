@@ -379,6 +379,11 @@ namespace JukeBox.Game
             // played on. Cached before the visuals stack can resolve it (see BeatmapVisuals).
             dependencies.Cache(new Replays.ReplayStore());
 
+            // Per-player overrides (mods, cursor colour, gameplay skin) keyed by the replay itself —
+            // the Players panel writes them and the multi-replay renderers read them. Kept apart from
+            // the shared Chart-tab selection on purpose (see the class doc).
+            dependencies.Cache(new Replays.PlayerOverrideStore());
+
             // Spectating. Cached and added unconditionally, like the search and the account above:
             // with no credentials it simply reports that it cannot poll, and it does nothing at all
             // until someone presses Start. The API client is built HERE because it needs the app's

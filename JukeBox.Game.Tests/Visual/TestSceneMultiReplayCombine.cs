@@ -1,6 +1,7 @@
 #nullable enable
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -11,6 +12,7 @@ using System.Text.RegularExpressions;
 using osu.Game.Rulesets.Mods;
 using osu.Game.Rulesets.Osu.Mods;
 using NUnit.Framework;
+using osu.Framework.Allocation;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Testing;
@@ -41,6 +43,12 @@ namespace JukeBox.Game.Tests.Visual
         private MultiReplayCombine combine = null!;
         private Container host = null!;
         private ManualInputManager input = null!;
+
+        [Resolved]
+        private PlayerOverrideStore overrideStore { get; set; } = null!;
+
+        /// <summary>The replays behind the most recent build, so a test can key an override to one.</summary>
+        private IReadOnlyList<ReplayAttachment> builtReplays = Array.Empty<ReplayAttachment>();
 
         private readonly ManualClock manual = new ManualClock();
         private FramedClock framed = null!;
@@ -109,6 +117,7 @@ namespace JukeBox.Game.Tests.Visual
                                         misses?[i]))
                                     .ToList();
 
+            builtReplays = replays;
             host.Child = combine = new MultiReplayCombine(beatmapPath, replays);
 
             // The test takes the clock IMMEDIATELY, at zero. Left on the scene's real-time clock
@@ -728,6 +737,90 @@ namespace JukeBox.Game.Tests.Visual
         /// none is present.</summary>
         private OsuSpriteText? breakBubble() =>
             combine.Cursors[1]?.ChildrenOfType<OsuSpriteText>().FirstOrDefault(t => t.Colour == Color4.Red);
+
+        /// <summary>
+        /// A per-player cursor colour override set BEFORE the view builds reaches all three places
+        /// that carry a player's identity colour: their cursor dot, its trail, and their rail name —
+        /// and only that player, leaving everyone else on the hue-spread default.
+        /// </summary>
+        [Test]
+        public void APerPlayerColourOverrideTintsThatPlayersCursorTrailAndRailName()
+        {
+            AddStep("build two, the second forced lime", () =>
+            {
+                var replays = new[] { replayFor("player0"), replayFor("player1") };
+                overrideStore.SetCursorColour(replays[1], Color4.Lime);
+
+                builtReplays = replays;
+                host.Child = combine = new MultiReplayCombine(beatmapPath, replays);
+                host.Clock = framed = new FramedClock(manual);
+                manual.CurrentTime = 0;
+            });
+
+            AddUntilStep("cursors attached", () => combine.CursorsAttached == 2);
+            AddUntilStep("board built", () => combine.Board?.Rows.Count == 2);
+
+            AddAssert("the overridden cursor and its trail are lime", () =>
+                combine.Cursors[1]!.Colour4 == Color4.Lime
+                && combine.Cursors[1]!.ChildrenOfType<PlayerCursorTrail>().First().TrailColour == Color4.Lime);
+
+            AddAssert("its rail name is lime too", () => rowFor(1).NameColour == Color4.Lime);
+
+            AddAssert("the other player keeps the hue-spread default", () =>
+                combine.Cursors[0]!.Colour4 == MultiReplayCombine.ColourFor(0, 2)
+                && combine.Cursors[0]!.Colour4 != Color4.Lime);
+        }
+
+        /// <summary>
+        /// Changing a colour override while the view is live re-tints that player in place — cursor,
+        /// trail and rail name — with no rebuild.
+        /// </summary>
+        [Test]
+        public void AColourOverrideAppliedLiveReTintsInPlace()
+        {
+            AddStep("build three", () => build(3));
+            AddUntilStep("cursors attached", () => combine.CursorsAttached == 3);
+            AddUntilStep("board built", () => combine.Board?.Rows.Count == 3);
+
+            AddAssert("player 0 starts on its default colour", () =>
+                combine.Cursors[0]!.Colour4 == MultiReplayCombine.ColourFor(0, 3));
+
+            AddStep("recolour player 0 to magenta", () => overrideStore.SetCursorColour(builtReplays[0], Color4.Magenta));
+
+            AddAssert("its cursor and trail re-tint at once", () =>
+                combine.Cursors[0]!.Colour4 == Color4.Magenta
+                && combine.Cursors[0]!.ChildrenOfType<PlayerCursorTrail>().First().TrailColour == Color4.Magenta);
+
+            AddAssert("and its rail name re-tints", () => rowFor(0).NameColour == Color4.Magenta);
+        }
+
+        /// <summary>
+        /// A per-player MOD override re-scores that one play under the chosen mods, leaving every
+        /// other player on the mods they recorded. Asserted on the mods the simulator actually
+        /// computed each player's numbers under — the effect, not the fact that a field was set.
+        /// </summary>
+        [Test]
+        public void APerPlayerModOverrideReScoresOnlyThatPlayer()
+        {
+            AddStep("build two, the second forced to HardRock", () =>
+            {
+                var replays = new[] { replayFor("player0"), replayFor("player1") };
+                overrideStore.SetMods(replays[1], new Mod[] { new OsuModHardRock() });
+
+                builtReplays = replays;
+                host.Child = combine = new MultiReplayCombine(beatmapPath, replays);
+                host.Clock = framed = new FramedClock(manual);
+                manual.CurrentTime = 0;
+            });
+
+            AddUntilStep("recorded", () => combine.Simulator.AllComplete);
+
+            AddAssert("player 1 was simulated under HardRock", () =>
+                combine.Simulator.SimulatedMods[1].Any(m => m.Acronym == "HR"));
+
+            AddAssert("player 0 was not — it kept its recorded mods", () =>
+                combine.Simulator.SimulatedMods[0].All(m => m.Acronym != "HR"));
+        }
 
         private static string osuWithObjects()
         {

@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using JukeBox.Game.Replays;
+using osu.Framework.Allocation;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Timing;
@@ -138,6 +139,11 @@ public partial class ReplaySimulator : CompositeDrawable
     internal bool EveryPlaySimulatedUnderItsOwnMods
         => simulations.Count > 0 && simulations.All(s => s.RecordedModsOnly);
 
+    /// <summary>Per-player overrides. Each play is SCORED here, so a mod override has to be read at
+    /// this point or the board's numbers would not reflect it. Null in a bare test host.</summary>
+    [Resolved(canBeNull: true)]
+    private Replays.PlayerOverrideStore? overrideStore { get; set; }
+
     public ReplaySimulator(string osuFile, IReadOnlyList<ReplayAttachment> replays)
     {
         this.osuFile = osuFile;
@@ -174,6 +180,10 @@ public partial class ReplaySimulator : CompositeDrawable
                 // whether they are right. Under the shared Chart-tab selection every player was
                 // being scored with player one's mods.
                 UseRecordedReplayModsOnly = true,
+
+                // A per-player mod override re-scores that one play under the mods the user chose,
+                // leaving everyone else on what they recorded. Null when unset.
+                OverrideMods = overrideStore?.Peek(replay)?.Mods,
             };
 
             simulations.Add(new Simulation(layer, manual, (FramedClock)layer.Clock, working, attributeCache));
