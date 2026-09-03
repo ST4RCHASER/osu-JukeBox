@@ -128,12 +128,7 @@ public partial class MultiReplayCombine : CompositeDrawable
 
         simulator = new ReplaySimulator(osuFile, replays);
 
-        var children = new List<Drawable> { chart, simulator };
-
-        if (MultiReplayLayout.RateMismatchWarning(replays) is { } warning)
-            children.Add(rateWarning(warning));
-
-        InternalChildren = children.ToArray();
+        InternalChildren = new Drawable[] { chart, simulator };
     }
 
     /// <summary>
@@ -230,27 +225,6 @@ public partial class MultiReplayCombine : CompositeDrawable
             cursor.Alpha = stillIn ? 1 : 0;
         }
     }
-
-    private static Drawable rateWarning(string warning) => new Container
-    {
-        Anchor = Anchor.BottomCentre,
-        Origin = Anchor.BottomCentre,
-        AutoSizeAxes = Axes.Both,
-        Margin = new MarginPadding { Bottom = 6 },
-        Masking = true,
-        CornerRadius = 4,
-        Children = new Drawable[]
-        {
-            new Box { RelativeSizeAxes = Axes.Both, Colour = Color4.Black.Opacity(0.75f) },
-            new OsuSpriteText
-            {
-                Margin = new MarginPadding { Horizontal = 8, Vertical = 3 },
-                Text = warning,
-                Font = OsuFont.Torus.With(size: 13, weight: FontWeight.SemiBold),
-                Colour = Color4.Orange,
-            },
-        },
-    };
 
     /// <summary>
     /// This player's colour, spread evenly around the hue circle so neighbouring cursors are as

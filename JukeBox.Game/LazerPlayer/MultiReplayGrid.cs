@@ -152,12 +152,7 @@ public partial class MultiReplayGrid : CompositeDrawable
             Content = content,
         };
 
-        var children = new List<Drawable> { grid };
-
-        if (MultiReplayLayout.RateMismatchWarning(replays) is { } warning)
-            children.Add(buildRateWarning(warning));
-
-        InternalChildren = children.ToArray();
+        InternalChild = grid;
     }
 
     /// <summary>
@@ -328,27 +323,6 @@ public partial class MultiReplayGrid : CompositeDrawable
         // The cells are real gameplay, so the text sits over moving colour — a shadow is what keeps
         // it readable rather than a scrim that would hide the very thing being compared.
         Shadow = true,
-    };
-
-    private Drawable buildRateWarning(string warning) => new Container
-    {
-        Anchor = Anchor.TopCentre,
-        Origin = Anchor.TopCentre,
-        AutoSizeAxes = Axes.Both,
-        Margin = new MarginPadding { Top = 4 },
-        Masking = true,
-        CornerRadius = 4,
-        Children = new Drawable[]
-        {
-            new Box { RelativeSizeAxes = Axes.Both, Colour = Color4.Black.Opacity(0.75f) },
-            new OsuSpriteText
-            {
-                Margin = new MarginPadding { Horizontal = 8, Vertical = 3 },
-                Text = warning,
-                Font = OsuFont.Torus.With(size: 13, weight: FontWeight.SemiBold),
-                Colour = Color4.Orange,
-            },
-        },
     };
 
     /// <summary>The replay's final score, zero-padded the way osu!'s own scoreboards show it.</summary>

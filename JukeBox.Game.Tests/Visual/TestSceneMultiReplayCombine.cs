@@ -329,14 +329,17 @@ namespace JukeBox.Game.Tests.Visual
                 combine.Board.DisplayOrder[0] == 0);
         }
 
-        [Test]
-        public void MixedSpeedsWarnHereToo()
+        /// <summary>Same rule as the grid: mixed speeds play the map's own 1.0x, with nothing on
+        /// screen about it.</summary>
+        [TestCase(true)]
+        [TestCase(false)]
+        public void NoSpeedWarningEverAppears(bool mixed)
         {
-            AddStep("build two at different speeds", () => build(2, new[] { 1d, 1.5d }));
+            AddStep("build two", () => build(2, mixed ? new[] { 1d, 1.5d } : null));
             AddUntilStep("loaded", () => combine.IsLoaded);
 
-            AddAssert("warned", () => combine.ChildrenOfType<OsuSpriteText>()
-                                             .Any(t => t.Text.ToString()!.StartsWith("Mixed speeds", StringComparison.Ordinal)));
+            AddAssert("nothing on screen mentions speeds", () => !combine.ChildrenOfType<OsuSpriteText>()
+                                                                     .Any(t => t.Text.ToString()!.Contains("speed", StringComparison.OrdinalIgnoreCase)));
         }
 
         private static string osuWithObjects()

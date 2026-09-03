@@ -133,10 +133,8 @@ public static class MultiReplayLayout
     /// This is the one incompatibility a shared clock cannot paper over. Visual mods differ per
     /// replay quite happily — each cell renders under its own — but SPEED is a property of the
     /// audio track, and there is one track. A DoubleTime play and a no-mod play of the same map are
-    /// different lengths, so no single clock drives both correctly, and the honest options are to
-    /// refuse or to pick one and say so. We pick the FIRST replay's rate (it is the one the user
-    /// dropped first, and the one whose cell reads correctly) and surface the mismatch rather than
-    /// letting the others silently desync.
+    /// different lengths, so no single clock drives both correctly. See <see cref="SharedRate"/>
+    /// for what the shared clock does about it.
     /// </para>
     /// </summary>
     public static bool RatesAgree(IReadOnlyList<ReplayAttachment> replays)
@@ -160,20 +158,25 @@ public static class MultiReplayLayout
         return rates;
     }
 
-    /// <summary>The rate everything plays at: the first replay's, which is the one that stays correct.</summary>
-    public static double SharedRate(IReadOnlyList<ReplayAttachment> replays)
-        => replays.Count > 0 ? replays[0].Rate : 1;
-
     /// <summary>
-    /// The warning to put on screen when rates disagree, or null when they agree and there is
-    /// nothing to say.
+    /// The rate everything plays at: the rate they all share when they agree, and 1.0x when they do
+    /// not.
+    ///
+    /// <para>
+    /// A mismatch used to take the FIRST replay's rate and put a "Mixed speeds — playing at Nx"
+    /// chip on screen. Both are gone: picking one play's rate makes the map itself run at a speed
+    /// nobody watching chose (a single DoubleTime drop turned everyone else's playback into 1.5x,
+    /// decided by drop order), and the chip was a warning about that decision rather than
+    /// information. 1.0x is the map's own speed, which is the neutral answer when the replays
+    /// cannot agree on one.
+    /// </para>
     /// </summary>
-    public static string? RateMismatchWarning(IReadOnlyList<ReplayAttachment> replays)
+    public static double SharedRate(IReadOnlyList<ReplayAttachment> replays)
     {
-        if (RatesAgree(replays))
-            return null;
+        if (replays.Count == 0 || !RatesAgree(replays))
+            return 1;
 
-        return $"Mixed speeds — playing at {SharedRate(replays):0.##}×";
+        return replays[0].Rate;
     }
 
     private const double RATE_TOLERANCE = 0.001;

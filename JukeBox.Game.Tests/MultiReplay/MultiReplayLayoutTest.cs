@@ -72,7 +72,6 @@ namespace JukeBox.Game.Tests.MultiReplay
             var replays = new[] { at(), at(), at() };
 
             Assert.That(MultiReplayLayout.RatesAgree(replays), Is.True);
-            Assert.That(MultiReplayLayout.RateMismatchWarning(replays), Is.Null);
             Assert.That(MultiReplayLayout.SharedRate(replays), Is.EqualTo(1));
         }
 
@@ -82,25 +81,35 @@ namespace JukeBox.Game.Tests.MultiReplay
         /// Visual mods differ per cell quite happily; speed cannot, because there is one audio track.
         /// </summary>
         [Test]
-        public void MixedSpeedsAreDetectedAndReported()
+        public void MixedSpeedsPlayAtTheMapsOwnSpeed()
         {
             var replays = new[] { at(player: "nomod"), at(tempo: 1.5, player: "DT") };
 
             Assert.That(MultiReplayLayout.RatesAgree(replays), Is.False);
-            Assert.That(MultiReplayLayout.RateMismatchWarning(replays), Is.EqualTo("Mixed speeds — playing at 1×"));
+            Assert.That(MultiReplayLayout.SharedRate(replays), Is.EqualTo(1));
         }
 
         /// <summary>
-        /// The FIRST replay's rate wins — the one dropped first, and the one whose cell then reads
-        /// correctly. Picking silently would be the failure mode; picking and saying so is the rule.
+        /// Drop order makes no difference any more: a DoubleTime play leading the list used to drag
+        /// the whole session to 1.5x.
         /// </summary>
         [Test]
-        public void TheFirstReplaysSpeedIsTheOneEverythingPlaysAt()
+        public void MixedSpeedsPlayAtOneEvenWhenTheFastReplayIsFirst()
         {
             var dtFirst = new[] { at(tempo: 1.5, player: "DT"), at(player: "nomod") };
 
-            Assert.That(MultiReplayLayout.SharedRate(dtFirst), Is.EqualTo(1.5));
-            Assert.That(MultiReplayLayout.RateMismatchWarning(dtFirst), Is.EqualTo("Mixed speeds — playing at 1.5×"));
+            Assert.That(MultiReplayLayout.SharedRate(dtFirst), Is.EqualTo(1));
+        }
+
+        /// <summary>An AGREED non-1x speed is still honoured: two DoubleTime plays watch at 1.5x,
+        /// the speed both were actually played at.</summary>
+        [Test]
+        public void AnAgreedSpeedIsStillTheSharedSpeed()
+        {
+            var bothDt = new[] { at(tempo: 1.5, player: "DT"), at(tempo: 1.5, player: "also DT") };
+
+            Assert.That(MultiReplayLayout.RatesAgree(bothDt), Is.True);
+            Assert.That(MultiReplayLayout.SharedRate(bothDt), Is.EqualTo(1.5));
         }
 
         /// <summary>

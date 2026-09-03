@@ -164,24 +164,21 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("only the cap is rendered", () => grid.Cells.Count == MultiReplayLayout.MAX_GRID_CELLS);
         }
 
-        [Test]
-        public void MixedSpeedsPutAWarningOnTheGrid()
+        /// <summary>
+        /// Mixed speeds are neither announced nor adopted: the grid plays the map's own 1.0x and
+        /// says nothing about it. The chip that used to sit here warned about a decision the user
+        /// never made, and taking the first replay's rate let one DoubleTime drop set everyone
+        /// else's playback speed.
+        /// </summary>
+        [TestCase(true)]
+        [TestCase(false)]
+        public void NoSpeedWarningEverAppears(bool mixed)
         {
-            AddStep("build two at different speeds", () => buildGrid(2, new[] { 1d, 1.5d }));
+            AddStep("build two", () => buildGrid(2, mixed ? new[] { 1d, 1.5d } : null));
             AddUntilStep("grid loaded", () => grid.IsLoaded);
 
-            AddAssert("the warning is on screen", () => grid.ChildrenOfType<osu.Game.Graphics.Sprites.OsuSpriteText>()
-                                                            .Any(t => t.Text.ToString()!.StartsWith("Mixed speeds", StringComparison.Ordinal)));
-        }
-
-        [Test]
-        public void MatchedSpeedsShowNoWarning()
-        {
-            AddStep("build two at the same speed", () => buildGrid(2));
-            AddUntilStep("grid loaded", () => grid.IsLoaded);
-
-            AddAssert("no warning anywhere", () => !grid.ChildrenOfType<osu.Game.Graphics.Sprites.OsuSpriteText>()
-                                                        .Any(t => t.Text.ToString()!.StartsWith("Mixed speeds", StringComparison.Ordinal)));
+            AddAssert("nothing on screen mentions speeds", () => !grid.ChildrenOfType<osu.Game.Graphics.Sprites.OsuSpriteText>()
+                                                                     .Any(t => t.Text.ToString()!.Contains("speed", StringComparison.OrdinalIgnoreCase)));
         }
 
         /// <summary>
