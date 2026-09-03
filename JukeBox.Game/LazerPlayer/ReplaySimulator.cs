@@ -82,6 +82,28 @@ public partial class ReplaySimulator : CompositeDrawable
     internal double CatchUpBudgetMs { get; init; } = 12;
 
     /// <summary>
+    /// Milliseconds per frame to spend when the board is about to FREEZE — the least-advanced play
+    /// has less than <see cref="EmergencyCushionMs"/> of lead on the playhead, or has fallen behind
+    /// it. This is the 47-real-replays case: with the visible chart, forty-seven cursors and the
+    /// board all on the update thread, plus the forty-seven hidden renderers the framework still
+    /// walks every frame, sustained throughput fell below 1x and the numbers froze mid-song.
+    ///
+    /// <para>
+    /// A whole frame's worth (and then some) is spent here on purpose: a brief drop in frame rate
+    /// while the simulation claws back its lead is the right trade against a scoreboard that stops
+    /// counting. It is self-limiting — the moment the lead is rebuilt the budget falls back to
+    /// <see cref="CatchUpBudgetMs"/> and then <see cref="BudgetMs"/>, so the stutter lasts only as
+    /// long as the emergency does.
+    /// </para>
+    /// </summary>
+    internal double EmergencyBudgetMs { get; init; } = 50;
+
+    /// <summary>The lead below which the simulation is treated as an emergency and given
+    /// <see cref="EmergencyBudgetMs"/>. Kept above zero so it acts BEFORE the board actually freezes
+    /// rather than only once it already has.</summary>
+    internal double EmergencyCushionMs { get; init; } = 5_000;
+
+    /// <summary>
     /// How far ahead of the playhead every play should be recorded before easing off.
     ///
     /// <para>
@@ -205,10 +227,9 @@ public partial class ReplaySimulator : CompositeDrawable
 
         double playhead = Clock.CurrentTime;
 
-        // Spend hard while any play is still short of its cushion, and back off once they all have
-        // one. The work is finite, so this front-loads it into the opening seconds rather than
-        // rationing it evenly across a song and arriving late.
-        double budget = SimulatedTo - playhead < LookaheadMs ? CatchUpBudgetMs : BudgetMs;
+        // How much lead the LEAST advanced play has on the playhead. Everything keys off this,
+        // because the board can only be trusted as far as its slowest player.
+        double budget = BudgetFor(SimulatedTo - playhead);
 
         var spent = Stopwatch.StartNew();
 
@@ -230,6 +251,17 @@ public partial class ReplaySimulator : CompositeDrawable
                 advance(laggard);
         }
     }
+
+    /// <summary>
+    /// The per-frame time budget for a given <paramref name="cushion"/> (how far the least-advanced
+    /// play leads the playhead). Three tiers: overdrive when the lead is nearly gone or negative (the
+    /// board would otherwise freeze), a steady catch-up while the cushion is still being built, and a
+    /// trickle once it is comfortable. Pure so the escalation can be checked without a clock.
+    /// </summary>
+    internal double BudgetFor(double cushion)
+        => cushion < EmergencyCushionMs ? EmergencyBudgetMs
+         : cushion < LookaheadMs ? CatchUpBudgetMs
+         : BudgetMs;
 
     /// <summary>The incomplete play whose recording has got the least far, or null when all are done.</summary>
     private Simulation? leastAdvanced()
