@@ -80,7 +80,9 @@ public static class RailDensity
             fontSize * 0.7f,
             Math.Clamp(fontSize * 26, 200, 340),
             visible,
-            rowHeight >= PERFORMANCE_ROW_HEIGHT);
+            // pp is always shown — the user wants it visible even in a dense 47-player board.
+            // (PERFORMANCE_ROW_HEIGHT kept for reference/tests; the column no longer drops.)
+            true);
     }
 
     /// <summary>How many players are not drawn at all, for the "+N more" line.</summary>

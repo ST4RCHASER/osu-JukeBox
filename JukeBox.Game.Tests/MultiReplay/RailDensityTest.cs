@@ -108,8 +108,10 @@ namespace JukeBox.Game.Tests.MultiReplay
             // Enough players that the row drops under the pp threshold.
             var tight = RailDensity.For(70, typical_height);
 
+            // Rows do drop under the old pp threshold at this count...
             Assert.That(tight.RowHeight, Is.LessThan(RailDensity.PERFORMANCE_ROW_HEIGHT));
-            Assert.That(tight.ShowPerformance, Is.False);
+            // ...but pp is now always shown regardless — the user wants it at 47 players.
+            Assert.That(tight.ShowPerformance, Is.True);
         }
 
         /// <summary>
