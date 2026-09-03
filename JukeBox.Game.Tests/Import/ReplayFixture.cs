@@ -59,6 +59,116 @@ namespace JukeBox.Game.Tests.Import
             new LegacyScoreEncoder(score, beatmap.Beatmap).Encode(stream, leaveOpen: true);
         }
 
+        /// <summary>
+        /// A replay that actually PLAYS the map: it presses on each hit object in turn, missing
+        /// exactly the ones named in <paramref name="missAtIndices"/>.
+        ///
+        /// <para>
+        /// <see cref="Write"/> records eight cursor frames near the top-left and never presses a
+        /// button, so every object it is pointed at MISSES. That is fine for testing the importer,
+        /// which only reads the header — but it is silently useless for testing anything about
+        /// SCORING, because score, combo and accuracy all sit at zero for the whole play while
+        /// judged-hit counts still climb. A test asserting "the numbers are live" passes against it
+        /// without a single number ever moving, which is exactly what happened.
+        /// </para>
+        ///
+        /// <para>
+        /// The misses are the point of the parameter: knockout is a rule about WHEN someone breaks
+        /// combo, so replays that break at different times are the only fixtures that can tell a
+        /// working rule from a broken one.
+        /// </para>
+        /// </summary>
+        /// <param name="path">Where to write the .osr.</param>
+        /// <param name="beatmapPath">The .osu to play; its hit objects are read back out of it so
+        /// the frames land on the real object times and positions.</param>
+        /// <param name="playerName">Recorded player name.</param>
+        /// <param name="missAtIndices">Zero-based indices of the objects this player misses, by
+        /// simply never pressing on them.</param>
+        public static void WriteHitting(string path, string beatmapPath, string playerName, params int[] missAtIndices)
+        {
+            var beatmap = new FlatWorkingBeatmap(beatmapPath);
+            var misses = new HashSet<int>(missAtIndices);
+            var objects = HitObjectsIn(beatmapPath);
+
+            var frames = new List<ReplayFrame>();
+
+            for (int i = 0; i < objects.Count; i++)
+            {
+                var (time, position) = objects[i];
+
+                // Approach with the button up, press ON the object, hold briefly, release. A miss
+                // is the same movement with the press left out — the cursor is in the right place
+                // and the player simply does not click, which is what a real miss looks like.
+                frames.Add(new OsuReplayFrame(time - 40, position));
+
+                if (!misses.Contains(i))
+                {
+                    frames.Add(new OsuReplayFrame(time, position, OsuAction.LeftButton));
+                    frames.Add(new OsuReplayFrame(time + 30, position, OsuAction.LeftButton));
+                }
+
+                frames.Add(new OsuReplayFrame(time + 60, position));
+            }
+
+            var score = new Score
+            {
+                Replay = new Replay { Frames = frames },
+                ScoreInfo = new ScoreInfo
+                {
+                    Ruleset = new OsuRuleset().RulesetInfo,
+                    BeatmapInfo = new BeatmapInfo { MD5Hash = Md5OfFile(beatmapPath) },
+                    RealmUser = new RealmUser { Username = playerName },
+                    Date = new DateTimeOffset(2024, 5, 1, 12, 0, 0, TimeSpan.Zero),
+                    TotalScore = 1,
+                    MaxCombo = 1,
+                    Accuracy = 1,
+                },
+            };
+
+            using var stream = File.Create(path);
+            new LegacyScoreEncoder(score, beatmap.Beatmap).Encode(stream, leaveOpen: true);
+        }
+
+        /// <summary>
+        /// The (time, position) of every hit object in a fixture .osu, read straight out of the
+        /// [HitObjects] section. Deliberately a dumb line reader rather than a decode: fixture maps
+        /// here are circles only, and the replay has to land on the same coordinates the file
+        /// states rather than on whatever a conversion produced.
+        /// </summary>
+        public static IReadOnlyList<(double Time, Vector2 Position)> HitObjectsIn(string beatmapPath)
+        {
+            var objects = new List<(double, Vector2)>();
+            bool inSection = false;
+
+            foreach (string raw in File.ReadLines(beatmapPath))
+            {
+                string line = raw.Trim();
+
+                if (line.StartsWith('['))
+                {
+                    inSection = line == "[HitObjects]";
+                    continue;
+                }
+
+                if (!inSection || line.Length == 0)
+                    continue;
+
+                string[] parts = line.Split(',');
+
+                if (parts.Length < 3
+                    || !float.TryParse(parts[0], out float x)
+                    || !float.TryParse(parts[1], out float y)
+                    || !double.TryParse(parts[2], out double time))
+                {
+                    continue;
+                }
+
+                objects.Add((time, new Vector2(x, y)));
+            }
+
+            return objects;
+        }
+
         public static string Md5OfFile(string path)
         {
             using var stream = File.OpenRead(path);

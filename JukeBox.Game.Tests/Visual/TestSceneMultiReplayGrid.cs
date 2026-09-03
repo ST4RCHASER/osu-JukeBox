@@ -69,10 +69,13 @@ namespace JukeBox.Game.Tests.Visual
             }
         }
 
-        private ReplayAttachment replayFor(string player, double tempo = 1)
+        /// <param name="misses">Objects this player fails to click. Every replay built here PLAYS
+        /// the map: the header-only fixture never presses a button, so its score, combo and
+        /// accuracy sit at zero for the entire play and no assertion about them can fail.</param>
+        private ReplayAttachment replayFor(string player, double tempo = 1, int[]? misses = null)
         {
             string osr = Path.Combine(tmp, player + ".osr");
-            ReplayFixture.Write(osr, beatmapPath, player);
+            ReplayFixture.WriteHitting(osr, beatmapPath, player, misses ?? Array.Empty<int>());
 
             return new ReplayAttachment
             {
@@ -85,10 +88,10 @@ namespace JukeBox.Game.Tests.Visual
             };
         }
 
-        private void buildGrid(int count, double[]? tempos = null)
+        private void buildGrid(int count, double[]? tempos = null, int[][]? misses = null)
         {
             var replays = Enumerable.Range(0, count)
-                                    .Select(i => replayFor($"player{i}", tempos != null ? tempos[i] : 1))
+                                    .Select(i => replayFor($"player{i}", tempos != null ? tempos[i] : 1, misses?[i]))
                                     .ToList();
 
             host.Child = grid = new MultiReplayGrid(cachedSet(), beatmapPath, replays);
@@ -262,10 +265,28 @@ namespace JukeBox.Game.Tests.Visual
         }
 
         /// <summary>
-        /// The "static, not running" fix, asserted at the mechanism rather than at a number: the
-        /// cells' figures now come from a score processor being FED judgements as the replay plays.
-        /// Judged hits climbing is what makes them move; before this they were the .osr header's
-        /// final totals, correct exactly once — at the end.
+        /// The "static, not running" fix: the cells' figures come from a score processor being FED
+        /// judgements as the replay plays, rather than from the .osr header's final totals, which
+        /// were correct exactly once — at the end.
+        ///
+        /// <para>
+        /// The first version of this test asserted only that judged hits were arriving, and passed
+        /// against a fixture replay that never presses a button: three judgements, all misses, with
+        /// score, combo and accuracy sitting at zero from the first frame to the last. It could not
+        /// have failed if the numbers were nailed down. This one plays the map for real and checks
+        /// the result could not have come from the header.
+        /// </para>
+        ///
+        /// <para>
+        /// What it deliberately does NOT assert is the numbers climbing gradually, even though that
+        /// is the user's actual words. Gameplay cannot be driven deterministically from a scene
+        /// test: the frame-stable clock advances on REAL time between the scene's frames while the
+        /// driving clock stands still, so an uncontrolled amount of the play happens during load —
+        /// measured here at anywhere from one object to the whole map, varying with how loaded the
+        /// machine was. A gradual-climb assertion written against that is a coin flip, and a test
+        /// that fails at random is worse than one that admits its limits. The property is instead
+        /// pinned by the header discriminator below, which no static readout can satisfy.
+        /// </para>
         /// </summary>
         [Test]
         public void TheCellNumbersAreDrivenByJudgementsAsThePlayRuns()
@@ -273,26 +294,40 @@ namespace JukeBox.Game.Tests.Visual
             var manual = new ManualClock();
             var framed = new FramedClock(manual);
 
-            // Driven by hand rather than by the scene's own clock: the objects sit at 1000-2000ms,
-            // and gameplay has to be STEPPED through them for the frame-stable clock to judge
-            // anything — dropped straight past them, they expire unjudged and nothing is fed.
             AddStep("build three on a manual clock", () =>
             {
                 buildGrid(3);
                 host.Clock = framed;
                 manual.CurrentTime = 0;
+                manual.IsRunning = true;
             });
 
             AddUntilStep("grid loaded", () => grid.IsLoaded && grid.Cells.Count == 3);
             AddAssert("every cell has a live processor", () => grid.Cells.All(c => c.LiveScore != null));
 
-            AddRepeatStep("run the play", () =>
+            // Pumped by hand rather than left to the scene's frame loop, so the clock is doing the
+            // driving. Generous on purpose: exactly how far the play has already got by this point
+            // is not controllable (see below), so this runs well past the end of the map.
+            AddStep("play the map", () =>
             {
-                manual.CurrentTime += 100;
-                framed.ProcessFrame();
-            }, 30);
+                for (int i = 0; i < 900; i++)
+                {
+                    manual.CurrentTime += 16;
+                    framed.ProcessFrame();
+                    host.UpdateSubTree();
+                }
+            });
 
-            AddUntilStep("every cell is being judged", () => grid.Cells.All(c => c.LiveScore!.JudgedHits > 0));
+            // The discriminator is the HEADER. This fixture's .osr records TotalScore 1, MaxCombo 1
+            // and accuracy 1 — deliberately absurd values that no real play of this map produces.
+            // The implementation being replaced displayed exactly those, so reading a full 20-combo,
+            // real-scored play here is only possible if the numbers came from judgements as the
+            // replay ran. Reverting to header totals fails on every one of these.
+            AddAssert("the numbers are a played score, not the .osr header's", () => grid.Cells.All(c =>
+                c.LiveScore!.JudgedHits == fixture_object_count
+                && c.LiveScore.Combo.Value == fixture_object_count
+                && c.LiveScore.TotalScore.Value > 1
+                && Precision.AlmostEquals((float)c.LiveScore.Accuracy.Value, 1f, 0.001f)));
         }
 
         /// <summary>
@@ -321,12 +356,37 @@ namespace JukeBox.Game.Tests.Visual
         // asserted nothing, so it would have cost every future CI run a full grid build to record
         // figures nobody reads.
 
-        private static string osuWithObjects() =>
-            "osu file format v14\n\n"
-            + "[General]\nAudioFilename: audio.wav\nMode: 0\n\n"
-            + "[Metadata]\nTitle:Grid Song\nArtist:Some Artist\nCreator:Some Mapper\nVersion:Hard\n\n"
-            + "[Difficulty]\nHPDrainRate:5\nCircleSize:4\nOverallDifficulty:8\nApproachRate:9\nSliderMultiplier:1.4\nSliderTickRate:1\n\n"
-            + "[TimingPoints]\n0,500,4,2,0,60,1,0\n\n"
-            + "[HitObjects]\n256,192,1000,1,0,0:0:0:0:\n128,96,1500,1,0,0:0:0:0:\n320,240,2000,1,0,0:0:0:0:\n";
+        /// <summary>
+        /// Objects a play can be WATCHED progressing through, which three could not be.
+        ///
+        /// <para>
+        /// The frame-stable container races ahead of the driving clock by a variable amount while
+        /// the grid is still loading — enough, on a three-object map, to sometimes finish the whole
+        /// play before the test drives a single frame, leaving nothing left to climb and the test
+        /// failing at random. Twenty objects spread over six seconds outlast that transient, so
+        /// "the numbers climb" is measuring the play rather than the load.
+        /// </para>
+        /// </summary>
+        internal const int fixture_object_count = 20;
+
+        internal const int fixture_first_object_ms = 1000;
+
+        internal const int fixture_object_spacing_ms = 300;
+
+        private static string osuWithObjects()
+        {
+            var sb = new System.Text.StringBuilder();
+
+            sb.Append("osu file format v14\n\n");
+            sb.Append("[General]\nAudioFilename: audio.wav\nMode: 0\n\n");
+            sb.Append("[Metadata]\nTitle:Grid Song\nArtist:Some Artist\nCreator:Some Mapper\nVersion:Hard\n\n");
+            sb.Append("[Difficulty]\nHPDrainRate:5\nCircleSize:4\nOverallDifficulty:8\nApproachRate:9\nSliderMultiplier:1.4\nSliderTickRate:1\n\n");
+            sb.Append("[TimingPoints]\n0,500,4,2,0,60,1,0\n\n[HitObjects]\n");
+
+            for (int i = 0; i < fixture_object_count; i++)
+                sb.Append($"{100 + i * 37 % 350},{80 + i * 53 % 240},{fixture_first_object_ms + i * fixture_object_spacing_ms},1,0,0:0:0:0:\n");
+
+            return sb.ToString();
+        }
     }
 }

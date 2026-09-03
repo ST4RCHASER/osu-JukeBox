@@ -131,6 +131,13 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
     /// </summary>
     internal int SeekSnapsEngaged { get; private set; }
 
+    /// <summary>
+    /// Test hook: where GAMEPLAY actually is, which is not where the driving clock is. The
+    /// frame-stable clock runs its own catch-up, so a test that steps the driving clock and then
+    /// reasons about hit objects is reasoning about the wrong number.
+    /// </summary>
+    internal double? FrameStableTime => drawableRuleset?.FrameStableClock.CurrentTime;
+
     private int seekCatchupFrames = -1;
 
     /// <summary>The ruleset instance rendering this difficulty (test hook; assigned during load).</summary>
