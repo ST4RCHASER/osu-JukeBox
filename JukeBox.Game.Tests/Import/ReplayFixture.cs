@@ -3,10 +3,12 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using JukeBox.Game.Replays;
 using osu.Game.Beatmaps;
 using osu.Game.Models;
 using osu.Game.Replays;
+using osu.Game.Rulesets.Mods;
 using osu.Game.Rulesets.Osu;
 using osu.Game.Rulesets.Replays;
 using osu.Game.Rulesets.Osu.Replays;
@@ -100,6 +102,18 @@ namespace JukeBox.Game.Tests.Import
         /// </para>
         /// </summary>
         public static void WriteHitting(string path, string beatmapPath, string playerName, Vector2 cursorOffset, params int[] missAtIndices)
+            => WriteHitting(path, beatmapPath, playerName, cursorOffset, Array.Empty<Mod>(), missAtIndices);
+
+        /// <summary>
+        /// As above, recorded as having been played with <paramref name="mods"/>.
+        ///
+        /// <para>
+        /// Written into the .osr through the real encoder rather than set on the decoded Score
+        /// afterwards, because mods round-trip through the file's own legacy flags: assigning them
+        /// to an already-decoded score does not survive into what gameplay reads.
+        /// </para>
+        /// </summary>
+        public static void WriteHitting(string path, string beatmapPath, string playerName, Vector2 cursorOffset, IReadOnlyList<Mod> mods, params int[] missAtIndices)
         {
             var beatmap = new FlatWorkingBeatmap(beatmapPath);
             var misses = new HashSet<int>(missAtIndices);
@@ -138,6 +152,7 @@ namespace JukeBox.Game.Tests.Import
                     TotalScore = 1,
                     MaxCombo = 1,
                     Accuracy = 1,
+                    Mods = mods.ToArray(),
                 },
             };
 

@@ -175,7 +175,14 @@ public partial class MultiReplayGrid : CompositeDrawable
         // No live scoring on the VISIBLE cells any more. Their numbers come from the recorded
         // timelines, so a score processor here would be a second, worse answer to the same question
         // — worse because it is the one that goes wrong the moment the user seeks.
-        var layer = new LazerChartLayer(working, osuFile, replay.Score) { AlwaysPresent = true };
+        // Each cell renders under ITS OWN player's recorded mods. Consulting the shared Chart-tab
+        // selection gave every cell player one's — one person's Hidden on everybody's playfield.
+        var layer = new LazerChartLayer(working, osuFile, replay.Score)
+        {
+            AlwaysPresent = true,
+            UseRecordedReplayModsOnly = true,
+        };
+
         cells.Add(layer);
 
         // A cell is the whole visual stack, not just gameplay: the map's own background, the dim

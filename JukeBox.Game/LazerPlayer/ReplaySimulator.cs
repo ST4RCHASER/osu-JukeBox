@@ -9,6 +9,7 @@ using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Timing;
 using osu.Game.Beatmaps;
+using osu.Game.Rulesets.Mods;
 using osu.Game.Rulesets.Objects;
 
 namespace JukeBox.Game.LazerPlayer;
@@ -115,6 +116,26 @@ public partial class ReplaySimulator : CompositeDrawable
     /// </summary>
     internal int LiveRenderers => InternalChildren.OfType<LazerChartLayer>().Count();
 
+    /// <summary>
+    /// The mods each play was actually simulated under, indexed like <see cref="Timelines"/>.
+    ///
+    /// <para>
+    /// Recorded when the play starts rather than read off the layer, because the layers are
+    /// disposed the moment their recording finishes — on a short map they can be gone before
+    /// anything gets to look at them. These are the mods the scores on the board were computed
+    /// with, which is the thing worth being able to check.
+    /// </para>
+    /// </summary>
+    internal IReadOnlyList<IReadOnlyList<Mod>> SimulatedMods
+        => simulations.Select(s => s.Mods).ToList();
+
+    /// <summary>
+    /// Test hook: whether every play was simulated ignoring the shared mod selection. False means
+    /// somebody's score is being computed under another player's mods.
+    /// </summary>
+    internal bool EveryPlaySimulatedUnderItsOwnMods
+        => simulations.Count > 0 && simulations.All(s => s.RecordedModsOnly);
+
     public ReplaySimulator(string osuFile, IReadOnlyList<ReplayAttachment> replays)
     {
         this.osuFile = osuFile;
@@ -141,6 +162,11 @@ public partial class ReplaySimulator : CompositeDrawable
                 AlwaysPresent = true,
                 TrackLiveScore = true,
                 Clock = new FramedClock(manual),
+
+                // The scores on the board are computed HERE, so this is the flag that decides
+                // whether they are right. Under the shared Chart-tab selection every player was
+                // being scored with player one's mods.
+                UseRecordedReplayModsOnly = true,
             };
 
             simulations.Add(new Simulation(layer, manual, (FramedClock)layer.Clock));
@@ -260,6 +286,16 @@ public partial class ReplaySimulator : CompositeDrawable
         /// <summary>Whether the renderer behind this play has been disposed, its work done.</summary>
         public bool Retired;
 
+        /// <summary>The mods this play was simulated under, kept past the renderer's disposal.</summary>
+        public IReadOnlyList<Mod> Mods { get; private set; } = Array.Empty<Mod>();
+
+        /// <summary>
+        /// Whether this play's renderer was told to ignore the shared mod selection. Captured from
+        /// the layer rather than assumed, so that removing the flag at the construction site is
+        /// visible here — asserting a constant would prove nothing.
+        /// </summary>
+        public bool RecordedModsOnly { get; private set; }
+
         private bool subscribed;
         private int lastCombo;
 
@@ -283,6 +319,9 @@ public partial class ReplaySimulator : CompositeDrawable
                 return;
 
             subscribed = true;
+            Mods = Layer.ActiveMods;
+            RecordedModsOnly = Layer.UseRecordedReplayModsOnly;
+
             var score = Layer.LiveScore;
 
             Layer.DrawableRuleset.NewResult += result =>

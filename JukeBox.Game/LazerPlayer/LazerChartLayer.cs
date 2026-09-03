@@ -67,6 +67,30 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
     /// <summary>Test hook: whether this layer is driven by a real user replay rather than autoplay.</summary>
     internal bool UsingUserReplay => replayScore != null && gameplayScore == replayScore;
 
+    /// <summary>
+    /// Ignore the Chart tab's shared mod selection and play under THIS replay's own recorded mods.
+    /// Set by every multi-replay view.
+    ///
+    /// <para>
+    /// The Chart tab's selection is a single-replay idea: it follows the now-playing item, which
+    /// carries one replay, and seeds itself from that replay's mods. With several replays on screen
+    /// there is no "the" replay for it to represent, so every layer that consulted it got player
+    /// one's mods — one person's Hidden applied to everybody's cell.
+    /// </para>
+    ///
+    /// <para>
+    /// That was not only a visual fault. The off-screen simulations resolve the same selection, so
+    /// every player's score, accuracy and combo were being computed under player one's mods too:
+    /// with 47 replays, 46 sets of wrong numbers on a board whose whole purpose is comparing them.
+    /// A replay is a record of a play that already happened under mods of its own, and in a
+    /// side-by-side those are the only mods that can be right.
+    /// </para>
+    /// </summary>
+    internal bool UseRecordedReplayModsOnly { get; init; }
+
+    /// <summary>Test hook: the mods gameplay and scoring actually run under.</summary>
+    internal IReadOnlyList<Mod> ActiveMods => mods;
+
     private readonly List<IDisposable> ownedSkins = new List<IDisposable>();
 
     /// <summary>
@@ -423,6 +447,11 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
         try
         {
             var recorded = Replays.ReplayMods.ForGameplay(replayScore);
+
+            // With several replays on screen there is no "the" replay for one shared selection to
+            // stand for, so each layer answers with its own recorded mods. See the property.
+            if (UseRecordedReplayModsOnly)
+                return recorded;
 
             // Only once the selection has actually taken this replay on (ChartModSelection follows
             // the now-playing item, and a bare test scene has no selection service at all) is it the

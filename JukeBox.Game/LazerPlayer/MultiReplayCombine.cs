@@ -126,6 +126,11 @@ public partial class MultiReplayCombine : CompositeDrawable
         chart = new LazerChartLayer(new FlatWorkingBeatmap(osuFile), osuFile, replays.FirstOrDefault()?.Score)
         {
             AlwaysPresent = true,
+
+            // Under the driving player's OWN recorded mods, to match how their score is computed.
+            // Letting the shared Chart-tab selection edit this chart would put the rendered play
+            // and the numbers beside it under different mods.
+            UseRecordedReplayModsOnly = true,
         };
 
         simulator = new ReplaySimulator(osuFile, replays);

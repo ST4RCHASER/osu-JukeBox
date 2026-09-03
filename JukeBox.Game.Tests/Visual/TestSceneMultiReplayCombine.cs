@@ -245,6 +245,21 @@ namespace JukeBox.Game.Tests.Visual
         }
 
         /// <summary>
+        /// The rendered chart runs under the DRIVING player's own recorded mods, matching how their
+        /// score is computed. Letting the shared Chart-tab selection edit it would put the play on
+        /// screen and the numbers beside it under different mods.
+        /// </summary>
+        [Test]
+        public void TheRenderedChartUsesTheDrivingPlayersOwnMods()
+        {
+            AddStep("build three", () => build(3));
+            AddUntilStep("chart loaded", () => combine.Chart.IsLoaded);
+
+            AddAssert("it does not take its mods from the shared selection", () =>
+                combine.Chart.UseRecordedReplayModsOnly);
+        }
+
+        /// <summary>
         /// The playfield's own cursor is white and cannot be tinted, so it goes — otherwise the
         /// driving player has two cursors and the wrong one is colourless.
         /// </summary>

@@ -430,6 +430,26 @@ namespace JukeBox.Game.Tests.Visual
             }
         }
 
+        /// <summary>
+        /// Every cell renders under ITS player's own recorded mods.
+        ///
+        /// <para>
+        /// Reported as one player's Hidden being applied to every cell. The Chart tab's mod
+        /// selection is a single-replay idea — it follows the now-playing item, which carries one
+        /// replay, and seeds itself from that replay's mods — so every layer that consulted it got
+        /// player one's.
+        /// </para>
+        /// </summary>
+        [Test]
+        public void EveryCellRendersUnderItsOwnPlayersMods()
+        {
+            AddStep("build three", () => buildGrid(3));
+            AddUntilStep("grid loaded", () => grid.Cells.Count == 3);
+
+            AddAssert("no cell takes its mods from the shared selection", () =>
+                grid.Cells.All(c => c.UseRecordedReplayModsOnly));
+        }
+
         private static double timeOfObject(int index) => fixture_first_object_ms + index * fixture_object_spacing_ms;
 
         private static double endOfMap => timeOfObject(fixture_object_count - 1) + 2000;

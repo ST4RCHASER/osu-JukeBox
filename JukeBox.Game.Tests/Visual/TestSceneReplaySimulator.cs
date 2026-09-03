@@ -9,9 +9,12 @@ using JukeBox.Game.LazerPlayer;
 using JukeBox.Game.Replays;
 using JukeBox.Game.Tests.Import;
 using osu.Framework.Timing;
+using osu.Game.Rulesets.Mods;
+using osu.Game.Rulesets.Osu.Mods;
 using NUnit.Framework;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
+using osu.Framework.Testing;
 
 namespace JukeBox.Game.Tests.Visual
 {
@@ -65,6 +68,22 @@ namespace JukeBox.Game.Tests.Visual
         {
             string osr = Path.Combine(tmp, player + ".osr");
             ReplayFixture.WriteHitting(osr, beatmapPath, player, misses);
+
+            return new ReplayAttachment
+            {
+                PlayerName = player,
+                SourcePath = osr,
+                OsuFile = beatmapPath,
+                Score = new JukeBoxScoreDecoder(beatmapPath).Decode(osr),
+                RateTempo = 1,
+                RateFrequency = 1,
+            };
+        }
+
+        private ReplayAttachment replayWithMods(string player, params Mod[] mods)
+        {
+            string osr = Path.Combine(tmp, player + ".osr");
+            ReplayFixture.WriteHitting(osr, beatmapPath, player, osuTK.Vector2.Zero, mods);
 
             return new ReplayAttachment
             {
@@ -195,6 +214,49 @@ namespace JukeBox.Game.Tests.Visual
 
             AddAssert("while the recordings themselves remain", () =>
                 simulator.Timelines.Count == 3 && simulator.Timelines.All(t => t.Points.Count > 0));
+        }
+
+        /// <summary>
+        /// Every play is scored under the mods THAT play was set with.
+        ///
+        /// <para>
+        /// The board's scores are computed in these hidden layers, and they used to consult the
+        /// Chart tab's shared mod selection. That selection is a single-replay idea: it follows the
+        /// now-playing item, which carries one replay, and seeds itself from that replay's mods. So
+        /// with several replays on screen every player was scored under player ONE's mods. It was
+        /// reported as "grid applies one player's HD to all cells", but the same shared answer was
+        /// corrupting the numbers, which is the worse half — 46 of 47 rows wrong on a board whose
+        /// only purpose is comparing them.
+        /// </para>
+        /// </summary>
+        [Test]
+        public void EachPlayIsScoredUnderItsOwnRecordedMods()
+        {
+            AddStep("simulate a no-mod play and a Hard Rock play", () =>
+            {
+                simulate(replay("plain"), replayWithMods("hardrock", new OsuModHardRock()));
+            });
+
+            AddUntilStep("both plays recorded", () => simulator.AllComplete);
+
+            AddAssert("one was scored clean and the other under Hard Rock", () =>
+            {
+                var acronyms = simulator.SimulatedMods
+                                        .Select(m => string.Join(string.Empty, m.Select(x => x.Acronym)))
+                                        .ToList();
+
+                return acronyms.Count == 2
+                       && acronyms.Count(a => a.Contains("HR", StringComparison.Ordinal)) == 1
+                       && acronyms.Count(a => !a.Contains("HR", StringComparison.Ordinal)) == 1;
+            });
+
+            // The assertion above is necessary and NOT sufficient, which is worth stating because
+            // it fooled me: with no shared selection active in a test scene, each layer falls back
+            // to its recorded mods anyway, so it passes whether or not the flag is set. Removing
+            // the flag from the construction site left it green. This one reads the flag off the
+            // layer that did the scoring, so losing it fails here.
+            AddAssert("because each play ignored any shared selection", () =>
+                simulator.EveryPlaySimulatedUnderItsOwnMods);
         }
 
         /// <summary>
