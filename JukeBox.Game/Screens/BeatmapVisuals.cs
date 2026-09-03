@@ -260,6 +260,15 @@ public partial class BeatmapVisuals : CompositeDrawable
         }
 
         // Storyboard Sample events and keysounds, which reach the audio graph through this.
+        //
+        // UNBOUND FIRST, and that is the whole point of these two lines rather than one. This
+        // container's volume is two-way bound to the app's music volume so the user's volume
+        // setting reaches keysounds; writing zero into it therefore wrote zero straight back into
+        // the app's master volume. Nothing ever put it back, so the first time a song changed the
+        // music went silent and stayed silent for the rest of the session — every song after the
+        // first played to nothing. A retiring stack is never going to follow the master again, so
+        // dropping the link before silencing itself costs nothing.
+        audioAdjustments.Volume.UnbindFrom(playbackController.Volume);
         audioAdjustments.Volume.Value = 0;
 
         // Hidden outright rather than faded: this drawable's clock IS the playback clock (see
