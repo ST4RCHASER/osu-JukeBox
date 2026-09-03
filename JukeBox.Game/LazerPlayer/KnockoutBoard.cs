@@ -12,6 +12,9 @@ using osu.Framework.Input.Events;
 using osu.Game.Graphics;
 using osu.Game.Graphics.Sprites;
 using osu.Game.Online.Leaderboards;
+using osu.Game.Rulesets.Osu;
+using osu.Game.Rulesets.Osu.Replays;
+using osu.Game.Rulesets.Replays;
 using osu.Game.Rulesets.Scoring;
 using osu.Game.Scoring;
 using osuTK;
@@ -42,7 +45,9 @@ public partial class KnockoutBoard : CompositeDrawable
     /// <param name="Timeline">Their recorded play.</param>
     /// <param name="Mods">Their mods, already formatted ("+HDDT"), drawn in white beside the
     /// coloured name rather than folded into it — the reference colours the two separately.</param>
-    public readonly record struct Entrant(string Name, Color4 Colour, ReplayTimeline Timeline, string Mods = "");
+    /// <param name="Frames">Their replay's input frames, for the key-press indicator at the row's
+    /// left. Null (as in the grid, or a test) simply draws no keys.</param>
+    public readonly record struct Entrant(string Name, Color4 Colour, ReplayTimeline Timeline, string Mods = "", IReadOnlyList<ReplayFrame>? Frames = null);
 
     private readonly IReadOnlyList<Entrant> entrants;
     private readonly List<Row> rows = new List<Row>();
@@ -319,6 +324,19 @@ public partial class KnockoutBoard : CompositeDrawable
         private readonly OsuSpriteText playerName = null!;
         private readonly OsuSpriteText mods = null!;
 
+        // The key-press indicator at the row's far left: two bars (osu!'s left and right buttons —
+        // lazer collapses M1/M2 into these), lit as the player holds them, read from the replay
+        // frames at the playhead. Null frames (grid, tests) simply draw nothing.
+        private readonly IReadOnlyList<ReplayFrame>? frames;
+        private readonly FillFlowContainer keysCell = null!;
+        private readonly Container key1 = null!;
+        private readonly Container key2 = null!;
+        private int frameHint;
+
+        private static readonly Color4 key_dim = new Color4(0.22f, 0.22f, 0.26f, 1f);
+        private static readonly Color4 key1_lit = new Color4(0.45f, 0.85f, 1f, 1f);
+        private static readonly Color4 key2_lit = new Color4(1f, 0.55f, 0.9f, 1f);
+
         // The fixed-width cells the drawables live in. Their widths and X positions are set per
         // density in Apply, which is what makes the row a table rather than a run-on line. The name
         // block flows (name, mods, then the hit badge) so the badge sits right after the mods the way
@@ -378,6 +396,14 @@ public partial class KnockoutBoard : CompositeDrawable
         /// <summary>Test hook: the recent-judgement column (X / 50 / 100), empty when there is
         /// nothing recent worth showing.</summary>
         internal string JudgementText => judgement.Text.ToString()!;
+
+        /// <summary>Test hooks: whether each key bar is lit for a held button at the current time.</summary>
+        internal bool LeftKeyHeld => key1Held;
+
+        internal bool RightKeyHeld => key2Held;
+
+        private bool key1Held;
+        private bool key2Held;
 
         /// <summary>Test hook: the score column's right edge on screen. Fixed as the value rolls
         /// (right-aligned in a fixed-width cell), which is what stops the digits shaking.</summary>
@@ -444,6 +470,7 @@ public partial class KnockoutBoard : CompositeDrawable
             PlayerIndex = playerIndex;
             playerColour = entrant.Colour;
             this.maxNameChars = maxNameChars;
+            frames = entrant.Frames;
 
             RelativeSizeAxes = Axes.X;
 
@@ -453,6 +480,23 @@ public partial class KnockoutBoard : CompositeDrawable
                 {
                     RelativeSizeAxes = Axes.Both,
                     Colour = Color4.Transparent,
+                },
+
+                // The key-press bars, at the far left the way danser draws them.
+                keysCell = new FillFlowContainer
+                {
+                    Anchor = Anchor.CentreLeft,
+                    Origin = Anchor.CentreLeft,
+                    AutoSizeAxes = Axes.X,
+                    RelativeSizeAxes = Axes.Y,
+                    Direction = FillDirection.Horizontal,
+                    Spacing = new Vector2(1, 0),
+                    Alpha = frames == null ? 0 : 1,
+                    Children = new Drawable[]
+                    {
+                        key1 = keyBar(),
+                        key2 = keyBar(),
+                    },
                 },
 
                 // Left group — fixed columns anchored to the left, so accuracy, pp, the grade badge
@@ -513,6 +557,47 @@ public partial class KnockoutBoard : CompositeDrawable
             };
         }
 
+        /// <summary>One key-press bar: a small rounded box, dim until the player is holding that key.</summary>
+        private static Container keyBar() => new Container
+        {
+            Anchor = Anchor.CentreLeft,
+            Origin = Anchor.CentreLeft,
+            Masking = true,
+            CornerRadius = 1.5f,
+            Child = new Box { RelativeSizeAxes = Axes.Both, Colour = key_dim },
+        };
+
+        /// <summary>Lights the two key bars for whatever the player is holding at <paramref name="time"/>,
+        /// read from the replay frames. Nothing to do when the row carries no frames.</summary>
+        private void updateKeys(double time)
+        {
+            if (frames == null || frames.Count == 0)
+                return;
+
+            // Walk from the last frame we used rather than binary-searching every frame: playback is
+            // overwhelmingly forward, so the right frame is usually one or two along.
+            int i = Math.Clamp(frameHint, 0, frames.Count - 1);
+
+            while (i + 1 < frames.Count && frames[i + 1].Time <= time)
+                i++;
+            while (i > 0 && frames[i].Time > time)
+                i--;
+
+            frameHint = i;
+
+            key1Held = false;
+            key2Held = false;
+
+            if (frames[i] is OsuReplayFrame osu && frames[i].Time <= time)
+            {
+                key1Held = osu.Actions.Contains(OsuAction.LeftButton);
+                key2Held = osu.Actions.Contains(OsuAction.RightButton);
+            }
+
+            ((Box)key1.Child).Colour = key1Held ? key1_lit : key_dim;
+            ((Box)key2.Child).Colour = key2Held ? key2_lit : key_dim;
+        }
+
         /// <summary>A fixed-width numeric cell: the text is right-aligned inside it in a tabular
         /// (fixed-width) figure font, so rolling digits change in place.</summary>
         private static Container numberCell(out OsuSpriteText text, string sample, FontWeight weight, Anchor anchor)
@@ -570,9 +655,17 @@ public partial class KnockoutBoard : CompositeDrawable
             comboCell.Width = comboW;
             scoreCell.Width = scoreW;
 
+            // Key bars: two narrow pills at the far left, each a little over half the row tall.
+            float keyW = fs * 0.34f;
+            float keyH = metrics.RowHeight * 0.55f;
+            key1.Size = new Vector2(keyW, keyH);
+            key2.Size = new Vector2(keyW, keyH);
+            float keysW = frames == null ? 0 : 2 * keyW + 1 + gap;
+
             float lm = 5;
-            accCell.X = lm;
-            ppCell.X = lm + accW + gap;
+            keysCell.X = lm;
+            accCell.X = lm + keysW;
+            ppCell.X = accCell.X + accW + gap;
             gradeCell.X = ppCell.X + ppW + gap;
             nameCell.X = gradeCell.X + gradeW + gap;
 
@@ -590,6 +683,8 @@ public partial class KnockoutBoard : CompositeDrawable
         /// survivor floor depends on the whole field rather than on this one play.</param>
         public void UpdateFrom(ReplayTimeline timeline, KnockoutRules rules, double time, int place, bool alive)
         {
+            updateKeys(time);
+
             var point = timeline.At(time);
             bool pending = IsPending(timeline, time);
 

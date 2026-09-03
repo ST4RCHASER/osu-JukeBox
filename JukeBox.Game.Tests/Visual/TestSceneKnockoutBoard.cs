@@ -51,6 +51,17 @@ namespace JukeBox.Game.Tests.Visual
                            .Select((tl, i) => new KnockoutBoard.Entrant($"p{i}", Color4.White, tl))
                            .ToList();
 
+            hostBoard(entrants);
+        }
+
+        private void buildWithFrames(ReplayTimeline timeline, System.Collections.Generic.IReadOnlyList<osu.Game.Rulesets.Replays.ReplayFrame> frames)
+            => hostBoard(new System.Collections.Generic.List<KnockoutBoard.Entrant>
+            {
+                new KnockoutBoard.Entrant("p0", Color4.White, timeline, string.Empty, frames),
+            });
+
+        private void hostBoard(System.Collections.Generic.List<KnockoutBoard.Entrant> entrants)
+        {
             host.Child = board = new KnockoutBoard(entrants)
             {
                 Rules = new KnockoutRules(),
@@ -111,6 +122,31 @@ namespace JukeBox.Game.Tests.Visual
             AddUntilStep("rows built", () => board.Rows.Count == 3);
             AddStep("run forward", () => showAt(5000));
             AddAssert("now it sorts — the big score leads", () => board.DisplayOrder[0] == 2);
+        }
+
+        [Test]
+        public void TheKeyBarsLightForWhicheverButtonIsHeld()
+        {
+            AddStep("build a player who holds the left button from 1000 to 2000", () =>
+            {
+                var frames = new System.Collections.Generic.List<osu.Game.Rulesets.Replays.ReplayFrame>
+                {
+                    new osu.Game.Rulesets.Osu.Replays.OsuReplayFrame(0, osuTK.Vector2.Zero),
+                    new osu.Game.Rulesets.Osu.Replays.OsuReplayFrame(1000, osuTK.Vector2.Zero, osu.Game.Rulesets.Osu.OsuAction.LeftButton),
+                    new osu.Game.Rulesets.Osu.Replays.OsuReplayFrame(2000, osuTK.Vector2.Zero),
+                };
+                buildWithFrames(ready(100, 1), frames);
+            });
+            AddUntilStep("row built", () => board.Rows.Count == 1);
+
+            AddStep("show before the press", () => showAt(500));
+            AddAssert("neither key is lit", () => !rowFor(0).LeftKeyHeld && !rowFor(0).RightKeyHeld);
+
+            AddStep("show during the press", () => showAt(1500));
+            AddAssert("the left key is lit, the right is not", () => rowFor(0).LeftKeyHeld && !rowFor(0).RightKeyHeld);
+
+            AddStep("show after the release", () => showAt(2500));
+            AddAssert("neither key is lit again", () => !rowFor(0).LeftKeyHeld && !rowFor(0).RightKeyHeld);
         }
 
         [Test]

@@ -169,7 +169,8 @@ public partial class MultiReplayCombine : CompositeDrawable
                            replay.PlayerName.Length > 0 ? replay.PlayerName : "unknown",
                            effectiveColour(index),
                            simulator.Timelines[index],
-                           railMods(replay)))
+                           railMods(replay),
+                           replay.Score?.Replay?.Frames))
                        .ToList();
 
         AddInternal(board = new KnockoutBoard(entrants)
