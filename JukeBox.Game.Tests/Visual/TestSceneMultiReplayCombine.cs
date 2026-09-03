@@ -497,7 +497,9 @@ namespace JukeBox.Game.Tests.Visual
                 {
                     var point = timelines[r.PlayerIndex].At(timeOf(object_count - 1));
 
-                    return long.Parse(r.ScoreText) == point.Score
+                    // Score is shown abbreviated (danser's 16.85M / 92.98K), so parse it back and
+                    // allow the two-decimal rounding rather than an exact long match.
+                    return Math.Abs(parseAbbreviatedScore(r.ScoreText) - point.Score) <= Math.Max(point.Score * 0.001, 20)
                            && Math.Abs(double.Parse(r.PerformanceText.Replace("pp", string.Empty)) - point.Performance) < 0.02;
                 });
             });
@@ -533,6 +535,12 @@ namespace JukeBox.Game.Tests.Visual
         }
 
         private string boardReading() => string.Join("|", combine.Board.Rows.Select(r => $"{r.ScoreText}/{r.ComboText}/{r.AccuracyText}"));
+
+        /// <summary>Parses the rail's abbreviated score ("16.85M", "92.98K", "900") back to a number.</summary>
+        private static double parseAbbreviatedScore(string text)
+            => text.EndsWith("M", StringComparison.Ordinal) ? double.Parse(text[..^1]) * 1_000_000
+             : text.EndsWith("K", StringComparison.Ordinal) ? double.Parse(text[..^1]) * 1_000
+             : double.Parse(text);
 
         /// <summary>
         /// Live sorting, which is the thing that makes a knockout watchable. The player who leads

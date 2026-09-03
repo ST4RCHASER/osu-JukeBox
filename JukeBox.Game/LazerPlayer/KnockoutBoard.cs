@@ -184,14 +184,40 @@ public partial class KnockoutBoard : CompositeDrawable
 
         double time = Clock.CurrentTime;
         var timelines = entrants.Select(e => e.Timeline).ToList();
-        var standings = Rules.Standings(timelines, time);
+
+        // Sort ONLY once every player has been simulated up to the playhead. While the recording is
+        // still catching up, players get their numbers one at a time (laggard-first), so a live sort
+        // would rank half a field of real scores against half a field of zeros and churn every frame
+        // — which is what drew rows on top of each other on a fresh load. Until then hold a stable
+        // order (the last good sort, or the drop order before any) and SNAP rather than animate, so
+        // nothing is ever mid-flight between two colliding Y targets.
+        bool ready = !timelines.Any(t => IsPending(t, time));
+
+        IReadOnlyList<int> order;
+        bool snap;
+
+        if (ready)
+        {
+            order = heldOrder = Rules.Standings(timelines, time);
+            snap = false;
+        }
+        else if (heldOrder != null)
+        {
+            order = heldOrder;
+            snap = false;
+        }
+        else
+        {
+            order = Enumerable.Range(0, timelines.Count).ToList();
+            snap = true;
+        }
 
         // Computed once for the frame: who is out depends on the whole field, not on one play.
         var eliminated = Rules.Eliminated(timelines, time);
 
-        for (int rank = 0; rank < standings.Count; rank++)
+        for (int rank = 0; rank < order.Count; rank++)
         {
-            var row = rows[standings[rank]];
+            var row = rows[order[rank]];
 
             // Past what fits, a row is not drawn at all rather than drawn off the bottom. The
             // players it stands for are reported in the overflow line instead of vanishing.
@@ -204,17 +230,28 @@ public partial class KnockoutBoard : CompositeDrawable
 
             float target = rank * Metrics.RowHeight;
 
-            // Only animate an actual change. Re-issuing the same transform every frame restarts it
-            // every frame, which leaves rows permanently easing towards a place they already are.
-            if (Math.Abs(row.TargetY - target) > 0.01f)
+            if (snap)
             {
+                // Placed directly, no transform, while the order is still being held stable.
+                row.TargetY = target;
+                row.Y = target;
+            }
+            else if (Math.Abs(row.TargetY - target) > 0.01f)
+            {
+                // Only animate an actual change. Re-issuing the same transform every frame restarts it
+                // every frame, which leaves rows permanently easing towards a place they already are.
                 row.TargetY = target;
                 row.MoveToY(target, reorder_ms, Easing.OutQuint);
             }
 
-            row.UpdateFrom(entrants[standings[rank]].Timeline, Rules, time, rank + 1, !eliminated.Contains(standings[rank]));
+            row.UpdateFrom(entrants[order[rank]].Timeline, Rules, time, rank + 1, !eliminated.Contains(order[rank]));
         }
     }
+
+    /// <summary>The last order the board settled on while every player's numbers were known, held
+    /// through any moment the recording falls behind so the board never churns back to drop order
+    /// mid-song.</summary>
+    private IReadOnlyList<int>? heldOrder;
 
     /// <summary>
     /// Re-sizes the board and its rows for the space actually available. Recomputed every frame but
@@ -547,14 +584,28 @@ public partial class KnockoutBoard : CompositeDrawable
             var point = timeline.At(time);
             bool pending = IsPending(timeline, time);
 
-            rollingScore = pending ? point.Score : roll(rollingScore, point.Score);
-            rollingAccuracy = pending ? point.Accuracy : roll(rollingAccuracy, point.Accuracy);
-            rollingPerformance = pending ? point.Performance : roll(rollingPerformance, point.Performance);
+            // While a player is still being simulated, show the map's neutral START state — zeros —
+            // rather than dash sentinels. A dash reads as "broken"; a still-simulating player has a
+            // real state (nothing scored yet), and the numbers fill in the moment their recording
+            // reaches the playhead. The rolling figures start from zero so they climb rather than jump.
+            if (pending)
+            {
+                rollingScore = 0;
+                rollingAccuracy = 0;
+                rollingPerformance = 0;
+            }
+            else
+            {
+                rollingScore = roll(rollingScore, point.Score);
+                rollingAccuracy = roll(rollingAccuracy, point.Accuracy);
+                rollingPerformance = roll(rollingPerformance, point.Performance);
+            }
 
-            score.Text = pending ? "--------" : ((long)Math.Round(rollingScore)).ToString("00000000");
-            accuracy.Text = pending ? "--.--%" : (rollingAccuracy * 100).ToString("0.00") + "%";
-            combo.Text = pending ? "--x" : point.Combo.ToString("N0") + "x";
-            performance.Text = pending ? "--.--pp" : rollingPerformance.ToString("0.00") + "pp";
+            // Score abbreviated the way danser does it: 16.85M, 15.30K, or the raw number below 1000.
+            score.Text = formatScore((long)Math.Round(rollingScore));
+            accuracy.Text = (rollingAccuracy * 100).ToString("0.00") + "%";
+            combo.Text = (pending ? 0 : point.Combo).ToString("N0") + "x";
+            performance.Text = rollingPerformance.ToString("0.00") + "pp";
 
             applyGrade(pending ? string.Empty : point.Grade, metricsHeight);
 
@@ -610,6 +661,13 @@ public partial class KnockoutBoard : CompositeDrawable
                 Size = new Vector2(gradeCell.DrawWidth > 0 ? gradeCell.DrawWidth : height * 1.6f, height * 0.72f),
             });
         }
+
+        /// <summary>Score in danser's abbreviated form: 16.85M at a million, 15.30K at a thousand,
+        /// the raw number below that. Fixed shape (two decimals) so the tabular column does not jump.</summary>
+        private static string formatScore(long score)
+            => score >= 1_000_000 ? (score / 1_000_000.0).ToString("0.00") + "M"
+             : score >= 1_000 ? (score / 1_000.0).ToString("0.00") + "K"
+             : score.ToString();
 
         private static string judgementText(HitResult result) => result switch
         {
