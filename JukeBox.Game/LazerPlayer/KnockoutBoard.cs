@@ -152,6 +152,9 @@ public partial class KnockoutBoard : CompositeDrawable
         var timelines = entrants.Select(e => e.Timeline).ToList();
         var standings = Rules.Standings(timelines, time);
 
+        // Computed once for the frame: who is out depends on the whole field, not on one play.
+        var eliminated = Rules.Eliminated(timelines, time);
+
         for (int rank = 0; rank < standings.Count; rank++)
         {
             var row = rows[standings[rank]];
@@ -175,7 +178,7 @@ public partial class KnockoutBoard : CompositeDrawable
                 row.MoveToY(target, reorder_ms, Easing.OutQuint);
             }
 
-            row.UpdateFrom(entrants[standings[rank]].Timeline, Rules, time, rank + 1);
+            row.UpdateFrom(entrants[standings[rank]].Timeline, Rules, time, rank + 1, !eliminated.Contains(standings[rank]));
         }
     }
 
@@ -335,7 +338,9 @@ public partial class KnockoutBoard : CompositeDrawable
         }
 
         /// <summary>Reads this player's state at <paramref name="time"/> onto the row.</summary>
-        public void UpdateFrom(ReplayTimeline timeline, KnockoutRules rules, double time, int place)
+        /// <param name="alive">Whether they are still in it — decided by the caller, because the
+        /// survivor floor depends on the whole field rather than on this one play.</param>
+        public void UpdateFrom(ReplayTimeline timeline, KnockoutRules rules, double time, int place, bool alive)
         {
             var point = timeline.At(time);
             bool pending = IsPending(timeline, time);
@@ -350,8 +355,6 @@ public partial class KnockoutBoard : CompositeDrawable
             grade.Text = pending ? "-" : point.Grade;
 
             ShownPending = pending;
-
-            bool alive = rules.AliveAt(timeline, time);
 
             if (alive == ShownAlive)
                 return;

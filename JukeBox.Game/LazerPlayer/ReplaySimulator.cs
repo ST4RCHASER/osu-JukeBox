@@ -360,6 +360,11 @@ public partial class ReplaySimulator : CompositeDrawable
                 // type instead would count a miss on the very first object, where there was no
                 // combo to break.
                 bool broke = lastCombo > 0 && combo == 0;
+
+                // How MUCH was lost, captured before it is overwritten. The combo after a break is
+                // always zero and says nothing about the size of the thing that just ended.
+                int lost = broke ? lastCombo : 0;
+
                 lastCombo = combo;
 
                 Timeline.Record(new TimelinePoint(
@@ -369,7 +374,8 @@ public partial class ReplaySimulator : CompositeDrawable
                     score.Accuracy.Value,
                     broke,
                     gradeLetter(score.Rank.Value),
-                    performance?.PointsFor(score) ?? 0));
+                    performance?.PointsFor(score) ?? 0,
+                    lost));
             };
         }
     }

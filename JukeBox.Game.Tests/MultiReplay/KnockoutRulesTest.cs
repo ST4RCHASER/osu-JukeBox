@@ -221,6 +221,90 @@ namespace JukeBox.Game.Tests.MultiReplay
             Assert.That(standings, Is.EqualTo(new[] { 1, 0 }));
         }
 
+        /// <summary>
+        /// A knockout has to END with somebody. Eliminating the whole field leaves an empty board,
+        /// which is a worse finish than one survivor; the reference has the same floor.
+        /// </summary>
+        [Test]
+        public void EliminationStopsOnceTheFieldIsDownToTheFloor()
+        {
+            var rules = new KnockoutRules(KnockoutMode.ComboBreak, GraceEndSeconds: 0, MinimumAlive: 1);
+
+            // Everybody breaks, at different times. With no floor there would be nobody left at all.
+            var timelines = new List<ReplayTimeline>
+            {
+                play((1000, 1), (3000, 0)),
+                play((1000, 1), (5000, 0)),
+                play((1000, 1), (7000, 0)),
+            };
+
+            Assert.That(rules.AliveCount(timelines, 20000), Is.EqualTo(1), "the last one standing is spared");
+
+            // And it is whoever lasted LONGEST who survives, not an arbitrary one.
+            Assert.That(rules.AliveAt(timelines, 2, 20000), Is.True);
+            Assert.That(rules.AliveAt(timelines, 0, 20000), Is.False);
+            Assert.That(rules.AliveAt(timelines, 1, 20000), Is.False);
+        }
+
+        [Test]
+        public void AHigherFloorSparesMore()
+        {
+            var timelines = new List<ReplayTimeline>
+            {
+                play((1000, 1), (3000, 0)),
+                play((1000, 1), (5000, 0)),
+                play((1000, 1), (7000, 0)),
+                play((1000, 1), (9000, 0)),
+            };
+
+            Assert.That(new KnockoutRules(KnockoutMode.ComboBreak, 0, MinimumAlive: 1).AliveCount(timelines, 20000), Is.EqualTo(1));
+            Assert.That(new KnockoutRules(KnockoutMode.ComboBreak, 0, MinimumAlive: 2).AliveCount(timelines, 20000), Is.EqualTo(2));
+
+            // A floor larger than the field cannot eliminate anybody.
+            Assert.That(new KnockoutRules(KnockoutMode.ComboBreak, 0, MinimumAlive: 99).AliveCount(timelines, 20000), Is.EqualTo(4));
+        }
+
+        /// <summary>
+        /// The playfield cue fires only for breaks big enough to point at. Announcing every dropped
+        /// combo across a large field is a continuous flicker, and a cue that never stops carries
+        /// nothing.
+        /// </summary>
+        [Test]
+        public void OnlySubstantialBreaksAreWorthAnnouncing()
+        {
+            var rules = new KnockoutRules(BubbleMinimumCombo: 200);
+
+            Assert.That(rules.WorthAnnouncing(500), Is.True);
+            Assert.That(rules.WorthAnnouncing(200), Is.True, "exactly at the threshold counts");
+            Assert.That(rules.WorthAnnouncing(199), Is.False);
+            Assert.That(rules.WorthAnnouncing(3), Is.False, "a three-combo fumble is not news");
+        }
+
+        [Test]
+        public void TheAnnounceThresholdIsAdjustable()
+        {
+            Assert.That(new KnockoutRules(BubbleMinimumCombo: 0).WorthAnnouncing(1), Is.True,
+                "zero announces everything");
+            Assert.That(new KnockoutRules(BubbleMinimumCombo: 1000).WorthAnnouncing(999), Is.False);
+        }
+
+        [Test]
+        public void SortingByPerformanceIsNotSortingByScore()
+        {
+            // The bigger score carries the smaller pp, so the two orderings must disagree — a
+            // fixture where they agree cannot tell the setting is being read.
+            var grinder = new ReplayTimeline();
+            grinder.Record(new TimelinePoint(1000, 900_000, 10, 0.95, false, "A", 120));
+
+            var precise = new ReplayTimeline();
+            precise.Record(new TimelinePoint(1000, 500_000, 5, 0.99, false, "S", 340));
+
+            var timelines = new List<ReplayTimeline> { grinder, precise };
+
+            Assert.That(new KnockoutRules(SortBy: KnockoutSort.Score).Standings(timelines, 1000), Is.EqualTo(new[] { 0, 1 }));
+            Assert.That(new KnockoutRules(SortBy: KnockoutSort.Performance).Standings(timelines, 1000), Is.EqualTo(new[] { 1, 0 }));
+        }
+
         [Test]
         public void CursorsGrowAsTheFieldThins()
         {

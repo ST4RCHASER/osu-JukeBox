@@ -23,12 +23,19 @@ public enum KnockoutMode
     Imperfection,
 }
 
-/// <summary>What the board is ordered by.</summary>
+/// <summary>
+/// What the board is ordered by — the same three the reference offers.
+///
+/// <para>
+/// Combo used to be the third option here, chosen because there was no pp to offer. The reference
+/// has no combo option and does have pp, and pp is the number people actually rank plays by.
+/// </para>
+/// </summary>
 public enum KnockoutSort
 {
     Score,
+    Performance,
     Accuracy,
-    Combo,
 }
 
 /// <summary>
@@ -55,12 +62,29 @@ public enum KnockoutSort
 /// default in the signature above quietly ignored, and a board that refused to re-order with no
 /// error anywhere. See the defaults test, which exists to pin exactly that.
 /// </remarks>
+/// <param name="MinimumAlive">Elimination stops once this many players are left, so a knockout
+/// always ends with survivors rather than with an empty board. The reference has the same floor.</param>
+/// <param name="BubbleMinimumCombo">The smallest combo whose loss is worth announcing on the
+/// playfield. Every break firing a name flash is a continuous flicker at high player counts, which
+/// makes the cue useless exactly when it should carry the most — the reference gates it at 200.</param>
 public sealed record KnockoutRules(
     KnockoutMode Mode = KnockoutMode.Showcase,
     double GraceEndSeconds = 10,
     bool LiveSort = true,
-    KnockoutSort SortBy = KnockoutSort.Score)
+    KnockoutSort SortBy = KnockoutSort.Score,
+    int MinimumAlive = 1,
+    int BubbleMinimumCombo = 200)
 {
+    /// <summary>
+    /// Whether a break that cost <paramref name="comboLost"/> is worth announcing on the playfield.
+    ///
+    /// <para>
+    /// The flash is meant to say "that mattered". Firing on every dropped combo at 47 players is a
+    /// near-continuous flicker of red names, and a cue that never stops is not a cue.
+    /// </para>
+    /// </summary>
+    public bool WorthAnnouncing(int comboLost) => comboLost >= BubbleMinimumCombo;
+
     /// <summary>
     /// When <paramref name="timeline"/>'s player is knocked out, or null if they last the map.
     /// Null in <see cref="KnockoutMode.Showcase"/> for everyone, by definition.
@@ -72,9 +96,43 @@ public sealed record KnockoutRules(
         _ => null,
     };
 
-    /// <summary>Whether that player is still in it at <paramref name="time"/>.</summary>
+    /// <summary>Whether that player is still in it at <paramref name="time"/>, ignoring the floor.</summary>
     public bool AliveAt(ReplayTimeline timeline, double time)
         => KnockedOutAt(timeline) is not { } out_ || time < out_;
+
+    /// <summary>
+    /// Whether the player at <paramref name="index"/> is still in it, WITH the survivor floor
+    /// applied — the answer the board should use.
+    ///
+    /// <para>
+    /// The floor is a property of the whole field, not of one play, which is why this needs all of
+    /// them. Without it a knockout can eliminate everybody and end on an empty board, which is a
+    /// worse ending than one survivor: eliminations stop once the field is down to
+    /// <see cref="MinimumAlive"/>, and whoever was still standing at that moment stays standing.
+    /// </para>
+    /// </summary>
+    public bool AliveAt(IReadOnlyList<ReplayTimeline> timelines, int index, double time)
+        => !Eliminated(timelines, time).Contains(index);
+
+    /// <summary>
+    /// Who is actually out at <paramref name="time"/>. Players are eliminated in the order they
+    /// fell, and the last <see cref="MinimumAlive"/> of them are spared however badly they played.
+    /// </summary>
+    public IReadOnlyCollection<int> Eliminated(IReadOnlyList<ReplayTimeline> timelines, double time)
+    {
+        var rules = this;
+
+        var fallen = Enumerable.Range(0, timelines.Count)
+                               .Select(i => (index: i, at: rules.KnockedOutAt(timelines[i])))
+                               .Where(p => p.at is { } t && time >= t)
+                               .OrderBy(p => p.at!.Value)
+                               .ThenBy(p => p.index)
+                               .ToList();
+
+        int allowed = Math.Max(0, timelines.Count - Math.Max(MinimumAlive, 0));
+
+        return fallen.Take(Math.Min(fallen.Count, allowed)).Select(p => p.index).ToHashSet();
+    }
 
     /// <summary>
     /// The board at <paramref name="time"/>: everyone still alive in order, then everyone already
@@ -97,10 +155,15 @@ public sealed record KnockoutRules(
         // escape for someone who finds a re-ordering board distracting.
         double sortAt = LiveSort ? time : double.NegativeInfinity;
 
+        // Computed ONCE for the whole sort rather than per comparison: it depends on the entire
+        // field, and recomputing it inside a comparator is both wasteful and a good way to give the
+        // sort an inconsistent view of who is out.
+        var eliminated = Eliminated(timelines, time);
+
         order.Sort((a, b) =>
         {
-            bool aliveA = rules.AliveAt(timelines[a], time);
-            bool aliveB = rules.AliveAt(timelines[b], time);
+            bool aliveA = !eliminated.Contains(a);
+            bool aliveB = !eliminated.Contains(b);
 
             if (aliveA != aliveB)
                 return aliveA ? -1 : 1;
@@ -133,17 +196,14 @@ public sealed record KnockoutRules(
         return SortBy switch
         {
             KnockoutSort.Accuracy => point.Accuracy,
-            KnockoutSort.Combo => point.Combo,
+            KnockoutSort.Performance => point.Performance,
             _ => point.Score,
         };
     }
 
-    /// <summary>How many players are still in it at <paramref name="time"/>.</summary>
+    /// <summary>How many players are still in it at <paramref name="time"/>, floor included.</summary>
     public int AliveCount(IReadOnlyList<ReplayTimeline> timelines, double time)
-    {
-        var rules = this;
-        return timelines.Count(t => rules.AliveAt(t, time));
-    }
+        => timelines.Count - Eliminated(timelines, time).Count;
 
     /// <summary>
     /// How big a cursor should be drawn, growing as the field thins: with everyone still in, every

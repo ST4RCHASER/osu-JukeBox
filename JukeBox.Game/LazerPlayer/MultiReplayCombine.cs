@@ -236,7 +236,8 @@ public partial class MultiReplayCombine : CompositeDrawable
             if (cursors[i] is not { } cursor)
                 continue;
 
-            bool stillIn = rules.AliveAt(timelines[i], time);
+            // The field-aware check, so the survivor floor is honoured here as well as on the board.
+            bool stillIn = rules.AliveAt(timelines, i, time);
 
             cursor.Scale = new Vector2(stillIn ? scale : 1);
             cursor.Alpha = stillIn ? 1 : 0;
@@ -275,7 +276,12 @@ public partial class MultiReplayCombine : CompositeDrawable
 
             if (point.Time > previous && point.Time <= time)
             {
-                cursor.FlashComboBreak();
+                // Only breaks big enough to matter get announced on the playfield. At high player
+                // counts, flashing every dropped combo is a continuous flicker of red names and the
+                // cue stops meaning anything — the board still shows the break either way.
+                if (rules.WorthAnnouncing(point.ComboLost))
+                    cursor.FlashComboBreak();
+
                 board?.FlashComboBreak(player);
                 break;
             }

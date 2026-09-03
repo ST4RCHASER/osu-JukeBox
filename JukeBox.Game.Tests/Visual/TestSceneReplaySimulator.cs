@@ -167,6 +167,16 @@ namespace JukeBox.Game.Tests.Visual
                 return breaks.Count == 1 && Math.Abs(breaks[0].Time - timeOf(6)) < 200;
             });
 
+            // How BIG the break was, which is what decides whether it is worth announcing on the
+            // playfield. The combo AFTER a break is always zero and says nothing about its cost, so
+            // this has to be captured before it is overwritten. Missing the seventh object ends a
+            // run of six.
+            AddAssert("the size of the lost combo is recorded", () =>
+                simulator.Timelines[0].Points.First(p => p.BrokeCombo).ComboLost == 6);
+
+            AddAssert("and is zero on judgements that broke nothing", () =>
+                simulator.Timelines[0].Points.Where(p => !p.BrokeCombo).All(p => p.ComboLost == 0));
+
             // Read either side of the BREAK's own recorded time rather than the object's. A miss is
             // judged when its hit window expires, which is tens of milliseconds after the object,
             // so asking at the object time still reads the play as intact.
