@@ -222,6 +222,70 @@ namespace JukeBox.Game.Tests.Import
         }
 
         /// <summary>
+        /// A fresh drop REPLACES that difficulty's replays rather than joining them.
+        ///
+        /// <para>
+        /// Reported from a real session: fifty replays dropped, then two of the same map dropped
+        /// without restarting, and the app still showed fifty players. The two had merged into the
+        /// fifty, and since nothing ever forgot the old set the only way back was to quit the app.
+        /// </para>
+        /// </summary>
+        [Test]
+        public void AFreshDropReplacesThatDifficultysPreviousReplays()
+        {
+            var store = new ReplayStore();
+
+            foreach (int i in Enumerable.Range(0, 50))
+                store.Register(new ReplayAttachment { PlayerName = $"old{i}", OsuFile = beatmapPath, SourcePath = $"/old{i}.osr" });
+
+            Assert.That(store.AllForOsuFile(beatmapPath), Has.Count.EqualTo(50));
+
+            // What an import does at the start of a drop.
+            store.ClearForOsuFile(beatmapPath);
+
+            var a = new ReplayAttachment { PlayerName = "new-a", OsuFile = beatmapPath, SourcePath = "/new-a.osr" };
+            var b = new ReplayAttachment { PlayerName = "new-b", OsuFile = beatmapPath, SourcePath = "/new-b.osr" };
+
+            store.Register(a);
+            store.Register(b);
+
+            Assert.That(store.AllForOsuFile(beatmapPath), Is.EqualTo(new[] { a, b }),
+                "the new drop is the whole set, with none of the previous fifty left");
+        }
+
+        /// <summary>Clearing a difficulty that has no replays is not an error.</summary>
+        [Test]
+        public void ClearingADifficultyWithNothingInItIsHarmless()
+        {
+            var store = new ReplayStore();
+
+            Assert.DoesNotThrow(() => store.ClearForOsuFile(beatmapPath));
+            Assert.DoesNotThrow(() => store.ClearForOsuFile(null));
+            Assert.That(store.AllForOsuFile(beatmapPath), Is.Empty);
+        }
+
+        /// <summary>
+        /// Clearing one difficulty must not touch another — dropping replays for a second map does
+        /// not throw away the first map's.
+        /// </summary>
+        [Test]
+        public void ClearingOneDifficultyLeavesTheOthersAlone()
+        {
+            var store = new ReplayStore();
+            string other = beatmapPath + ".other";
+
+            var keep = new ReplayAttachment { PlayerName = "keep", OsuFile = other, SourcePath = "/keep.osr" };
+
+            store.Register(new ReplayAttachment { PlayerName = "go", OsuFile = beatmapPath, SourcePath = "/go.osr" });
+            store.Register(keep);
+
+            store.ClearForOsuFile(beatmapPath);
+
+            Assert.That(store.AllForOsuFile(beatmapPath), Is.Empty);
+            Assert.That(store.AllForOsuFile(other), Is.EqualTo(new[] { keep }));
+        }
+
+        /// <summary>
         /// Re-importing the same .osr — a re-drop, or the same path repeated on the command line —
         /// must not turn one player into two identical cursors.
         /// </summary>

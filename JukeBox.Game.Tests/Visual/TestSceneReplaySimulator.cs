@@ -8,6 +8,7 @@ using System.Text;
 using JukeBox.Game.LazerPlayer;
 using JukeBox.Game.Replays;
 using JukeBox.Game.Tests.Import;
+using osu.Framework.Timing;
 using NUnit.Framework;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
@@ -194,6 +195,59 @@ namespace JukeBox.Game.Tests.Visual
 
             AddAssert("while the recordings themselves remain", () =>
                 simulator.Timelines.Count == 3 && simulator.Timelines.All(t => t.Points.Count > 0));
+        }
+
+        /// <summary>
+        /// The simulation stops once every play has a cushion ahead of the playhead, and picks the
+        /// work back up as the playhead advances.
+        ///
+        /// <para>
+        /// Half of the fix for the numbers freezing partway through a song at high replay counts.
+        /// The other half is that the budget goes to whichever play is furthest behind: round-robin
+        /// advanced all of them in lockstep, so with 47 replays the whole board arrived late
+        /// together. Measured on a five-minute map, round-robin at 47 ran 1.72x faster than
+        /// realtime with nothing else competing for the update thread — under 1x once the app is
+        /// also drawing, which is exactly the freeze that was reported. Laggard-first plus this
+        /// cushion took the same case to 5.2x.
+        /// </para>
+        /// </summary>
+        [Test]
+        public void SimulationStopsAtItsCushionAndResumesAsThePlayheadMoves()
+        {
+            var manual = new ManualClock();
+            var framed = new FramedClock(manual);
+
+            // A deliberately short cushion, so where it stops is somewhere this test can see rather
+            // than most of the way through the map.
+            AddStep("simulate three with a short cushion", () =>
+            {
+                host.Clock = framed;
+                manual.CurrentTime = 0;
+
+                host.Child = simulator = new ReplaySimulator(beatmapPath,
+                    new[] { replay("a"), replay("b"), replay("c") })
+                {
+                    LookaheadMs = 2500,
+                };
+            });
+
+            AddUntilStep("it builds the cushion", () => simulator.SimulatedTo >= 2500);
+
+            AddStep("let it run on", () =>
+            {
+                for (int i = 0; i < 120; i++)
+                    host.UpdateSubTree();
+            });
+
+            AddAssert("then stops, rather than recording the whole map", () => !simulator.AllComplete);
+
+            AddStep("move the playhead to the end", () =>
+            {
+                manual.CurrentTime = timeOf(object_count - 1) + 2000;
+                framed.ProcessFrame();
+            });
+
+            AddUntilStep("it picks the work back up", () => simulator.AllComplete);
         }
 
         [Test]

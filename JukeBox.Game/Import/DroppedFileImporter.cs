@@ -318,6 +318,10 @@ public partial class DroppedFileImporter : Component
 
         var attachments = new List<ReplayAttachment>(group.Count);
 
+        // Difficulties this drop has already taken over, so the takeover happens once per file
+        // rather than once per replay. See the ClearForOsuFile call below.
+        var replacedFiles = new HashSet<string>(StringComparer.Ordinal);
+
         // One decode per replay, all against the SAME difficulty — the group is defined by that
         // difficulty's checksum, so there is nothing per-replay left to resolve.
         foreach (var (path, replayHeader) in group)
@@ -359,6 +363,11 @@ public partial class DroppedFileImporter : Component
                 Logger.Log($"[drop] {PlayerLabel(attachment)} played with {string.Join(" ", attachment.ModAcronyms)}"
                            + $" at {attachment.Rate:0.##}× speed (tempo {rateTempo:0.##}, frequency {rateFrequency:0.##})");
             }
+
+            // This drop REPLACES whatever that difficulty had, rather than adding to it — but only
+            // once, on the first replay of the group, or each file would wipe the one before it.
+            if (replacedFiles.Add(osuFile))
+                replays.ClearForOsuFile(osuFile);
 
             replays.Register(attachment);
             attachments.Add(attachment);

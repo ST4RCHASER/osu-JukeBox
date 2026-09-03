@@ -40,8 +40,28 @@ public partial class PlayerCursor : CompositeDrawable
     private readonly OsuSpriteText nameTag;
     private readonly Circle dot;
 
-    /// <summary>osu!'s playfield is defined in these units; everything here is placed in them.</summary>
+    /// <summary>osu!'s playfield is defined in these units; replay frames are recorded in them.</summary>
     public static readonly Vector2 PlayfieldSize = new Vector2(512, 384);
+
+    /// <summary>
+    /// The drawable whose local space replay coordinates mean something in — the playfield itself.
+    ///
+    /// <para>
+    /// Set when the cursor is mounted, and the fix for cursors being drawn in the wrong place
+    /// entirely. Sitting in the playfield's ADJUSTMENT container is not the same as sitting in the
+    /// playfield: measured, the two share a top-left and both report a 512x384 draw size, but the
+    /// playfield covered 819x614 of screen where the adjustment container covered 1802x1352. So a
+    /// cursor placed at raw replay coordinates was drawn at more than twice the scale the objects
+    /// were, which puts anything away from the top-left corner progressively further out — and
+    /// anything near the bottom-right off the playfield altogether.
+    /// </para>
+    ///
+    /// <para>
+    /// Mapping through the playfield's own transform rather than guessing a scale means this stays
+    /// correct if the zoom setting, the aspect, or lazer's own adjustment maths ever change.
+    /// </para>
+    /// </summary>
+    internal Drawable? PositionSpace { get; set; }
 
     /// <summary>Test hook: whether this cursor currently has a position to draw at.</summary>
     internal bool HasPosition { get; private set; }
@@ -54,8 +74,9 @@ public partial class PlayerCursor : CompositeDrawable
         this.frames = frames;
         this.colour = colour;
 
-        RelativeSizeAxes = Axes.None;
-        Size = PlayfieldSize;
+        // Fills whatever it is mounted in; the actual placement goes through PositionSpace, so this
+        // container's own size is only there to give the cursor somewhere to live.
+        RelativeSizeAxes = Axes.Both;
 
         InternalChild = body = new Container
         {
@@ -104,7 +125,11 @@ public partial class PlayerCursor : CompositeDrawable
 
         HasPosition = true;
         body.Alpha = 1;
-        body.Position = position;
+
+        // Through the playfield's own transform, not as a raw coordinate: see PositionSpace.
+        body.Position = PositionSpace is { } space
+            ? ToLocalSpace(space.ToScreenSpace(position))
+            : position;
     }
 
     /// <summary>

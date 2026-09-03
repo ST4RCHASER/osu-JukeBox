@@ -130,6 +130,28 @@ public class ReplayStore
     }
 
     /// <summary>
+    /// Forgets every replay currently held for <paramref name="osuFile"/>.
+    ///
+    /// <para>
+    /// Called once per DROP, before that drop's replays are registered, so a new set of replays for
+    /// a map REPLACES the previous set rather than joining it. Without this, dropping fifty replays
+    /// and then two of the same map left the two merged into the fifty and the app still showing
+    /// fifty players — the old ones never went away for the life of the process, and the only way
+    /// out was to restart.
+    /// </para>
+    ///
+    /// <para>
+    /// Per drop rather than per replay, deliberately: a drop is one user gesture, and the whole
+    /// gesture is the new set. Clearing per replay would leave each drop showing only its last file.
+    /// </para>
+    /// </summary>
+    public void ClearForOsuFile(string? osuFile)
+    {
+        if (osuFile != null)
+            byOsuFile.TryRemove(osuFile, out _);
+    }
+
+    /// <summary>
     /// The FIRST replay for <paramref name="osuFile"/>, or null when that difficulty has none. The
     /// single-replay view of the store, which is what everything rendering one chart still wants.
     /// </summary>

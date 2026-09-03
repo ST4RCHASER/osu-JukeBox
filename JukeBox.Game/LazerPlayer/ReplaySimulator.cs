@@ -51,11 +51,50 @@ public partial class ReplaySimulator : CompositeDrawable
     public double SimulatedTo => simulations.Count == 0 ? 0 : simulations.Min(s => s.Timeline.SimulatedTo);
 
     /// <summary>
-    /// Milliseconds of real time per frame this may spend, shared across every replay. Four is
-    /// about a quarter of a 60fps frame, which at the measured speed still buys tens of seconds of
-    /// gameplay per second of wall clock — far more headroom than staying ahead of playback needs.
+    /// Milliseconds of real time per frame to spend once every play is recorded comfortably ahead
+    /// of the playhead. Small, because at that point there is nothing urgent left to do.
     /// </summary>
     internal double BudgetMs { get; init; } = 4;
+
+    /// <summary>
+    /// Milliseconds per frame to spend while the cushion is still being built — roughly two thirds
+    /// of a 60fps frame.
+    ///
+    /// <para>
+    /// A flat four milliseconds was not enough and the shortfall only showed up at high replay
+    /// counts. Measured on a five-minute map with the simulation running alone: at 8 replays it ran
+    /// 31x ahead of the playhead, at 24 it ran 5.9x, and at 47 it ran 1.72x. That last number looks
+    /// like a margin and is not — it was measured with nothing else on the update thread, while the
+    /// real app is also drawing the chart, the board and every hidden renderer. Fewer frames per
+    /// second means fewer budget slices per second, and the margin goes under 1x. Which is what the
+    /// user saw: 47 replays, numbers frozen from 2:26 of a 5:08 song.
+    /// </para>
+    ///
+    /// <para>
+    /// Spending this much is affordable precisely because it is temporary: the work is finite, it
+    /// front-loads into the opening seconds, and every renderer is disposed as its play finishes.
+    /// </para>
+    /// </summary>
+    internal double CatchUpBudgetMs { get; init; } = 12;
+
+    /// <summary>
+    /// How far ahead of the playhead every play should be recorded before easing off.
+    ///
+    /// <para>
+    /// A cushion rather than "simulate everything immediately": it bounds how much work is urgent,
+    /// so the budget goes to whichever play is closest to being needed instead of being spread over
+    /// forty-seven of them equally. Thirty seconds is comfortably more than a viewer can scrub past
+    /// before the simulation catches up again.
+    /// </para>
+    /// </summary>
+    internal double LookaheadMs { get; init; } = 30_000;
+
+    /// <summary>
+    /// Steps to run on one play before re-checking which is furthest behind. Picking the laggard
+    /// costs a scan of every simulation, so doing it per step would spend the budget on choosing
+    /// rather than on simulating.
+    /// </summary>
+    private const int steps_per_slice = 24;
 
     /// <summary>Gameplay time each simulation step advances. Matches a 60fps frame, because that
     /// is the granularity real gameplay is judged at and a coarser step changes the result.</summary>
@@ -118,27 +157,49 @@ public partial class ReplaySimulator : CompositeDrawable
         if (AllComplete)
             return;
 
+        double playhead = Clock.CurrentTime;
+
+        // Spend hard while any play is still short of its cushion, and back off once they all have
+        // one. The work is finite, so this front-loads it into the opening seconds rather than
+        // rationing it evenly across a song and arriving late.
+        double budget = SimulatedTo - playhead < LookaheadMs ? CatchUpBudgetMs : BudgetMs;
+
         var spent = Stopwatch.StartNew();
 
-        // Round robin rather than finishing one player before starting the next: the scoreboard
-        // needs EVERY player's numbers at the current moment, so the useful measure of progress is
-        // the least advanced simulation, and running them together is what raises it.
-        while (spent.Elapsed.TotalMilliseconds < BudgetMs)
+        while (spent.Elapsed.TotalMilliseconds < budget)
         {
-            bool anyAdvanced = false;
+            // Always the play that is FURTHEST BEHIND. The board can only be trusted as far as its
+            // least advanced player, so that is the number worth raising; round-robin advanced all
+            // forty-seven in lockstep and let the whole board arrive late together.
+            var laggard = leastAdvanced();
 
-            foreach (var simulation in simulations)
-            {
-                if (simulation.Timeline.Complete)
-                    continue;
-
-                advance(simulation);
-                anyAdvanced = true;
-            }
-
-            if (!anyAdvanced)
+            if (laggard == null)
                 break;
+
+            // Everyone has their cushion. Nothing here is urgent enough to spend a frame on.
+            if (laggard.Timeline.SimulatedTo - playhead > LookaheadMs)
+                break;
+
+            for (int i = 0; i < steps_per_slice && !laggard.Timeline.Complete; i++)
+                advance(laggard);
         }
+    }
+
+    /// <summary>The incomplete play whose recording has got the least far, or null when all are done.</summary>
+    private Simulation? leastAdvanced()
+    {
+        Simulation? worst = null;
+
+        foreach (var simulation in simulations)
+        {
+            if (simulation.Timeline.Complete)
+                continue;
+
+            if (worst == null || simulation.Timeline.SimulatedTo < worst.Timeline.SimulatedTo)
+                worst = simulation;
+        }
+
+        return worst;
     }
 
     private void advance(Simulation simulation)

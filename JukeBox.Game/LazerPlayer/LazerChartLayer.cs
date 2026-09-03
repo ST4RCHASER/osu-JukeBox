@@ -593,6 +593,10 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
         if (drawableRuleset is not osu.Game.Rulesets.Osu.UI.DrawableOsuRuleset osuRuleset)
             return false;
 
+        // Replay coordinates only mean anything in the PLAYFIELD's space, which is not the space
+        // this container draws in — see PlayerCursor.PositionSpace for the measured difference.
+        cursor.PositionSpace = osuRuleset.Playfield;
+
         osuRuleset.PlayfieldAdjustmentContainer.Add(cursor);
 
         // Proxied into the overlay layer so cursors draw ABOVE the hit objects. Without it a cursor
