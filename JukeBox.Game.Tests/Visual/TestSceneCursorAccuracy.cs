@@ -136,7 +136,10 @@ namespace JukeBox.Game.Tests.Visual
         private Vector2 cursorScreenPosition()
         {
             var cursor = combine.ChildrenOfType<PlayerCursor>().First();
-            var body = cursor.ChildrenOfType<Container>().First();
+
+            // The dot's own container — the auto-sized one that carries the position, not the
+            // full-size content wrapper the cursor now nests its trail and dot inside.
+            var body = cursor.ChildrenOfType<Container>().First(c => c.AutoSizeAxes == Axes.Both);
 
             return body.ScreenSpaceDrawQuad.Centre;
         }
