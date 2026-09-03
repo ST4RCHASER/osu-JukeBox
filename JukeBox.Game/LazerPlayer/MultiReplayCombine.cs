@@ -251,7 +251,10 @@ public partial class MultiReplayCombine : CompositeDrawable
                 continue;
             }
 
-            var cursor = new PlayerCursor(MultiReplayGrid.DisplayName(replays[i]), replay.Frames, effectiveColour(i));
+            // The bare player name, NOT the "+mods" display name — the break/death cue on the
+            // playfield shows who, not what they played, and "name +CL" reads as clutter.
+            string cursorName = replays[i].PlayerName.Length > 0 ? replays[i].PlayerName : "unknown";
+            var cursor = new PlayerCursor(cursorName, replay.Frames, effectiveColour(i));
 
             cursors.Add(chart.AddPlayerCursor(cursor) ? cursor : null);
 
@@ -279,16 +282,6 @@ public partial class MultiReplayCombine : CompositeDrawable
         int alive = rules.AliveCount(timelines, time);
         float scale = KnockoutRules.CursorScale(alive, timelines.Count);
 
-        // First frame with cursors: remember who is alive without firing a death, so a player who is
-        // already out when the view opens (the playhead started past their elimination) does not drop
-        // a death name we never saw them earn.
-        if (wasAlive.Count < cursors.Count)
-        {
-            wasAlive.Clear();
-            for (int i = 0; i < cursors.Count; i++)
-                wasAlive.Add(i < timelines.Count && rules.AliveAt(timelines, i, time));
-        }
-
         for (int i = 0; i < cursors.Count && i < timelines.Count; i++)
         {
             if (cursors[i] is not { } cursor)
@@ -300,49 +293,97 @@ public partial class MultiReplayCombine : CompositeDrawable
             cursor.Scale = new Vector2(stillIn ? scale : 1);
             cursor.Alpha = stillIn ? 1 : 0;
 
-            // Crossing from alive to out under a knockout rule is a DEATH: drop the falling name at
-            // the spot the cursor was, since the cursor itself is about to vanish. Showcase never
-            // eliminates, so it never fires.
-            if (rules.Mode != KnockoutMode.Showcase && wasAlive[i] && !stillIn && cursor.HasPosition)
-                spawnDeathName(i, cursor, time);
-
-            wasAlive[i] = stillIn;
-
             flashNewBreaks(i, cursor, timelines[i], time);
         }
 
         lastFlashCheck = time;
 
+        updateDeaths(time);
         applyFocus();
     }
 
-    /// <summary>Alive/out state per player as of the last frame, so a live crossing into "out" can be
-    /// spotted and turned into the death animation exactly once.</summary>
-    private readonly List<bool> wasAlive = new List<bool>();
+    /// <summary>The death name currently shown for each eliminated player, keyed by index — created
+    /// while the playhead is inside their death window and removed outside it.</summary>
+    private readonly Dictionary<int, PlayerDeathName> deaths = new Dictionary<int, PlayerDeathName>();
 
     /// <summary>
-    /// Drops the knockout death name at the player's last cursor position: their name, their colour,
-    /// and — in combo-break knockout — the peak combo they reached before dying. Imperfection
-    /// knockout shows the name alone, matching danser.
+    /// The knockout death animation, driven straight from the timeline so it is SEEK-CORRECT: for
+    /// each ELIMINATED player (floor-aware — a player spared by the survivor floor never dies), while
+    /// the playhead is within the death window after their knockout, a falling name is shown at the
+    /// spot their cursor was AT the knockout, with the combo they broke on under it (combo-break
+    /// mode) — name only in imperfection mode. Its fall and fade are recomputed from the age each
+    /// frame, so seeking into the window lands it mid-fall and seeking past it removes it entirely.
     /// </summary>
-    private void spawnDeathName(int player, PlayerCursor cursor, double time)
+    private void updateDeaths(double time)
     {
-        var timeline = simulator.Timelines[player];
-        double deathTime = rules.KnockedOutAt(timeline) ?? time;
+        if (rules.Mode == KnockoutMode.Showcase)
+        {
+            clearDeaths();
+            return;
+        }
 
-        string name = replays[player].PlayerName.Length > 0 ? replays[player].PlayerName : "unknown";
+        var timelines = simulator.Timelines;
         bool showCombo = rules.Mode == KnockoutMode.ComboBreak;
 
-        var death = new PlayerDeathName(name, timeline.MaxComboUpTo(deathTime), effectiveColour(player), showCombo)
+        for (int i = 0; i < cursors.Count && i < timelines.Count; i++)
         {
-            Position = ToLocalSpace(cursor.CursorScreenPosition),
-        };
+            double? knockout = rules.KnockedOutAt(timelines[i]);
 
-        AddInternal(death);
-        deathNames++;
+            // Never broke, or spared by the survivor floor (still alive now) — no death.
+            if (knockout is not { } ko || rules.AliveAt(timelines, i, time))
+            {
+                removeDeath(i);
+                continue;
+            }
+
+            double elapsed = time - ko;
+
+            if (elapsed < 0 || elapsed >= PlayerDeathName.Duration)
+            {
+                removeDeath(i);
+                continue;
+            }
+
+            if (!deaths.TryGetValue(i, out var death))
+            {
+                if (cursors[i]?.ScreenPositionAt(ko) is not { } screen)
+                    continue;
+
+                string name = replays[i].PlayerName.Length > 0 ? replays[i].PlayerName : "unknown";
+
+                // The combo they BROKE on — the combo held going into the break, not their peak.
+                int combo = timelines[i].At(ko).ComboLost;
+
+                death = new PlayerDeathName(name, combo, effectiveColour(i), showCombo)
+                {
+                    BasePosition = ToLocalSpace(screen),
+                };
+
+                AddInternal(death);
+                deaths[i] = death;
+                deathNames++;
+            }
+
+            death.SetProgress(elapsed);
+        }
     }
 
-    /// <summary>Test hook: how many death names have been dropped.</summary>
+    private void removeDeath(int player)
+    {
+        if (deaths.Remove(player, out var death))
+            death.Expire();
+    }
+
+    private void clearDeaths()
+    {
+        foreach (var death in deaths.Values)
+            death.Expire();
+
+        deaths.Clear();
+    }
+
+    /// <summary>Test hook: how many death names have been created (a re-seek into a window makes a
+    /// fresh one, so this counts creations, not distinct players).</summary>
     internal int DeathNamesShown => deathNames;
 
     private int deathNames;

@@ -800,6 +800,54 @@ namespace JukeBox.Game.Tests.Visual
             });
         }
 
+        /// <summary>
+        /// The death name is driven by the timeline, so it is SEEK-CORRECT: absent before the
+        /// knockout, shown mid-fall when the playhead is inside the window, gone once past it —
+        /// wherever the user drags the seek bar, not stuck on screen.
+        /// </summary>
+        [Test]
+        public void TheDeathNameIsSeekCorrect()
+        {
+            AddStep("build two, one breaks at the fifth object", () =>
+                build(2, misses: new[] { Array.Empty<int>(), new[] { 4 } }));
+            AddUntilStep("recorded", () => combine.Simulator.AllComplete);
+            AddUntilStep("cursors attached", () => combine.CursorsAttached == 2);
+            AddStep("combo-break knockout, no grace", () =>
+                combine.Rules = new KnockoutRules(KnockoutMode.ComboBreak, GraceEndSeconds: 0));
+
+            double ko = 0;
+            AddStep("find the knockout time", () => ko = combine.Simulator.Timelines[1].FirstComboBreak(0) ?? 0);
+
+            AddStep("seek BEFORE the knockout", () => showAt(timeOf(2)));
+            AddAssert("no death name is present", () => !livingDeathNames().Any());
+
+            float earlyY = 0;
+            AddStep("seek just INTO the death window", () => showAt(ko + 200));
+            AddAssert("a death name is shown, faded in", () =>
+            {
+                var death = livingDeathNames().FirstOrDefault();
+                if (death == null) return false;
+                earlyY = death.Y;
+                return death.Alpha > 0.5f;
+            });
+
+            // Seeking DEEPER into the window must land it further down its fall — a stuck (not
+            // seek-driven) name would sit at the same Y instead. This is the actual bug: it froze.
+            AddStep("seek deeper into the window", () => showAt(ko + 1500));
+            AddAssert("it has fallen further, driven by the seek", () =>
+            {
+                var death = livingDeathNames().FirstOrDefault();
+                return death != null && death.Y > earlyY + 5;
+            });
+
+            AddStep("seek PAST the death window", () => showAt(ko + PlayerDeathName.Duration + 1000));
+            AddAssert("the death name is gone", () => !combine.ChildrenOfType<PlayerDeathName>().Any());
+        }
+
+        /// <summary>Death names that are actually alive (not expired and awaiting removal).</summary>
+        private IEnumerable<PlayerDeathName> livingDeathNames() =>
+            combine.ChildrenOfType<PlayerDeathName>().Where(d => d.IsAlive && d.Alpha > 0.01f);
+
         /// <summary>Imperfection knockout shows the falling name ALONE — no combo line, matching
         /// danser.</summary>
         [Test]

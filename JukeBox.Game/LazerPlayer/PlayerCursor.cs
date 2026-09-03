@@ -169,6 +169,17 @@ public partial class PlayerCursor : CompositeDrawable
         trail.AddPoint(local);
     }
 
+    /// <summary>Where this player's cursor was at <paramref name="time"/>, in SCREEN space — for
+    /// placing the death name at the exact spot they were knocked out, a fixed past position rather
+    /// than wherever the (now vanished) cursor is live. Null when the replay had no frame there.</summary>
+    internal Vector2? ScreenPositionAt(double time)
+    {
+        if (ReplayCursorPath.PositionAt(frames, time) is not { } position)
+            return null;
+
+        return PositionSpace is { } space ? space.ToScreenSpace(position) : ToScreenSpace(position);
+    }
+
     /// <summary>
     /// The combo-break cue on the playfield: the player's NAME appears at the point where they
     /// dropped it, in red, and fades.
