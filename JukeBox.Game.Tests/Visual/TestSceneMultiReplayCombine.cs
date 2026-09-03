@@ -768,6 +768,59 @@ namespace JukeBox.Game.Tests.Visual
                 combine.Chart.SelectedSkin == JukeBox.Game.Configuration.JukeBoxSkin.Classic);
         }
 
+        /// <summary>
+        /// The knockout death animation: when a player is eliminated their name falls away on the
+        /// playfield, coloured to their cursor, with their peak combo under it in combo-break mode.
+        /// </summary>
+        [Test]
+        public void KnockoutDropsAFallingDeathNameWithTheMaxCombo()
+        {
+            AddStep("build two, one breaks at the fifth object", () =>
+                build(2, misses: new[] { Array.Empty<int>(), new[] { 4 } }));
+            AddUntilStep("recorded", () => combine.Simulator.AllComplete);
+            AddStep("combo-break knockout, no grace", () =>
+                combine.Rules = new KnockoutRules(KnockoutMode.ComboBreak, GraceEndSeconds: 0));
+
+            AddStep("settle before the break", () => showAt(timeOf(3)));
+            AddAssert("nobody has died yet", () => combine.DeathNamesShown == 0);
+
+            AddStep("play across the elimination", () => playTo(timeOf(5)));
+
+            AddAssert("a death name was dropped", () => combine.DeathNamesShown >= 1);
+            AddAssert("it is the breaker's name and colour, with a combo line", () =>
+            {
+                var death = combine.ChildrenOfType<PlayerDeathName>().FirstOrDefault();
+                if (death == null) return false;
+
+                var lines = death.ChildrenOfType<OsuSpriteText>().ToList();
+                return lines.Count == 2
+                       && lines[0].Text.ToString() == "player1"
+                       && lines[0].Colour == MultiReplayCombine.ColourFor(1, 2)
+                       && lines[1].Text.ToString()!.EndsWith("x", StringComparison.Ordinal);
+            });
+        }
+
+        /// <summary>Imperfection knockout shows the falling name ALONE — no combo line, matching
+        /// danser.</summary>
+        [Test]
+        public void ImperfectionKnockoutDropsANameWithNoCombo()
+        {
+            AddStep("build two, one misses the fifth object", () =>
+                build(2, misses: new[] { Array.Empty<int>(), new[] { 4 } }));
+            AddUntilStep("recorded", () => combine.Simulator.AllComplete);
+            AddStep("imperfection knockout", () => combine.Rules = new KnockoutRules(KnockoutMode.Imperfection));
+
+            AddStep("settle at the very start", () => showAt(0));
+            AddStep("play across the first imperfection", () => playTo(timeOf(6)));
+
+            AddAssert("a death name was dropped", () => combine.DeathNamesShown >= 1);
+            AddAssert("it is the name alone — no combo line", () =>
+            {
+                var death = combine.ChildrenOfType<PlayerDeathName>().FirstOrDefault();
+                return death != null && death.ChildrenOfType<OsuSpriteText>().Count() == 1;
+            });
+        }
+
         /// <summary>The transient red name marker on the player who broke (index 1), or null when
         /// none is present.</summary>
         private OsuSpriteText? breakBubble() =>

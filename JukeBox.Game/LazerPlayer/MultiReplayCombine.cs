@@ -262,6 +262,16 @@ public partial class MultiReplayCombine : CompositeDrawable
         int alive = rules.AliveCount(timelines, time);
         float scale = KnockoutRules.CursorScale(alive, timelines.Count);
 
+        // First frame with cursors: remember who is alive without firing a death, so a player who is
+        // already out when the view opens (the playhead started past their elimination) does not drop
+        // a death name we never saw them earn.
+        if (wasAlive.Count < cursors.Count)
+        {
+            wasAlive.Clear();
+            for (int i = 0; i < cursors.Count; i++)
+                wasAlive.Add(i < timelines.Count && rules.AliveAt(timelines, i, time));
+        }
+
         for (int i = 0; i < cursors.Count && i < timelines.Count; i++)
         {
             if (cursors[i] is not { } cursor)
@@ -273,6 +283,14 @@ public partial class MultiReplayCombine : CompositeDrawable
             cursor.Scale = new Vector2(stillIn ? scale : 1);
             cursor.Alpha = stillIn ? 1 : 0;
 
+            // Crossing from alive to out under a knockout rule is a DEATH: drop the falling name at
+            // the spot the cursor was, since the cursor itself is about to vanish. Showcase never
+            // eliminates, so it never fires.
+            if (rules.Mode != KnockoutMode.Showcase && wasAlive[i] && !stillIn && cursor.HasPosition)
+                spawnDeathName(i, cursor, time);
+
+            wasAlive[i] = stillIn;
+
             flashNewBreaks(i, cursor, timelines[i], time);
         }
 
@@ -280,6 +298,37 @@ public partial class MultiReplayCombine : CompositeDrawable
 
         applyFocus();
     }
+
+    /// <summary>Alive/out state per player as of the last frame, so a live crossing into "out" can be
+    /// spotted and turned into the death animation exactly once.</summary>
+    private readonly List<bool> wasAlive = new List<bool>();
+
+    /// <summary>
+    /// Drops the knockout death name at the player's last cursor position: their name, their colour,
+    /// and — in combo-break knockout — the peak combo they reached before dying. Imperfection
+    /// knockout shows the name alone, matching danser.
+    /// </summary>
+    private void spawnDeathName(int player, PlayerCursor cursor, double time)
+    {
+        var timeline = simulator.Timelines[player];
+        double deathTime = rules.KnockedOutAt(timeline) ?? time;
+
+        string name = replays[player].PlayerName.Length > 0 ? replays[player].PlayerName : "unknown";
+        bool showCombo = rules.Mode == KnockoutMode.ComboBreak;
+
+        var death = new PlayerDeathName(name, timeline.MaxComboUpTo(deathTime), effectiveColour(player), showCombo)
+        {
+            Position = ToLocalSpace(cursor.CursorScreenPosition),
+        };
+
+        AddInternal(death);
+        deathNames++;
+    }
+
+    /// <summary>Test hook: how many death names have been dropped.</summary>
+    internal int DeathNamesShown => deathNames;
+
+    private int deathNames;
 
     /// <summary>
     /// Fades the focused player's cursor to full and every other to a whisper, or all of them back

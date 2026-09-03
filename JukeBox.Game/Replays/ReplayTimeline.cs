@@ -119,6 +119,28 @@ public sealed class ReplayTimeline
     }
 
     /// <summary>
+    /// The highest combo this player had reached by <paramref name="time"/> — what the knockout
+    /// death animation shows under a falling name ("933x"). The peak rather than the current combo,
+    /// because the moment they are knocked out is a break where the current combo has already gone
+    /// to zero.
+    /// </summary>
+    public int MaxComboUpTo(double time)
+    {
+        int max = 0;
+
+        foreach (var point in points)
+        {
+            if (point.Time > time)
+                break;
+
+            if (point.Combo > max)
+                max = point.Combo;
+        }
+
+        return max;
+    }
+
+    /// <summary>
     /// When this player first broke a combo they were holding, or null if they never did. Breaks at
     /// or before <paramref name="graceEndSeconds"/> do not count — a fumble in the opening seconds
     /// knocking someone out makes for a dull watch, which is why the reference has the same escape.

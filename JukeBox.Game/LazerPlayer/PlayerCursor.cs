@@ -68,6 +68,10 @@ public partial class PlayerCursor : CompositeDrawable
     /// <summary>Test hook: whether this cursor currently has a position to draw at.</summary>
     internal bool HasPosition { get; private set; }
 
+    /// <summary>Where the cursor dot is on screen right now — used to place the knockout death name
+    /// at the spot the player was last, since the cursor itself vanishes the instant they are out.</summary>
+    internal Vector2 CursorScreenPosition => body.ScreenSpaceDrawQuad.Centre;
+
     /// <summary>Test hook: the player's colour, as drawn.</summary>
     internal Color4 Colour4 => colour;
 

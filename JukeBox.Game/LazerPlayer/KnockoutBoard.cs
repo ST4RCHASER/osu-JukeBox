@@ -633,7 +633,10 @@ public partial class KnockoutBoard : CompositeDrawable
                 return;
 
             ShownAlive = alive;
-            RestingAlpha = alive ? 1 : 0.45f;
+
+            // A knocked-out row fades well down — part of the death sequence removing the player from
+            // everywhere (cursor gone, name fallen, row faded), not just greyed a little.
+            RestingAlpha = alive ? 1 : 0.3f;
 
             this.FadeTo(RestingAlpha, 300, Easing.OutQuint);
             background.FadeColour(alive ? Color4.Black.Opacity(0.45f) : Color4.DarkRed.Opacity(0.5f), 300, Easing.OutQuint);
