@@ -177,6 +177,25 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("but the accuracy did drop", () => simulator.Timelines[0].Points[0].Accuracy < 1);
         }
 
+        /// <summary>
+        /// The hidden renderers are scaffolding and have to come down. Each is a whole gameplay
+        /// renderer — the same weight as a visible cell — and the only thing wanted from it is a
+        /// list of numbers. Keeping them alive would double the renderers for the entire song;
+        /// measured on a twelve-cell grid, dropping them is the difference between a steady-state
+        /// update cost of 1.02ms per frame and 0.27ms.
+        /// </summary>
+        [Test]
+        public void TheHiddenRenderersAreDisposedOnceThePlayIsRecorded()
+        {
+            AddStep("simulate three", () => simulate(replay("a"), replay("b", 3), replay("c", 7)));
+
+            AddUntilStep("all recorded", () => simulator.AllComplete);
+            AddUntilStep("and every renderer is gone", () => simulator.LiveRenderers == 0);
+
+            AddAssert("while the recordings themselves remain", () =>
+                simulator.Timelines.Count == 3 && simulator.Timelines.All(t => t.Points.Count > 0));
+        }
+
         [Test]
         public void EachPlayerGetsTheirOwnRecordAndNobodyElses()
         {

@@ -64,6 +64,18 @@ public partial class ReplaySimulator : CompositeDrawable
     /// <summary>Test hook: total simulation steps run, for measuring the cost of this.</summary>
     internal int StepsRun { get; private set; }
 
+    /// <summary>
+    /// Test hook: hidden renderers still in the tree. Falls to zero once every play is recorded —
+    /// they are scaffolding, not part of the running view.
+    ///
+    /// <para>
+    /// Counted from the actual CHILDREN rather than from a "retired" flag. The flag version of this
+    /// was satisfied by setting the flag, so deleting the line that actually removes the renderer
+    /// left the test passing while the renderers all stayed alive.
+    /// </para>
+    /// </summary>
+    internal int LiveRenderers => InternalChildren.OfType<LazerChartLayer>().Count();
+
     public ReplaySimulator(string osuFile, IReadOnlyList<ReplayAttachment> replays)
     {
         this.osuFile = osuFile;
@@ -146,14 +158,34 @@ public partial class ReplaySimulator : CompositeDrawable
 
         if (objects > 0 && score != null && score.JudgedHits >= objects)
         {
-            simulation.Timeline.MarkComplete(simulation.Manual.CurrentTime);
+            finish(simulation, simulation.Manual.CurrentTime);
             return;
         }
 
         // Backstop: a replay whose frames run out before the map does leaves objects unjudged
         // forever, and without this the simulation would grind on to the heat death of the song.
         if (simulation.EndTime is { } end && simulation.Manual.CurrentTime > end + 5000)
-            simulation.Timeline.MarkComplete(end);
+            finish(simulation, end);
+    }
+
+    /// <summary>
+    /// Records the play as finished and THROWS AWAY the renderer that produced it.
+    ///
+    /// <para>
+    /// A simulation layer is a whole gameplay renderer — the same weight as a visible one — and the
+    /// only thing anyone wants from it is the timeline, which is a list of numbers. Keeping it
+    /// alive would double the renderers for the entire song for no benefit; dropping it means the
+    /// doubled cost lasts only the few seconds the recording takes. Measured on a twelve-cell grid,
+    /// that is the difference between paying for twenty-four renderers all song and paying for
+    /// twelve after the opening.
+    /// </para>
+    /// </summary>
+    private void finish(Simulation simulation, double endTime)
+    {
+        simulation.Timeline.MarkComplete(endTime);
+
+        RemoveInternal(simulation.Layer, true);
+        simulation.Retired = true;
     }
 
     /// <summary>One player's off-screen play and the record being taken of it.</summary>
@@ -163,6 +195,9 @@ public partial class ReplaySimulator : CompositeDrawable
         public readonly ManualClock Manual;
         public readonly FramedClock Framed;
         public readonly ReplayTimeline Timeline = new ReplayTimeline();
+
+        /// <summary>Whether the renderer behind this play has been disposed, its work done.</summary>
+        public bool Retired;
 
         private bool subscribed;
         private int lastCombo;

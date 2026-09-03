@@ -152,7 +152,12 @@ public partial class MultiReplayGrid : CompositeDrawable
             Content = content,
         };
 
-        InternalChild = grid;
+        // Only the RENDERED replays are simulated. A replay past the cap has no cell to put numbers
+        // in, so recording its play would be a whole hidden renderer's worth of work for a figure
+        // nothing displays.
+        simulator = new ReplaySimulator(osuFile, replays.Take(rendered).ToList());
+
+        InternalChildren = new Drawable[] { grid, simulator };
     }
 
     /// <summary>
@@ -167,7 +172,10 @@ public partial class MultiReplayGrid : CompositeDrawable
         // during async load.
         var working = new FlatWorkingBeatmap(osuFile);
 
-        var layer = new LazerChartLayer(working, osuFile, replay.Score) { AlwaysPresent = true, TrackLiveScore = true };
+        // No live scoring on the VISIBLE cells any more. Their numbers come from the recorded
+        // timelines, so a score processor here would be a second, worse answer to the same question
+        // — worse because it is the one that goes wrong the moment the user seeks.
+        var layer = new LazerChartLayer(working, osuFile, replay.Score) { AlwaysPresent = true };
         cells.Add(layer);
 
         // A cell is the whole visual stack, not just gameplay: the map's own background, the dim
@@ -286,32 +294,72 @@ public partial class MultiReplayGrid : CompositeDrawable
         }, true);
     }
 
+    /// <summary>
+    /// Each cell's numbers, read from that player's RECORDED play at the current moment.
+    ///
+    /// <para>
+    /// This used to bind each cell's label to a live score processor being fed judgements as the
+    /// replay played. That is correct only for someone who watches from the start and never touches
+    /// the seek bar. A forward seek hard-seeks gameplay past objects which are then never judged,
+    /// and seeking backwards un-judges nothing — so after a scrub the numbers were whatever had
+    /// accumulated before it, while the play carried on without them. Seeking early enough left
+    /// every cell reading 00000000 and 0x over gameplay visibly forty objects in, which is the same
+    /// "static, not running" the live numbers were meant to fix.
+    /// </para>
+    ///
+    /// <para>
+    /// Read by time instead, there is no accumulated state to fall out of step. The cost is a
+    /// hidden renderer per replay while each play is recorded, and those are disposed the moment
+    /// they finish — measured on a twelve-cell grid, that leaves the steady-state update cost
+    /// where it was (0.27ms against 0.19ms per frame).
+    /// </para>
+    /// </summary>
     protected override void Update()
     {
         base.Update();
 
-        // Each cell's processor only exists once its ruleset has finished loading, so the binding
-        // is done here rather than at build. Once bound, the numbers follow the judgements — and
-        // therefore the shared clock — with no further work from this class.
-        for (int i = 0; i < cells.Count; i++)
+        if (simulator == null)
+            return;
+
+        double time = Clock.CurrentTime;
+
+        for (int i = 0; i < cells.Count && i < simulator.Timelines.Count; i++)
         {
-            if (liveBound.Contains(i) || cells[i].LiveScore is not { } processor)
+            var timeline = simulator.Timelines[i];
+
+            if (!scoreLabels.TryGetValue(i, out var scoreLabel))
                 continue;
 
-            liveBound.Add(i);
+            if (KnockoutBoard.IsPending(timeline, time))
+            {
+                // Dashes rather than the last thing recorded: past the simulation, a stale figure
+                // reads exactly like a real score for a moment the player has not reached.
+                scoreLabel.Text = "--------";
+                accuracyLabels[i].Text = "--.--%";
+                comboLabels[i].Text = "--x";
+                continue;
+            }
 
-            // Copied per iteration, deliberately: a `for` loop's variable is ONE variable shared by
-            // every closure made in it, so binding against `i` directly would have all three
-            // callbacks looking up cells.Count once the loop finished — which is not a cell.
-            int cell = i;
+            var point = timeline.At(time);
 
-            processor.TotalScore.BindValueChanged(e => scoreLabels[cell].Text = ((long)e.NewValue).ToString("00000000"), true);
-            processor.Accuracy.BindValueChanged(e => accuracyLabels[cell].Text = (e.NewValue * 100).ToString("0.00") + "%", true);
-            processor.Combo.BindValueChanged(e => comboLabels[cell].Text = e.NewValue.ToString("N0") + "x", true);
+            scoreLabel.Text = point.Score.ToString("00000000");
+            accuracyLabels[i].Text = (point.Accuracy * 100).ToString("0.00") + "%";
+            comboLabels[i].Text = point.Combo.ToString("N0") + "x";
         }
     }
 
-    private readonly HashSet<int> liveBound = new HashSet<int>();
+    private ReplaySimulator? simulator;
+
+    /// <summary>Test hook: the off-screen playthrough feeding the cells' numbers.</summary>
+    internal ReplaySimulator? Simulator => simulator;
+
+    /// <summary>Test hooks: what a cell is actually SHOWING, which is the thing the user complained
+    /// about and therefore the thing worth asserting on.</summary>
+    internal string ScoreTextFor(int cell) => scoreLabels[cell].Text.ToString()!;
+
+    internal string AccuracyTextFor(int cell) => accuracyLabels[cell].Text.ToString()!;
+
+    internal string ComboTextFor(int cell) => comboLabels[cell].Text.ToString()!;
 
     private static OsuSpriteText label(string text, float size, FontWeight weight, Anchor anchor) => new OsuSpriteText
     {

@@ -262,83 +262,115 @@ namespace JukeBox.Game.Tests.Visual
         }
 
         /// <summary>
-        /// The "static, not running" fix: the cells' figures come from a score processor being FED
-        /// judgements as the replay plays, rather than from the .osr header's final totals, which
-        /// were correct exactly once — at the end.
+        /// The "static, not running" complaint, asserted on what a cell SHOWS rather than on any
+        /// internal it happens to read from.
         ///
         /// <para>
-        /// The first version of this test asserted only that judged hits were arriving, and passed
-        /// against a fixture replay that never presses a button: three judgements, all misses, with
-        /// score, combo and accuracy sitting at zero from the first frame to the last. It could not
-        /// have failed if the numbers were nailed down. This one plays the map for real and checks
-        /// the result could not have come from the header.
-        /// </para>
-        ///
-        /// <para>
-        /// What it deliberately does NOT assert is the numbers climbing gradually, even though that
-        /// is the user's actual words. Gameplay cannot be driven deterministically from a scene
-        /// test: the frame-stable clock advances on REAL time between the scene's frames while the
-        /// driving clock stands still, so an uncontrolled amount of the play happens during load —
-        /// measured here at anywhere from one object to the whole map, varying with how loaded the
-        /// machine was. A gradual-climb assertion written against that is a coin flip, and a test
-        /// that fails at random is worse than one that admits its limits. The property is instead
-        /// pinned by the header discriminator below, which no static readout can satisfy.
+        /// The .osr header is the discriminator. This fixture records TotalScore 1, MaxCombo 1 and
+        /// accuracy 1 — absurd values no real play of the map produces — and the first
+        /// implementation displayed exactly those from the first second of the song. Reading back a
+        /// full twenty-object combo with a real score is only possible if the numbers came from the
+        /// play itself.
         /// </para>
         /// </summary>
         [Test]
-        public void TheCellNumbersAreDrivenByJudgementsAsThePlayRuns()
+        public void TheCellNumbersShowThePlayRatherThanTheOsrHeader()
         {
-            var manual = new ManualClock();
-            var framed = new FramedClock(manual);
+            AddStep("build three", () => buildGrid(3));
+            AddUntilStep("plays recorded", () => grid.Simulator?.AllComplete == true);
 
-            AddStep("build three on a manual clock", () =>
-            {
-                buildGrid(3);
-                host.Clock = framed;
-                manual.CurrentTime = 0;
-                manual.IsRunning = true;
-            });
+            AddStep("show the end of the map", () => showAt(endOfMap));
 
-            AddUntilStep("grid loaded", () => grid.IsLoaded && grid.Cells.Count == 3);
-            AddAssert("every cell has a live processor", () => grid.Cells.All(c => c.LiveScore != null));
-
-            // Pumped by hand rather than left to the scene's frame loop, so the clock is doing the
-            // driving. Generous on purpose: exactly how far the play has already got by this point
-            // is not controllable (see below), so this runs well past the end of the map.
-            AddStep("play the map", () =>
-            {
-                for (int i = 0; i < 900; i++)
-                {
-                    manual.CurrentTime += 16;
-                    framed.ProcessFrame();
-                    host.UpdateSubTree();
-                }
-            });
-
-            // The discriminator is the HEADER. This fixture's .osr records TotalScore 1, MaxCombo 1
-            // and accuracy 1 — deliberately absurd values that no real play of this map produces.
-            // The implementation being replaced displayed exactly those, so reading a full 20-combo,
-            // real-scored play here is only possible if the numbers came from judgements as the
-            // replay ran. Reverting to header totals fails on every one of these.
-            AddAssert("the numbers are a played score, not the .osr header's", () => grid.Cells.All(c =>
-                c.LiveScore!.JudgedHits == fixture_object_count
-                && c.LiveScore.Combo.Value == fixture_object_count
-                && c.LiveScore.TotalScore.Value > 1
-                && Precision.AlmostEquals((float)c.LiveScore.Accuracy.Value, 1f, 0.001f)));
+            AddAssert("every cell reads a played score", () => Enumerable.Range(0, 3).All(cell =>
+                grid.ComboTextFor(cell) == $"{fixture_object_count}x"
+                && grid.AccuracyTextFor(cell) == "100.00%"
+                && long.Parse(grid.ScoreTextFor(cell)) > 1));
         }
 
         /// <summary>
-        /// One player's play must never move another's numbers — a shared processor would make the
-        /// whole comparison a lie, and is the obvious wrong way to build this.
+        /// The defect a screenshot found: the numbers must survive the user touching the seek bar.
+        ///
+        /// <para>
+        /// They used to come from a score processor fed judgements as the replay played, which is
+        /// correct only while playing forwards from the start. A seek hard-seeks gameplay past
+        /// objects that are then never judged, and going backwards un-judges nothing — so after a
+        /// scrub the cells showed whatever had accumulated BEFORE it. Seeking early enough left all
+        /// of them reading 00000000 and 0x over gameplay visibly forty objects in: the user's
+        /// original complaint, under a different trigger.
+        /// </para>
         /// </summary>
         [Test]
-        public void EachCellScoresItsOwnPlayAndNobodyElses()
+        public void TheCellNumbersSurviveTheUserSeeking()
         {
             AddStep("build three", () => buildGrid(3));
-            AddUntilStep("grid loaded", () => grid.Cells.Count == 3);
+            AddUntilStep("plays recorded", () => grid.Simulator?.AllComplete == true);
 
-            AddAssert("three distinct processors", () =>
-                grid.Cells.Select(c => c.LiveScore).Distinct().Count() == 3);
+            AddStep("jump straight to the end without playing there", () => showAt(endOfMap));
+            AddAssert("the cells show the finished play", () =>
+                grid.ComboTextFor(0) == $"{fixture_object_count}x");
+
+            AddStep("drag back to the middle", () => showAt(timeOfObject(9)));
+            AddAssert("and the numbers come back DOWN with it", () =>
+                grid.ComboTextFor(0) == "10x");
+
+            AddStep("and back to the very start", () => showAt(0));
+            AddAssert("reading nothing scored yet", () =>
+                grid.ComboTextFor(0) == "0x" && long.Parse(grid.ScoreTextFor(0)) == 0);
+
+            AddStep("forward again", () => showAt(timeOfObject(14)));
+            AddAssert("which is the same answer as arriving there by playing", () =>
+                grid.ComboTextFor(0) == "15x");
+        }
+
+        private static double timeOfObject(int index) => fixture_first_object_ms + index * fixture_object_spacing_ms;
+
+        private static double endOfMap => timeOfObject(fixture_object_count - 1) + 2000;
+
+        /// <summary>Puts the grid at a moment in the song and lets it settle there.</summary>
+        private void showAt(double time)
+        {
+            host.Clock = seekClock = new FramedClock(seekSource);
+            seekSource.CurrentTime = time;
+
+            for (int i = 0; i < 5; i++)
+            {
+                seekClock.ProcessFrame();
+                host.UpdateSubTree();
+            }
+        }
+
+        private readonly ManualClock seekSource = new ManualClock();
+        private FramedClock seekClock = null!;
+
+        /// <summary>
+        /// A cell must show ITS player's play and nobody else's — the failure that would make the
+        /// whole side-by-side comparison a lie.
+        ///
+        /// <para>
+        /// Asserted with plays that genuinely differ. The previous version checked only that the
+        /// three cells held three DISTINCT score objects, which is satisfied by three cells wired
+        /// to three of the wrong player's numbers.
+        /// </para>
+        /// </summary>
+        [Test]
+        public void EachCellShowsItsOwnPlayAndNobodyElses()
+        {
+            // Each player drops exactly one object, at a different point, so at the end their
+            // combos are 19, 14 and 9 — three values that cannot be confused for one another.
+            AddStep("build three who fail at different points", () => buildGrid(3, misses: new[]
+            {
+                new[] { 0 },
+                new[] { 5 },
+                new[] { 10 },
+            }));
+
+            AddUntilStep("plays recorded", () => grid.Simulator?.AllComplete == true);
+            AddStep("show the end", () => showAt(endOfMap));
+
+            AddAssert("each cell carries its own player's combo", () =>
+                grid.ComboTextFor(0) == "19x"
+                && grid.ComboTextFor(1) == "14x"
+                && grid.ComboTextFor(2) == "9x");
         }
 
         private float[] cellDimAlphas() => grid.ChildrenOfType<osu.Framework.Graphics.Shapes.Box>()
