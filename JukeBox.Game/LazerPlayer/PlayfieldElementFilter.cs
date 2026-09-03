@@ -59,13 +59,13 @@ public partial class PlayfieldElementFilter : SkinProvidingContainer
     /// <summary>Test hook: how many lookups have been suppressed in total.</summary>
     internal int SuppressedLookups => filter.SuppressedLookups;
 
-    public PlayfieldElementFilter(PlayfieldElementVisibility visibility)
+    public PlayfieldElementFilter(PlayfieldElementVisibility visibility, IReadOnlyCollection<PlayfieldElement>? alwaysHidden = null)
     {
         this.visibility = visibility;
 
         RelativeSizeAxes = Axes.Both;
 
-        SetSources(new ISkin[] { filter = new HidingSkin(visibility) });
+        SetSources(new ISkin[] { filter = new HidingSkin(visibility, alwaysHidden) });
     }
 
     protected override void LoadComplete()
@@ -88,6 +88,7 @@ public partial class PlayfieldElementFilter : SkinProvidingContainer
     private class HidingSkin : ISkin
     {
         private readonly PlayfieldElementVisibility visibility;
+        private readonly IReadOnlyCollection<PlayfieldElement> alwaysHidden;
         private readonly HashSet<PlayfieldElement> lookedUp = new HashSet<PlayfieldElement>();
         private readonly HashSet<PlayfieldElement> suppressed = new HashSet<PlayfieldElement>();
 
@@ -95,9 +96,10 @@ public partial class PlayfieldElementFilter : SkinProvidingContainer
         public IReadOnlyCollection<PlayfieldElement> SuppressedElements => suppressed;
         public int SuppressedLookups { get; private set; }
 
-        public HidingSkin(PlayfieldElementVisibility visibility)
+        public HidingSkin(PlayfieldElementVisibility visibility, IReadOnlyCollection<PlayfieldElement>? alwaysHidden)
         {
             this.visibility = visibility;
+            this.alwaysHidden = alwaysHidden ?? System.Array.Empty<PlayfieldElement>();
         }
 
         public Drawable? GetDrawableComponent(ISkinComponentLookup lookup)
@@ -109,7 +111,7 @@ public partial class PlayfieldElementFilter : SkinProvidingContainer
 
                 lookedUp.Add(entry.Element);
 
-                if (!visibility.IsHidden(entry.Element))
+                if (!alwaysHidden.Contains(entry.Element) && !visibility.IsHidden(entry.Element))
                     continue;
 
                 suppressed.Add(entry.Element);

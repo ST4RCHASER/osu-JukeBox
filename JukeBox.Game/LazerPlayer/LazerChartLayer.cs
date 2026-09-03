@@ -109,6 +109,14 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
     internal static JukeBoxSkin? ParseSkin(string? key)
         => Enum.TryParse<JukeBoxSkin>(key, out var skin) ? skin : null;
 
+    /// <summary>
+    /// Playfield elements hidden unconditionally on this layer, ON TOP of the shared visibility
+    /// settings. The combine view forces <see cref="PlayfieldElement.Judgements"/> off so its
+    /// playfield shows only the coloured cursors — the per-hit 100/50/300 popups are already read off
+    /// the rail's judgement column — without touching the single-chart view's own setting.
+    /// </summary>
+    internal IReadOnlyCollection<PlayfieldElement> AlwaysHiddenElements { get; init; } = Array.Empty<PlayfieldElement>();
+
     /// <summary>Test hook: the mods gameplay and scoring actually run under.</summary>
     internal IReadOnlyList<Mod> ActiveMods => mods;
 
@@ -407,7 +415,7 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
 
         if (elementVisibility != null)
         {
-            rulesetHost = ElementFilter = new PlayfieldElementFilter(elementVisibility)
+            rulesetHost = ElementFilter = new PlayfieldElementFilter(elementVisibility, AlwaysHiddenElements)
             {
                 Child = drawableRuleset,
             };

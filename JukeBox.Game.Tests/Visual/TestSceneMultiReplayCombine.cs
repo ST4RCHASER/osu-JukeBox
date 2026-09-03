@@ -826,6 +826,23 @@ namespace JukeBox.Game.Tests.Visual
         private OsuSpriteText? breakBubble() =>
             combine.Cursors[1]?.ChildrenOfType<OsuSpriteText>().FirstOrDefault(t => t.Colour == Color4.Red);
 
+        /// <summary>
+        /// The combine playfield shows cursors only — no per-hit 100/50/300 popups (those are read
+        /// off the rail's judgement column). Asserted on the chart's element filter having actually
+        /// suppressed the judgement component the ruleset looked up.
+        /// </summary>
+        [Test]
+        public void TheCombinePlayfieldHidesTheJudgementPopups()
+        {
+            AddStep("build two", () => build(2));
+            AddUntilStep("chart loaded", () => combine.Chart.DrawableRuleset != null);
+            AddStep("play through some objects", () => playTo(timeOf(8)));
+
+            AddAssert("the judgement popups are suppressed on the playfield", () =>
+                combine.Chart.ElementFilter != null
+                && combine.Chart.ElementFilter.SuppressedElementsSeen.Contains(PlayfieldElement.Judgements));
+        }
+
         private void buildWithNames(params string[] names)
         {
             var replays = names.Select(n => replayFor(n)).ToList();
