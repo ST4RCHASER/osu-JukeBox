@@ -174,6 +174,12 @@ public partial class BeatmapVisuals : CompositeDrawable
     [Resolved(canBeNull: true)]
     private ReplayStore? replays { get; set; }
 
+    // Per-player overrides. A mods or skin override changes what a player's render IS, so it rebuilds
+    // the multi-replay stack (which re-runs the simulator under the new mods); a colour override is
+    // applied live inside the combine view and is ignored here.
+    [Resolved(canBeNull: true)]
+    private PlayerOverrideStore? overrideStore { get; set; }
+
     // Only MainScreen caches this, which is deliberate: the detached VIEWER window builds its own
     // visual stack and resolves nothing here, so the notice is raised once, in the master window
     // the user is actually interacting with. See VideoNotifier.
@@ -693,6 +699,22 @@ public partial class BeatmapVisuals : CompositeDrawable
         // what this class holds — so the Chart tab reads the answer from here rather than decoding
         // anything itself.
         publishConversionState();
+
+        // A per-player mods/skin change rebuilds the side-by-side so the simulator re-scores that
+        // player under the new mods. Colour changes re-tint live inside the combine view — no rebuild.
+        if (overrideStore != null)
+            overrideStore.Changed += onPlayerOverrideChanged;
+    }
+
+    private void onPlayerOverrideChanged(ReplayAttachment replay, PlayerOverrideKind kind)
+    {
+        if (kind == PlayerOverrideKind.Colour)
+            return;
+
+        // Only if this player belongs to the difficulty on screen — an override for a replay of a
+        // different map is not ours to react to.
+        if (replays?.AllForOsuFile(osuFile).Contains(replay) == true)
+            rebuildForMultiReplayMode();
     }
 
     /// <summary>Tells the shared conversion service what is actually on screen for this
@@ -1172,6 +1194,9 @@ public partial class BeatmapVisuals : CompositeDrawable
 
     protected override void Dispose(bool isDisposing)
     {
+        if (overrideStore != null)
+            overrideStore.Changed -= onPlayerOverrideChanged;
+
         base.Dispose(isDisposing);
         backgroundTextures?.Dispose();
     }
