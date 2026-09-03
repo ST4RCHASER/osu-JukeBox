@@ -300,7 +300,6 @@ public partial class KnockoutBoard : CompositeDrawable
 
         internal string AccuracyText => accuracy.Text.ToString()!;
 
-        private readonly Circle dot = null!;
         private readonly OsuSpriteText performance = null!;
         private readonly OsuSpriteText grade = null!;
         private readonly OsuSpriteText mods = null!;
@@ -426,14 +425,9 @@ public partial class KnockoutBoard : CompositeDrawable
                     Margin = new MarginPadding { Left = 5 },
                     Children = new Drawable[]
                     {
-                        // The dot is the only thing tying this row to a cursor weaving about the
-                        // playfield, and the reference render carries one at the head of each row.
-                        dot = new Circle
-                        {
-                            Anchor = Anchor.CentreLeft,
-                            Origin = Anchor.CentreLeft,
-                            Colour = entrant.Colour,
-                        },
+                        // No dot: the player colour lives on the NAME instead (see playerName
+                        // below), matching the target render — a coloured circle here was redundant
+                        // once the name carries the colour.
                         accuracy = text("100.00%", FontWeight.SemiBold),
                         performance = text("0.00pp", FontWeight.Regular),
 
@@ -479,7 +473,6 @@ public partial class KnockoutBoard : CompositeDrawable
         public void Apply(RailMetrics metrics)
         {
             Height = metrics.RowHeight;
-            dot.Size = new Vector2(metrics.DotSize);
             performance.Alpha = metrics.ShowPerformance ? 1 : 0;
 
             foreach (var sprite in new[] { accuracy, performance, grade, playerName, combo, score })
