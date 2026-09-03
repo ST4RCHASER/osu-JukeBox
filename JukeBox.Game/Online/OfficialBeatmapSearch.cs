@@ -382,6 +382,19 @@ namespace JukeBox.Game.Online
             }
         }
 
+        /// <summary>
+        /// The app-only (<c>client_credentials</c>) token, for another feature that speaks to the
+        /// same API with the same credentials — spectating, which needs a bearer token for the
+        /// public user and score endpoints and has no reason to mint a second one of its own.
+        ///
+        /// <para>
+        /// Sharing this one keeps the caching, the serialisation and the expiry headroom in a single
+        /// place: two independent minters against the same client id would each hold their own token
+        /// and refresh on their own schedule, for no benefit.
+        /// </para>
+        /// </summary>
+        public Task<string> AcquireTokenAsync(CancellationToken ct = default) => getTokenAsync(ct);
+
         private async Task<string> getTokenAsync(CancellationToken ct)
         {
             string id = clientId.Value.Trim();

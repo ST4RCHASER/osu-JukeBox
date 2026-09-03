@@ -366,7 +366,8 @@ namespace JukeBox.Game
             // The signed-in osu! account (Settings -> Account). Cached unconditionally, like the
             // search above: with nobody connected it simply reports no token, and every feature
             // that needs one treats that as "unavailable" rather than as an error.
-            dependencies.Cache(new OsuAccount(new OsuOAuth(http), config));
+            var account = new OsuAccount(new OsuOAuth(http), config);
+            dependencies.Cache(account);
 
             var cache = new BeatmapCache(Host.Storage.GetFullPath("cache"), mirror, config.Get<bool>(JukeBoxSetting.NoVideoDownloads));
             dependencies.Cache(cache);
@@ -377,6 +378,15 @@ namespace JukeBox.Game
             // Session-lifetime registry of dropped .osr replays, keyed by the difficulty each was
             // played on. Cached before the visuals stack can resolve it (see BeatmapVisuals).
             dependencies.Cache(new Replays.ReplayStore());
+
+            // Spectating. Cached and added unconditionally, like the search and the account above:
+            // with no credentials it simply reports that it cannot poll, and it does nothing at all
+            // until someone presses Start. The API client is built HERE because it needs the app's
+            // single HttpClient, which is deliberately not in DI.
+            var spectateApi = new OsuSpectateApi(http, ct => SpectateController.TokenAsync(account, officialSearch, ct));
+            var spectate = new SpectateController(spectateApi);
+            dependencies.Cache(spectate);
+            Add(spectate);
 
             // The radio gets the SAME search backend the listing uses, plus the cache as a last
             // resort. Both matter for reasons that only show up when the network is degraded: the

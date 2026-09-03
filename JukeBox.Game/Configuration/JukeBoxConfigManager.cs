@@ -167,6 +167,15 @@ public enum JukeBoxSetting
     OsuUserId,
 
     /// <summary>
+    /// The players being watched, as a comma-separated list of usernames (see
+    /// <see cref="Online.SpectateWatchList"/>). Names rather than ids so the stored value stays
+    /// readable and survives someone editing the file by hand; the ids are resolved at poll time.
+    /// Whether spectating is RUNNING is deliberately not persisted — a poll loop that resumed
+    /// itself on launch would spend the replay-download budget before anyone asked it to.
+    /// </summary>
+    SpectateWatchedUsers,
+
+    /// <summary>
     /// The gameplay mods the Chart tab applies to the autoplay chart, as a comma-separated list of
     /// osu! acronyms ("HD,HR,DT"). Stored as acronyms rather than one boolean key per mod so the
     /// set can grow without churning this enum — and because an acronym is exactly how osu! itself
@@ -536,6 +545,7 @@ public class JukeBoxConfigManager : IniConfigManager<JukeBoxSetting>
         SetDefault(JukeBoxSetting.OsuUserTokenExpiry, string.Empty);
         SetDefault(JukeBoxSetting.OsuUserName, string.Empty);
         SetDefault(JukeBoxSetting.OsuUserId, 0);
+        SetDefault(JukeBoxSetting.SpectateWatchedUsers, string.Empty);
 
         SetDefault(JukeBoxSetting.ShowStoryboard, true);
         SetDefault(JukeBoxSetting.ShowVideo, true);

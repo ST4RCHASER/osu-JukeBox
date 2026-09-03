@@ -114,6 +114,14 @@ public partial class MainScreen : Screen
     private LaunchArgumentImporter launchArguments { get; set; } = null!;
 
     /// <summary>
+    /// Nullable because a test host that assembles this screen without the game's own dependency
+    /// graph has no spectate controller to give it, and the wall is an optional part of the box
+    /// rather than something the screen cannot function without.
+    /// </summary>
+    [Resolved(CanBeNull = true)]
+    private Online.SpectateController? spectate { get; set; }
+
+    /// <summary>
     /// A bound COPY of <see cref="Jukebox.LastError"/> rather than a subscription straight onto
     /// the jukebox's own bindable. The jukebox long outlives any one screen, so a direct
     /// subscription keeps a dead screen's <see cref="showToast"/> callback alive on it — and that
@@ -184,6 +192,10 @@ public partial class MainScreen : Screen
 
     private TransientValueOverlay transientValues = null!;
     private Container sceneContainer = null!;
+    private Container spectateHost = null!;
+
+    /// <summary>Which plays the wall is currently built from — see <see cref="updateSpectateWall"/>.</summary>
+    private string spectateWallKey = string.Empty;
     private FillFlowContainer detachedPlaceholder = null!;
     private ScreenStack visualsStack = null!;
 
@@ -409,6 +421,16 @@ public partial class MainScreen : Screen
                                 Size = new Vector2(scene_width, scene_height),
                                 Child = visualsStack = new ScreenStack { RelativeSizeAxes = Axes.Both },
                             },
+                            // The spectate wall, which takes over the box while it has anything to
+                            // show. A sibling of the scene rather than something inside it: the
+                            // panes each own a beatmap, a clock and an audio track of their own,
+                            // which is precisely what the scene is not built to hold (it renders
+                            // ONE map on the playback clock).
+                            spectateHost = new Container
+                            {
+                                RelativeSizeAxes = Axes.Both,
+                                Alpha = 0,
+                            },
                             // Shown instead of the scene while DetachPlayer has the visuals living
                             // in their own window (see Detach.DetachedViewerManager). The scene
                             // itself stays loaded underneath at Alpha 0 — draw cost is skipped, but
@@ -611,6 +633,14 @@ public partial class MainScreen : Screen
         detachPlayOnMain.BindValueChanged(_ => updatePlayerBoxPresentation());
         updatePlayerBoxPresentation();
 
+        if (spectate != null)
+        {
+            // Revision is bumped once per poll that changed something, and stopping clears the
+            // wall through the same path — so both edges are covered by one handler.
+            spectate.Revision.BindValueChanged(_ => updateSpectateWall());
+            spectate.Active.BindValueChanged(_ => updateSpectateWall(), true);
+        }
+
         removeChartMask = config.GetBindable<bool>(JukeBoxSetting.RemoveChartMask);
         removeStoryboardMask = config.GetBindable<bool>(JukeBoxSetting.RemoveStoryboardMask);
         removeChartMask.BindValueChanged(_ => releasesChanged());
@@ -718,12 +748,55 @@ public partial class MainScreen : Screen
     // needs pinned down.
     private void updatePlayerBoxPresentation()
     {
-        bool placeholderShown = detachPlayer.Value && !detachPlayOnMain.Value;
+        // Spectating outranks both other states: it only ever has content because the user asked
+        // for it and somebody is playing, and it is what they are looking at the window for.
+        bool spectating = spectateHost.Count > 0;
+        bool placeholderShown = !spectating && detachPlayer.Value && !detachPlayOnMain.Value;
 
-        sceneContainer.Alpha = placeholderShown ? 0 : 1;
+        sceneContainer.Alpha = placeholderShown || spectating ? 0 : 1;
         detachedPlaceholder.Alpha = placeholderShown ? 1 : 0;
+        spectateHost.Alpha = spectating ? 1 : 0;
 
-        Logger.Log($"Player box presentation: detach={detachPlayer.Value} playOnMain={detachPlayOnMain.Value} → {(placeholderShown ? "placeholder" : "scene")}");
+        string showing = spectating ? "spectate wall" : placeholderShown ? "placeholder" : "scene";
+
+        Logger.Log($"Player box presentation: detach={detachPlayer.Value} playOnMain={detachPlayOnMain.Value} spectating={spectating} → {showing}");
+    }
+
+    /// <summary>
+    /// Rebuilds the spectate wall when the set of players on it changes.
+    ///
+    /// <para>
+    /// Keyed on WHICH plays are showing rather than rebuilt every poll: a pane owns a beatmap, a
+    /// clock and an audio track, so recreating one restarts its sound. Most polls change nothing
+    /// visible (nobody finished a map in the last twenty seconds), and the ones that do usually
+    /// change one cell's occupant — which is genuinely a new pane, and the only case that should
+    /// cost one.
+    /// </para>
+    /// </summary>
+    private void updateSpectateWall()
+    {
+        var entries = spectate?.Rendered ?? Array.Empty<Replays.SpectateEntry>();
+
+        var paths = new string[entries.Count];
+
+        for (int i = 0; i < entries.Count; i++)
+            paths[i] = entries[i].Replay.SourcePath;
+
+        string key = string.Join('\n', paths);
+
+        if (key == spectateWallKey)
+            return;
+
+        spectateWallKey = key;
+
+        // Clear disposes the old panes, and with them their tracks and track stores — the one thing
+        // that must happen before new ones start, or the wall accumulates audio voices.
+        spectateHost.Clear();
+
+        if (entries.Count > 0)
+            spectateHost.Add(new LazerPlayer.IndependentReplayPanes(entries) { RelativeSizeAxes = Axes.Both });
+
+        updatePlayerBoxPresentation();
     }
 
     /// <summary>

@@ -51,9 +51,16 @@ internal partial class TextButton : ClickableContainer
         }
     }
 
-    /// <summary>Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the rendered label,
-    /// so a button can be located by what it says rather than by layout position.</summary>
-    internal string Label => label.Text.ToString();
+    /// <summary>
+    /// The rendered label — readable so a button can be located by what it says rather than by
+    /// layout position, and settable for a button whose meaning toggles rather than being one of a
+    /// pair (spectating's Start/Stop is one control in two states, not two controls).
+    /// </summary>
+    public string Text
+    {
+        get => label.Text.ToString();
+        set => label.Text = value;
+    }
 
     public TextButton(string text, IconUsage? icon = null)
     {

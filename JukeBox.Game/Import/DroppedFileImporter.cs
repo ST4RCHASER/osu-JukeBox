@@ -465,25 +465,34 @@ public partial class DroppedFileImporter : Component
     /// </para>
     /// </summary>
     internal static string? ResolveDifficulty(Beatmaps.CachedBeatmapSet cached, Online.BeatmapSetInfo set, string replayMd5)
+        => ResolveDifficulty(cached, replayMd5,
+            set.Beatmaps.FirstOrDefault(b => string.Equals(b.Checksum, replayMd5, StringComparison.OrdinalIgnoreCase))?.Version);
+
+    /// <summary>
+    /// The same resolution for a caller that already knows the difficulty's NAME and so needs no
+    /// set to look it up in — which is spectating's position: osu!'s own score carries both the
+    /// checksum and the version, so the mirror search the overload above performs would be a
+    /// request asking for something already in hand.
+    /// </summary>
+    /// <param name="cached">The downloaded set to pick a file out of.</param>
+    /// <param name="replayMd5">The checksum the play recorded.</param>
+    /// <param name="knownVersion">The canonical difficulty name for that checksum, when known.</param>
+    internal static string? ResolveDifficulty(Beatmaps.CachedBeatmapSet cached, string replayMd5, string? knownVersion)
     {
         string? exact = cached.OsuFiles.FirstOrDefault(f => md5OfFile(f) == replayMd5);
 
         if (exact != null)
             return exact;
 
-        string? version = set.Beatmaps
-                             .FirstOrDefault(b => string.Equals(b.Checksum, replayMd5, StringComparison.OrdinalIgnoreCase))
-                             ?.Version;
-
-        if (string.IsNullOrEmpty(version))
+        if (string.IsNullOrEmpty(knownVersion))
             return null;
 
         string? byVersion = cached.Difficulties
-                                  .FirstOrDefault(d => string.Equals(d.Version, version, StringComparison.Ordinal))
+                                  .FirstOrDefault(d => string.Equals(d.Version, knownVersion, StringComparison.Ordinal))
                                   ?.Path;
 
         if (byVersion != null)
-            Logger.Log($"[drop] cached files don't hash to the replay's checksum (repacked archive); matched difficulty '{version}' through the mirror's published checksums instead");
+            Logger.Log($"[replay] cached files don't hash to the replay's checksum (repacked archive); matched difficulty '{knownVersion}' by name instead");
 
         return byVersion;
     }

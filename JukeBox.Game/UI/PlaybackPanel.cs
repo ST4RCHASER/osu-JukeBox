@@ -18,12 +18,14 @@ namespace JukeBox.Game.UI;
 
 /// <summary>
 /// The right column's "Playback" tab body — everything about what is playing and how, in one
-/// scrollable column, in two <see cref="Theme"/>-headed sections:
+/// scrollable column, in three <see cref="Theme"/>-headed sections:
 ///
 /// <list type="bullet">
 /// <item><b>Playback</b> — <see cref="NowPlayingPanel"/> (cover, title/artist, status, the
 /// transport strip with its open-in-browser button, seekable progress, difficulty dropdown) and
 /// the playback-speed slider.</item>
+/// <item><b>Spectate</b> — <see cref="SpectatePanel"/>: the watch list and the start/stop
+/// button.</item>
 /// <item><b>Queue</b> — the existing <see cref="QueuePanel"/> (list, per-row download status,
 /// removal), filling whatever height is left below the playback section.</item>
 /// </list>
@@ -67,6 +69,7 @@ public partial class PlaybackPanel : CompositeDrawable
     private OsuScrollContainer scroll = null!;
     private PlaybackSpeedSlider playbackRateRow = null!;
     private SpriteText virtualAudioNote = null!;
+    private SpectatePanel spectatePanel = null!;
 
     /// <summary>Test-only access (JukeBox.Game.Tests has InternalsVisibleTo) to the tab's pieces,
     /// so tests can assert what this section contains without depending on its internal layout.</summary>
@@ -75,6 +78,8 @@ public partial class PlaybackPanel : CompositeDrawable
     internal QueuePanel Queue => queuePanel;
 
     internal PlaybackSpeedSlider PlaybackRateSlider => playbackRateRow;
+
+    internal SpectatePanel Spectate => spectatePanel;
 
     [BackgroundDependencyLoader]
     private void load()
@@ -126,6 +131,12 @@ public partial class PlaybackPanel : CompositeDrawable
                             Padding = new MarginPadding { Horizontal = -SettingsPanel.CONTENT_MARGINS },
                             Child = playbackRateRow,
                         },
+                        // Spectating lives in this tab rather than in Settings because it is
+                        // something you DO — a list you edit and a button you press while
+                        // watching — not something you configure once. Above the queue for the
+                        // same reason the transport is: the queue takes whatever height is left,
+                        // so anything below it would be pushed off a short window.
+                        spectatePanel = new SpectatePanel(),
                         // No shortcut caption here by request: the keys stay bound (see
                         // Input.PlaybackShortcuts) but the transport reads as controls rather than
                         // controls plus documentation. Discoverability was traded away knowingly.
