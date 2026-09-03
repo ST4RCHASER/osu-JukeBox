@@ -312,6 +312,22 @@ namespace JukeBox.Game.Tests.Visual
             AddUntilStep("it picks the work back up", () => simulator.AllComplete);
         }
 
+        /// <summary>
+        /// The board's grade and pp columns carry real values, and the grade is named the way a
+        /// PLAYER names it. lazer's enum calls a perfect play X, which is right internally and on
+        /// screen reads as a cross rather than as the best grade there is — the first capture of
+        /// this board showed "X" against every 100% row.
+        /// </summary>
+        [Test]
+        public void ACleanPlayIsGradedSSWithRealPerformancePoints()
+        {
+            AddStep("simulate a clean play", () => simulate(replay("clean")));
+            AddUntilStep("recorded", () => simulator.AllComplete);
+
+            AddAssert("graded SS, not X", () => simulator.Timelines[0].Points.Last().Grade == "SS");
+            AddAssert("with pp above zero", () => simulator.Timelines[0].Points.Last().Performance > 0);
+        }
+
         [Test]
         public void EachPlayerGetsTheirOwnRecordAndNobodyElses()
         {

@@ -9,8 +9,10 @@ using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Timing;
 using osu.Game.Beatmaps;
+using osu.Game.Rulesets.Difficulty;
 using osu.Game.Rulesets.Mods;
 using osu.Game.Rulesets.Objects;
+using osu.Game.Scoring;
 
 namespace JukeBox.Game.LazerPlayer;
 
@@ -153,10 +155,15 @@ public partial class ReplaySimulator : CompositeDrawable
     {
         base.LoadComplete();
 
+        // Difficulty attributes are shared across every play that used the same mods — see
+        // ReplayPerformance. One pass over the map per mod set, not per player.
+        var attributeCache = new Dictionary<string, DifficultyAttributes>(StringComparer.Ordinal);
+
         foreach (var replay in replays)
         {
             var manual = new ManualClock();
-            var layer = new LazerChartLayer(new FlatWorkingBeatmap(osuFile), osuFile, replay.Score)
+            var working = new FlatWorkingBeatmap(osuFile);
+            var layer = new LazerChartLayer(working, osuFile, replay.Score)
             {
                 RelativeSizeAxes = Axes.Both,
                 AlwaysPresent = true,
@@ -169,7 +176,7 @@ public partial class ReplaySimulator : CompositeDrawable
                 UseRecordedReplayModsOnly = true,
             };
 
-            simulations.Add(new Simulation(layer, manual, (FramedClock)layer.Clock));
+            simulations.Add(new Simulation(layer, manual, (FramedClock)layer.Clock, working, attributeCache));
             AddInternal(layer);
         }
 
@@ -301,12 +308,32 @@ public partial class ReplaySimulator : CompositeDrawable
 
         public double? EndTime => Layer.PlayableBeatmap?.HitObjects.LastOrDefault()?.GetEndTime();
 
-        public Simulation(LazerChartLayer layer, ManualClock manual, FramedClock framed)
+        public Simulation(LazerChartLayer layer, ManualClock manual, FramedClock framed, IWorkingBeatmap beatmap, Dictionary<string, DifficultyAttributes> attributeCache)
         {
             Layer = layer;
             Manual = manual;
             Framed = framed;
+            this.beatmap = beatmap;
+            this.attributeCache = attributeCache;
         }
+
+        private readonly IWorkingBeatmap beatmap;
+        private readonly Dictionary<string, DifficultyAttributes> attributeCache;
+
+        /// <summary>
+        /// The rank as a PLAYER would name it. lazer's enum calls a perfect play X and a
+        /// silver-S SH, which are correct internally and wrong on screen: the board showed "X" for
+        /// 100%, which reads as a cross rather than as the best grade there is.
+        /// </summary>
+        private static string gradeLetter(ScoreRank rank) => rank switch
+        {
+            ScoreRank.X or ScoreRank.XH => "SS",
+            ScoreRank.S or ScoreRank.SH => "S",
+            _ => rank.ToString(),
+        };
+
+        private ReplayPerformance? performanceFor(LazerChartLayer layer)
+            => layer.Ruleset == null ? null : ReplayPerformance.Create(layer.Ruleset, beatmap, layer.ActiveMods, attributeCache);
 
         /// <summary>
         /// Starts recording, once the ruleset exists. Subscribed AFTER the layer's own score
@@ -323,6 +350,7 @@ public partial class ReplaySimulator : CompositeDrawable
             RecordedModsOnly = Layer.UseRecordedReplayModsOnly;
 
             var score = Layer.LiveScore;
+            var performance = performanceFor(Layer);
 
             Layer.DrawableRuleset.NewResult += result =>
             {
@@ -339,7 +367,9 @@ public partial class ReplaySimulator : CompositeDrawable
                     score.TotalScore.Value,
                     combo,
                     score.Accuracy.Value,
-                    broke));
+                    broke,
+                    gradeLetter(score.Rank.Value),
+                    performance?.PointsFor(score) ?? 0));
             };
         }
     }

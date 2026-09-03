@@ -11,7 +11,17 @@ namespace JukeBox.Game.Replays;
 /// <param name="Combo">Combo after it — zero on the judgement that broke it.</param>
 /// <param name="Accuracy">Accuracy after it, 0-1.</param>
 /// <param name="BrokeCombo">Whether THIS judgement broke a combo the player was holding.</param>
-public readonly record struct TimelinePoint(double Time, long Score, int Combo, double Accuracy, bool BrokeCombo);
+/// <param name="Grade">osu!'s own rank letter for the play so far. Taken from lazer's score
+/// processor rather than re-derived from accuracy here, so it says what the game would say.</param>
+/// <param name="Performance">Performance points for the play so far.</param>
+public readonly record struct TimelinePoint(
+    double Time,
+    long Score,
+    int Combo,
+    double Accuracy,
+    bool BrokeCombo,
+    string Grade = "",
+    double Performance = 0);
 
 /// <summary>
 /// A player's whole play, recorded once as a list of states over time, so that what the scoreboard

@@ -78,39 +78,36 @@ public partial class PlayerCursor : CompositeDrawable
         // container's own size is only there to give the cursor somewhere to live.
         RelativeSizeAxes = Axes.Both;
 
-        InternalChild = body = new Container
+        this.playerName = playerName;
+
+        InternalChildren = new Drawable[]
         {
-            AutoSizeAxes = Axes.Both,
-            Origin = Anchor.Centre,
-            Children = new Drawable[]
+            // The trail is drawn UNDER the cursor and in the playfield's own space, so its segments
+            // land where the cursor has been rather than following the head around.
+            trail = new PlayerCursorTrail(colour),
+
+            body = new Container
             {
-                dot = new Circle
+                AutoSizeAxes = Axes.Both,
+                Origin = Anchor.Centre,
+                Child = dot = new Circle
                 {
                     Anchor = Anchor.Centre,
                     Origin = Anchor.Centre,
-                    Size = new Vector2(14),
+                    Size = new Vector2(11),
                     Colour = colour,
                     // A dark rim, because a saturated dot on a busy playfield of similarly
                     // saturated hit circles is hard to pick out on its own.
                     BorderColour = Color4.Black.Opacity(0.6f),
-                    BorderThickness = 3,
+                    BorderThickness = 2.5f,
                     Masking = true,
-                },
-                nameTag = new OsuSpriteText
-                {
-                    // Beside the cursor rather than on it: over it, the name covers the very thing
-                    // the viewer is trying to follow.
-                    Anchor = Anchor.Centre,
-                    Origin = Anchor.CentreLeft,
-                    X = 12,
-                    Text = playerName,
-                    Font = OsuFont.Torus.With(size: 13, weight: FontWeight.Bold),
-                    Colour = colour,
-                    Shadow = true,
                 },
             },
         };
     }
+
+    private readonly string playerName;
+    private readonly PlayerCursorTrail trail;
 
     protected override void Update()
     {
@@ -120,6 +117,7 @@ public partial class PlayerCursor : CompositeDrawable
         {
             HasPosition = false;
             body.Alpha = 0;
+            trail.Clear();
             return;
         }
 
@@ -127,29 +125,43 @@ public partial class PlayerCursor : CompositeDrawable
         body.Alpha = 1;
 
         // Through the playfield's own transform, not as a raw coordinate: see PositionSpace.
-        body.Position = PositionSpace is { } space
+        var local = PositionSpace is { } space
             ? ToLocalSpace(space.ToScreenSpace(position))
             : position;
+
+        body.Position = local;
+        trail.AddPoint(local);
     }
 
     /// <summary>
-    /// The combo-break cue: the name flashes red and swells for about a second, the way a tournament
-    /// overlay marks a player dropping their combo. Transient by design — it says "that just
-    /// happened", not "that player is finished", so it fires whether or not knockout is switched on.
+    /// The combo-break cue on the playfield: the player's NAME appears at the point where they
+    /// dropped it, in red, and fades.
+    ///
+    /// <para>
+    /// The name is not on the cursor any more — with a dozen or more players the tags overlapped
+    /// into an unreadable pile, and the rail is where names belong. It comes back for a moment at
+    /// the one instant it answers a question the rail cannot: not "who is that", but "who just
+    /// missed, and where". It is left behind at the point of the miss rather than following the
+    /// cursor, because the interesting place is where the break happened.
+    /// </para>
     /// </summary>
     public void FlashComboBreak()
     {
-        nameTag.FadeColour(Color4.Red)
-               .Then().FadeColour(colour, 900, Easing.In);
-
-        nameTag.ScaleTo(1.6f)
-               .Then().ScaleTo(1, 900, Easing.OutQuint);
-
-        // The blink is what makes it catch the eye on a busy playfield; the fade alone reads as a
-        // colour change and is easy to miss.
-        nameTag.FadeTo(0.2f, 80).Then().FadeTo(1, 80)
-               .Then().FadeTo(0.2f, 80).Then().FadeTo(1, 80);
-
         dot.FlashColour(Color4.Red, 900, Easing.OutQuint);
+
+        var marker = new OsuSpriteText
+        {
+            Origin = Anchor.Centre,
+            Position = body.Position,
+            Text = playerName,
+            Font = OsuFont.Torus.With(size: 14, weight: FontWeight.Bold),
+            Colour = Color4.Red,
+            Shadow = true,
+        };
+
+        AddInternal(marker);
+
+        marker.ScaleTo(1.5f).Then().ScaleTo(1, 700, Easing.OutQuint);
+        marker.FadeIn(60).Then().Delay(500).FadeOut(400).Expire();
     }
 }

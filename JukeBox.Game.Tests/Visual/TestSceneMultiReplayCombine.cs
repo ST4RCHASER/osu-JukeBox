@@ -178,16 +178,28 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("all four colours differ", () =>
                 combine.Cursors.Where(c => c != null).Select(c => c!.Colour4).Distinct().Count() == 4);
 
-            AddAssert("and each carries its player's name", () =>
-            {
-                var names = combine.ChildrenOfType<PlayerCursor>()
-                                   .SelectMany(c => c.ChildrenOfType<OsuSpriteText>())
-                                   .Select(t => t.Text.ToString()!)
-                                   .Where(t => t.StartsWith("player", StringComparison.Ordinal))
-                                   .ToList();
+            // NAMES ARE NOT ON THE CURSORS, and that is the change rather than an oversight. They
+            // were, briefly, and with a dozen players the tags overlapped into an unreadable pile —
+            // the rail is where names belong. What tells cursors apart on the playfield is colour
+            // and a coloured trail; the name comes back only at the instant of a combo break.
+            AddAssert("no cursor carries a standing name tag", () =>
+                combine.ChildrenOfType<PlayerCursor>()
+                       .SelectMany(c => c.ChildrenOfType<OsuSpriteText>())
+                       .All(t => !t.Text.ToString()!.StartsWith("player", StringComparison.Ordinal)));
 
-                return names.Distinct().Count() == 4;
+            AddAssert("each has a trail in its own colour", () =>
+            {
+                var trails = combine.ChildrenOfType<PlayerCursorTrail>().ToList();
+                return trails.Count == 4 && trails.Select(t => t.TrailColour).Distinct().Count() == 4;
             });
+
+            AddStep("play a little", () => playTo(timeOf(3)));
+
+            // Existing and coloured is not the same as DRAWING anything: a trail that never records
+            // a point is an empty container with a colour, which every assertion above is happy
+            // with. This is what makes it a trail.
+            AddAssert("and every trail is actually tracking the cursor", () =>
+                combine.ChildrenOfType<PlayerCursorTrail>().All(t => t.SegmentCount > 1));
         }
 
         /// <summary>

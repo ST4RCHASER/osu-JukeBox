@@ -93,19 +93,26 @@ public partial class KnockoutBoard : CompositeDrawable
         => !timeline.Complete && time > timeline.SimulatedTo;
 
     /// <summary>
-    /// Fixed rather than auto-sized, for two reasons. A row's background is a Box filling it, and a
-    /// Box sized relative to a parent that is sizing itself to its children collapses to nothing —
-    /// which it did, leaving the knockout highlight invisible on screen while every test still
-    /// passed. And a board whose width changes with the longest name jitters as the rows re-order.
+    /// The metrics currently in force, recomputed whenever the board's height or the field size
+    /// changes. Test hook as well as state: the density rules are what stop 47 players running off
+    /// the bottom of the screen.
     /// </summary>
-    private const float board_width = 300;
+    internal RailMetrics Metrics { get; private set; } = RailDensity.For(0, 0);
+
+    /// <summary>Test hook: rows currently drawn, which is fewer than the field only when even the
+    /// smallest row will not fit for everyone.</summary>
+    internal int VisibleRowCount => Metrics.VisibleRows;
 
     public KnockoutBoard(IReadOnlyList<Entrant> entrants)
     {
         this.entrants = entrants;
 
-        Width = board_width;
-        Height = row_height * entrants.Count;
+        // Sized to its CONTAINER, not to its content. Sizing to content is what produced a board
+        // over a thousand pixels tall for 47 players, running off the bottom of the player box and
+        // over the app behind it. Masking makes that structural rather than a matter of arithmetic
+        // being right: nothing can be drawn outside the board's own bounds even if it tried.
+        RelativeSizeAxes = Axes.Y;
+        Masking = true;
     }
 
     protected override void LoadComplete()
@@ -114,12 +121,23 @@ public partial class KnockoutBoard : CompositeDrawable
 
         for (int i = 0; i < entrants.Count; i++)
         {
-            var row = new Row(i, entrants[i]) { Y = i * row_height };
+            var row = new Row(i, entrants[i]);
 
             rows.Add(row);
             AddInternal(row);
         }
+
+        AddInternal(overflowNote = new OsuSpriteText
+        {
+            Anchor = Anchor.BottomLeft,
+            Origin = Anchor.BottomLeft,
+            Colour = Color4.White.Opacity(0.6f),
+            Alpha = 0,
+            Margin = new MarginPadding { Left = 6 },
+        });
     }
+
+    private OsuSpriteText overflowNote = null!;
 
     protected override void Update()
     {
@@ -128,6 +146,8 @@ public partial class KnockoutBoard : CompositeDrawable
         if (rows.Count == 0)
             return;
 
+        applyDensity();
+
         double time = Clock.CurrentTime;
         var timelines = entrants.Select(e => e.Timeline).ToList();
         var standings = Rules.Standings(timelines, time);
@@ -135,7 +155,17 @@ public partial class KnockoutBoard : CompositeDrawable
         for (int rank = 0; rank < standings.Count; rank++)
         {
             var row = rows[standings[rank]];
-            float target = rank * row_height;
+
+            // Past what fits, a row is not drawn at all rather than drawn off the bottom. The
+            // players it stands for are reported in the overflow line instead of vanishing.
+            bool visible = rank < Metrics.VisibleRows;
+
+            row.Alpha = visible ? row.RestingAlpha : 0;
+
+            if (!visible)
+                continue;
+
+            float target = rank * Metrics.RowHeight;
 
             // Only animate an actual change. Re-issuing the same transform every frame restarts it
             // every frame, which leaves rows permanently easing towards a place they already are.
@@ -147,6 +177,30 @@ public partial class KnockoutBoard : CompositeDrawable
 
             row.UpdateFrom(entrants[standings[rank]].Timeline, Rules, time, rank + 1);
         }
+    }
+
+    /// <summary>
+    /// Re-sizes the board and its rows for the space actually available. Recomputed every frame but
+    /// only APPLIED on a change, because setting a font size rebuilds the text.
+    /// </summary>
+    private void applyDensity()
+    {
+        var metrics = RailDensity.For(entrants.Count, DrawHeight);
+
+        if (metrics.Equals(Metrics))
+            return;
+
+        Metrics = metrics;
+        Width = metrics.Width;
+
+        foreach (var row in rows)
+            row.Apply(metrics);
+
+        int hidden = entrants.Count - metrics.VisibleRows;
+
+        overflowNote.Alpha = hidden > 0 ? 1 : 0;
+        overflowNote.Text = hidden > 0 ? $"+{hidden} more" : string.Empty;
+        overflowNote.Font = OsuFont.Torus.With(size: metrics.FontSize, weight: FontWeight.SemiBold);
     }
 
     /// <summary>One player's line on the board.</summary>
@@ -196,14 +250,21 @@ public partial class KnockoutBoard : CompositeDrawable
 
         internal string AccuracyText => accuracy.Text.ToString()!;
 
+        private readonly Circle dot = null!;
+        private readonly OsuSpriteText performance = null!;
+        private readonly OsuSpriteText grade = null!;
+        private readonly FillFlowContainer left = null!;
+        private readonly FillFlowContainer right = null!;
+
+        /// <summary>The alpha this row rests at — dimmed once its player is out.</summary>
+        public float RestingAlpha { get; private set; } = 1;
+
         public Row(int playerIndex, Entrant entrant)
         {
             PlayerIndex = playerIndex;
-            TargetY = playerIndex * row_height;
             playerColour = entrant.Colour;
 
             RelativeSizeAxes = Axes.X;
-            Height = row_height;
 
             InternalChildren = new Drawable[]
             {
@@ -212,34 +273,65 @@ public partial class KnockoutBoard : CompositeDrawable
                     RelativeSizeAxes = Axes.Both,
                     Colour = Color4.Black.Opacity(0.45f),
                 },
-                new FillFlowContainer
+
+                // Who and how well, reading left to right the way the reference lays it out.
+                left = new FillFlowContainer
+                {
+                    AutoSizeAxes = Axes.Both,
+                    Direction = FillDirection.Horizontal,
+                    Spacing = new Vector2(5, 0),
+                    Anchor = Anchor.CentreLeft,
+                    Origin = Anchor.CentreLeft,
+                    Margin = new MarginPadding { Left = 5 },
+                    Children = new Drawable[]
+                    {
+                        // The dot is the only thing tying this row to a cursor weaving about the
+                        // playfield, which is why it is the same colour and never re-used.
+                        dot = new Circle
+                        {
+                            Anchor = Anchor.CentreLeft,
+                            Origin = Anchor.CentreLeft,
+                            Colour = entrant.Colour,
+                        },
+                        accuracy = text("100.00%", FontWeight.SemiBold),
+                        performance = text("0pp", FontWeight.Regular),
+                        grade = text("S", FontWeight.Bold),
+                        playerName = text(entrant.Name, FontWeight.SemiBold, entrant.Colour),
+                    },
+                },
+
+                // What they have, pinned to the right edge so the numbers line up down the board
+                // however long the names are.
+                right = new FillFlowContainer
                 {
                     AutoSizeAxes = Axes.Both,
                     Direction = FillDirection.Horizontal,
                     Spacing = new Vector2(6, 0),
-                    Anchor = Anchor.CentreLeft,
-                    Origin = Anchor.CentreLeft,
-                    Margin = new MarginPadding { Horizontal = 6 },
+                    Anchor = Anchor.CentreRight,
+                    Origin = Anchor.CentreRight,
+                    Margin = new MarginPadding { Right = 5 },
                     Children = new Drawable[]
                     {
-                        rank = text("1.", 12, FontWeight.Bold),
-
-                        // The dot is the only thing tying this row to a cursor weaving about the
-                        // playfield, which is why it is the same colour and never re-used.
-                        new Circle
-                        {
-                            Anchor = Anchor.CentreLeft,
-                            Origin = Anchor.CentreLeft,
-                            Size = new Vector2(8),
-                            Colour = entrant.Colour,
-                        },
-                        playerName = text(entrant.Name, 12, FontWeight.SemiBold, entrant.Colour),
-                        score = text("00000000", 12, FontWeight.Bold),
-                        accuracy = text("100.00%", 12, FontWeight.Regular),
-                        combo = text("0x", 12, FontWeight.Regular),
+                        combo = text("0x", FontWeight.Regular),
+                        score = text("00000000", FontWeight.Bold),
                     },
                 },
             };
+        }
+
+        /// <summary>Re-sizes this row for the current density.</summary>
+        public void Apply(RailMetrics metrics)
+        {
+            Height = metrics.RowHeight;
+            dot.Size = new Vector2(metrics.DotSize);
+            performance.Alpha = metrics.ShowPerformance ? 1 : 0;
+
+            foreach (var sprite in new[] { accuracy, performance, grade, playerName, combo, score })
+                sprite.Font = sprite.Font.With(size: metrics.FontSize);
+
+            // Spacing follows the text, or a dense board turns into one run-on line.
+            left.Spacing = new Vector2(metrics.FontSize * 0.42f, 0);
+            right.Spacing = new Vector2(metrics.FontSize * 0.5f, 0);
         }
 
         /// <summary>Reads this player's state at <paramref name="time"/> onto the row.</summary>
@@ -248,14 +340,14 @@ public partial class KnockoutBoard : CompositeDrawable
             var point = timeline.At(time);
             bool pending = IsPending(timeline, time);
 
-            rank.Text = $"{place}.";
-
             // Dashes rather than the last known figures. Beyond what has been simulated the
             // timeline's answer is simply the most recent thing it recorded, which reads as a real
             // score for a moment the player has not reached — a wrong number, not a missing one.
             score.Text = pending ? "--------" : point.Score.ToString("00000000");
             accuracy.Text = pending ? "--.--%" : (point.Accuracy * 100).ToString("0.00") + "%";
             combo.Text = pending ? "--x" : point.Combo.ToString("N0") + "x";
+            performance.Text = pending ? "--pp" : point.Performance.ToString("0") + "pp";
+            grade.Text = pending ? "-" : point.Grade;
 
             ShownPending = pending;
 
@@ -265,19 +357,20 @@ public partial class KnockoutBoard : CompositeDrawable
                 return;
 
             ShownAlive = alive;
+            RestingAlpha = alive ? 1 : 0.45f;
 
             // Knocked out reads as dimmed and desaturated rather than removed: a player who
             // vanishes has not been seen to lose.
-            this.FadeTo(alive ? 1 : 0.45f, 300, Easing.OutQuint);
+            this.FadeTo(RestingAlpha, 300, Easing.OutQuint);
             background.FadeColour(alive ? Color4.Black.Opacity(0.45f) : Color4.DarkRed.Opacity(0.5f), 300, Easing.OutQuint);
         }
 
-        private static OsuSpriteText text(string content, float size, FontWeight weight, Color4? colour = null) => new OsuSpriteText
+        private static OsuSpriteText text(string content, FontWeight weight, Color4? colour = null) => new OsuSpriteText
         {
             Anchor = Anchor.CentreLeft,
             Origin = Anchor.CentreLeft,
             Text = content,
-            Font = OsuFont.Torus.With(size: size, weight: weight),
+            Font = OsuFont.Torus.With(size: RailDensity.MAX_ROW_HEIGHT * 0.55f, weight: weight),
             Colour = colour ?? Color4.White,
             Shadow = true,
         };
