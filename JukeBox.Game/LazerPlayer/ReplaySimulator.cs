@@ -61,19 +61,7 @@ public partial class ReplaySimulator : CompositeDrawable
     private bool analytic;
 
     /// <summary>
-    /// Opt-in: use the fast analytic judge instead of the drawable renderer for osu maps. OFF by
-    /// default, so combine and grid use the drawable simulation. The analytic judge is a whole-map-in-
-    /// milliseconds danser-style scorer that matches the drawable oracle EXACTLY on the fixture maps
-    /// (see the cross-validation tests), but on real slider-heavy maps it still diverges — it grades
-    /// accuracy-affecting hits too leniently (reads ~100% where the play is ~99%) and its slider-tick
-    /// tracking is not yet exact — so it is NOT wired into production. Kept behind this flag for
-    /// continued work: the fix is to make the circle timing-grade and the slider follow-circle
-    /// tracking match lazer, then flip the default once the real-beatmap cross-validation agrees.
-    /// </summary>
-    internal bool UseAnalyticJudge { get; init; }
-
-    /// <summary>
-    /// Test seam: force the drawable simulation even for an osu map. The cross-validation test sets it
+    /// Test seam: force the drawable simulation even for an osu map. The cross-validation tests set it
     /// to get lazer's real gameplay as the oracle the analytic judge is checked against.
     /// </summary>
     internal bool ForceDrawableSimulation { get; init; }
@@ -175,7 +163,7 @@ public partial class ReplaySimulator : CompositeDrawable
         // beatmap means osu replays — and osu is the only ruleset with an analytic judge here. The
         // other three fall back to the drawable simulation, as does the forced-oracle test seam.
         bool osu = working.BeatmapInfo.Ruleset.OnlineID == 0;
-        analytic = osu && UseAnalyticJudge && !ForceDrawableSimulation;
+        analytic = osu && !ForceDrawableSimulation;
 
         if (analytic)
         {

@@ -175,48 +175,54 @@ public static class AnalyticOsuJudge
 
         float followRadius = (float)slider.Radius * follow_radius_multiplier;
 
+        // A slider is COMPLETED when the head was hit and the key stayed held to the tail — the classic
+        // slider model: holding to the end completes it, the follow circle being generous. That is what
+        // separates a real held/followed slider (key down through the body) from a tap-and-release,
+        // which drops the tail exactly as the drawable renderer does. Checked by key-held rather than
+        // an instantaneous cursor-on-ball test at the tail, since a real player's cursor is already
+        // sliding to the next object at the tail's precise instant.
+        var tail = nested.LastOrDefault(p => p.CreateJudgement().MaxResult == HitResult.SmallTickHit);
+        bool completed = headHit && tail != null && cursor.KeyHeldAt(tail.StartTime);
+
         foreach (var part in nested)
         {
             if (part is SliderHeadCircle)
                 continue;
 
-            // Ticks, repeats and the tail are all decided the same way: tracking at the part's time.
-            bool tracking = isTracking(slider, part.StartTime, followRadius, cursor);
             var judgement = part.CreateJudgement();
-            var result = tracking ? judgement.MaxResult : judgement.MinResult;
-            results.Add(new Judged(part, result, part.StartTime, ballPosition(slider, part.StartTime)));
+            bool isTail = judgement.MaxResult == HitResult.SmallTickHit;
+
+            // Ticks and repeats (LargeTick): the strict instantaneous follow-circle check, against the
+            // part's own StackedPosition (which lazer computed exactly) — re-deriving the ball position
+            // by interpolating the path myself only false-misses ticks on real sliders. The tail rides
+            // on slider completion above rather than an exact-instant check.
+            bool hit = isTail ? completed : isTracking(part.StackedPosition, part.StartTime, followRadius, cursor);
+
+            var result = hit ? judgement.MaxResult : judgement.MinResult;
+            results.Add(new Judged(part, result, part.StartTime, part.StackedPosition));
         }
 
-        var sliderJudgement = slider.CreateJudgement();
-        results.Add(new Judged(slider, headHit ? sliderJudgement.MaxResult : sliderJudgement.MinResult, slider.GetEndTime(), slider.StackedPosition));
+        // The slider's OWN aggregate:
+        //  - COMPLETED → a large tick, carrying combo but NOT accuracy (grading it as the head's Great
+        //    instead added a bogus 300 per slider and pinned accuracy at 100%);
+        //  - head hit but NOT completed (tapped and released) → IGNORED: no combo, but it does not
+        //    break combo either, which is what the drawable renderer records (the tick misses already
+        //    broke the combo) — a large-tick MISS here would diverge on that result;
+        //  - head missed entirely → an ignored miss.
+        var aggregate = completed ? HitResult.LargeTickHit
+            : headHit ? HitResult.IgnoreHit
+            : HitResult.IgnoreMiss;
+        results.Add(new Judged(slider, aggregate, slider.GetEndTime(), slider.StackedPosition));
     }
 
-    /// <summary>Whether the player is tracking the slider ball at <paramref name="time"/>: a key held
-    /// with the cursor inside the follow circle of the ball.</summary>
-    private static bool isTracking(Slider slider, double time, float followRadius, CursorTrack cursor)
+    /// <summary>Whether the player is tracking the slider ball (at <paramref name="ballPosition"/> at
+    /// <paramref name="time"/>): a key held with the cursor inside the follow circle of the ball.</summary>
+    private static bool isTracking(Vector2 ballPosition, double time, float followRadius, CursorTrack cursor)
     {
         if (!cursor.KeyHeldAt(time))
             return false;
 
-        var ball = ballPosition(slider, time);
-        return Vector2.Distance(cursor.PositionAt(time), ball) <= followRadius;
-    }
-
-    /// <summary>The slider ball's stacked position at <paramref name="time"/>, folding repeats into a
-    /// 0..1 path progress the way the ball travels back and forth.</summary>
-    private static Vector2 ballPosition(Slider slider, double time)
-    {
-        double t = Math.Clamp(time, slider.StartTime, slider.GetEndTime());
-        double completion = slider.SpanDuration <= 0 ? 0 : (t - slider.StartTime) / slider.SpanDuration;
-
-        int span = (int)completion;
-        double spanProgress = completion - span;
-
-        // Odd spans travel back toward the start — the ball ping-pongs on repeats.
-        if (span % 2 == 1)
-            spanProgress = 1 - spanProgress;
-
-        return slider.StackedPositionAt(spanProgress);
+        return Vector2.Distance(cursor.PositionAt(time), ballPosition) <= followRadius;
     }
 
     /// <summary>

@@ -497,20 +497,15 @@ namespace JukeBox.Game.Tests.Visual
         }
 
         /// <summary>
-        /// With the analytic judge opted in, an osu map is judged with no gameplay renderer ever
-        /// mounted and no 16ms simulation steps taken — a whole map in milliseconds. The judge is OFF
-        /// by default (it still diverges from lazer on real slider-heavy maps), so this enables it
-        /// explicitly; asserted on the absence of renderer and steps, so a regression that starts
-        /// stepping fails here.
+        /// An osu map is judged by the analytic path, not the drawable renderer: the whole preload runs
+        /// with no gameplay renderer ever mounted and no 16ms simulation steps taken — a whole map in
+        /// milliseconds, which is what makes 50 replays a second's work instead of two minutes.
+        /// Asserted on the absence of both, so a regression to the drawable simulator fails here.
         /// </summary>
         [Test]
         public void OsuMapsAreJudgedAnalyticallyWithNoRenderer()
         {
-            AddStep("simulate several osu plays through the analytic judge", () =>
-                host.Child = simulator = new ReplaySimulator(beatmapPath, new[] { replay("a"), replay("b", 3), replay("c", 7) })
-                {
-                    UseAnalyticJudge = true,
-                });
+            AddStep("simulate several osu plays", () => simulate(replay("a"), replay("b", 3), replay("c", 7)));
             AddUntilStep("all recorded", () => simulator.AllComplete);
 
             AddAssert("no drawable renderer was ever mounted and no steps were taken", () =>
@@ -549,6 +544,52 @@ namespace JukeBox.Game.Tests.Visual
                 return breakPoint.Position != Vector2.Zero
                        && Vector2.Distance(breakPoint.Position, missed.StackedPosition) < 0.5f;
             });
+        }
+
+        private const int short_slider_count = 10;
+
+        /// <summary>
+        /// The COMPLETED-slider case the tap-and-release fixture never reaches: short sliders that a
+        /// held cursor at the head follows to the end (their whole path stays inside the follow
+        /// circle), each carrying a tick. When a slider is completed the analytic judge must produce a
+        /// combo-carrying large tick for its aggregate and a small tick for its tail — grading the
+        /// aggregate as a Great instead was the bug that pinned accuracy at 100% on the real map. This
+        /// checks the analytic judge against the drawable renderer on exactly that, so it cannot regress.
+        /// </summary>
+        [Test]
+        public void TheAnalyticJudgeMatchesTheDrawableSimulatorOnHeldSlidersWithTicks()
+        {
+            ReplayAttachment att = null!;
+
+            AddStep("simulate a held-slider play through the drawable renderer", () =>
+            {
+                string path = Path.Combine(tmp, "held [Sliders].osu");
+                File.WriteAllText(path, shortSliderMap());
+
+                string osr = Path.Combine(tmp, "held.osr");
+                ReplayFixture.WriteHoldingSliders(osr, path, "held");
+
+                att = new ReplayAttachment
+                {
+                    PlayerName = "held",
+                    SourcePath = osr,
+                    OsuFile = path,
+                    Score = new JukeBoxScoreDecoder(path).Decode(osr),
+                    RateTempo = 1,
+                    RateFrequency = 1,
+                };
+
+                host.Child = simulator = new ReplaySimulator(path, new[] { att }) { ForceDrawableSimulation = true };
+            });
+            AddUntilStep("recorded", () => simulator.AllComplete);
+
+            AddAssert("the analytic judge produces the same timeline", () =>
+                sameTimeline(simulator.Timelines[0], analytic(att)));
+
+            // And the sliders were actually COMPLETED — combo climbed past the count of slider heads,
+            // which only happens if the ticks and the slider aggregates carried combo through.
+            AddAssert("the sliders completed (combo built through the ticks and aggregates)", () =>
+                simulator.Timelines[0].Points.Max(p => p.Combo) > short_slider_count * 2);
         }
 
         /// <summary>Runs the attachment through the analytic recorder (no renderer) for comparison.</summary>
@@ -593,6 +634,30 @@ namespace JukeBox.Game.Tests.Visual
             return lastA.Score == lastB.Score
                    && Math.Abs(lastA.Accuracy - lastB.Accuracy) < 0.0001
                    && lastA.Grade == lastB.Grade;
+        }
+
+        /// <summary>
+        /// A map of SHORT sliders, each with a tick — length 40px so the whole path stays inside the
+        /// follow circle of a cursor parked on the head, letting <see cref="ReplayFixture.WriteHoldingSliders"/>
+        /// complete every one by simply holding the key. The high tick rate puts a tick on so short a
+        /// slider. Spaced widely so each is judged in isolation.
+        /// </summary>
+        private static string shortSliderMap()
+        {
+            var sb = new StringBuilder();
+
+            sb.Append("osu file format v14\n\n[General]\nAudioFilename: audio.wav\nMode: 0\n\n");
+            sb.Append("[Metadata]\nTitle:Sim\nArtist:A\nCreator:C\nVersion:Held\n\n");
+            sb.Append("[Difficulty]\nHPDrainRate:5\nCircleSize:3\nOverallDifficulty:8\nApproachRate:9\nSliderMultiplier:1.4\nSliderTickRate:4\n\n");
+            sb.Append("[TimingPoints]\n0,500,4,2,0,60,1,0\n\n[HitObjects]\n");
+
+            for (int i = 0; i < short_slider_count; i++)
+            {
+                int time = 1000 + i * 1200;
+                sb.Append($"200,192,{time},2,0,L|240:192,1,40\n");
+            }
+
+            return sb.ToString();
         }
 
         private static string map()

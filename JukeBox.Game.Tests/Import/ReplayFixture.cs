@@ -8,6 +8,7 @@ using JukeBox.Game.Replays;
 using osu.Game.Beatmaps;
 using osu.Game.Models;
 using osu.Game.Replays;
+using osu.Game.Rulesets.Objects;
 using osu.Game.Rulesets.Mods;
 using osu.Game.Rulesets.Osu;
 using osu.Game.Rulesets.Replays;
@@ -158,6 +159,67 @@ namespace JukeBox.Game.Tests.Import
 
             using var stream = File.Create(path);
             new LegacyScoreEncoder(score, beatmap.Beatmap).Encode(stream, leaveOpen: true);
+        }
+
+        /// <summary>
+        /// A replay that taps every circle and HOLDS every slider — pressing on the head and keeping
+        /// the key down, cursor parked on the head, until the slider ends. On a map of SHORT sliders
+        /// (whose whole path stays inside the follow circle of the stationary cursor) this COMPLETES
+        /// each slider: every tick and the tail is tracked. That is the case a tap-and-release fixture
+        /// never exercises, and it is where the slider aggregate is a combo-carrying large tick and the
+        /// tail a small tick — the results a real followed slider produces, so the analytic judge can
+        /// be cross-checked against the drawable renderer on them.
+        /// </summary>
+        public static void WriteHoldingSliders(string path, string beatmapPath, string playerName)
+        {
+            var working = new FlatWorkingBeatmap(beatmapPath);
+            var ruleset = new OsuRuleset();
+            var playable = working.GetPlayableBeatmap(ruleset.RulesetInfo, System.Array.Empty<Mod>());
+
+            var frames = new List<ReplayFrame>();
+
+            foreach (var obj in playable.HitObjects.OfType<osu.Game.Rulesets.Osu.Objects.OsuHitObject>().OrderBy(h => h.StartTime))
+            {
+                var pos = obj.StackedPosition;
+
+                if (obj is osu.Game.Rulesets.Osu.Objects.Slider slider)
+                {
+                    double end = slider.GetEndTime();
+
+                    frames.Add(new OsuReplayFrame(slider.StartTime - 40, pos));
+
+                    for (double t = slider.StartTime; t <= end; t += 16)
+                        frames.Add(new OsuReplayFrame(t, pos, OsuAction.LeftButton));
+
+                    frames.Add(new OsuReplayFrame(end + 5, pos, OsuAction.LeftButton));
+                    frames.Add(new OsuReplayFrame(end + 40, pos));
+                }
+                else
+                {
+                    frames.Add(new OsuReplayFrame(obj.StartTime - 40, pos));
+                    frames.Add(new OsuReplayFrame(obj.StartTime, pos, OsuAction.LeftButton));
+                    frames.Add(new OsuReplayFrame(obj.StartTime + 30, pos, OsuAction.LeftButton));
+                    frames.Add(new OsuReplayFrame(obj.StartTime + 60, pos));
+                }
+            }
+
+            var score = new Score
+            {
+                Replay = new Replay { Frames = frames },
+                ScoreInfo = new ScoreInfo
+                {
+                    Ruleset = ruleset.RulesetInfo,
+                    BeatmapInfo = new BeatmapInfo { MD5Hash = Md5OfFile(beatmapPath) },
+                    RealmUser = new RealmUser { Username = playerName },
+                    Date = new DateTimeOffset(2024, 5, 1, 12, 0, 0, TimeSpan.Zero),
+                    TotalScore = 1,
+                    MaxCombo = 1,
+                    Accuracy = 1,
+                },
+            };
+
+            using var stream = File.Create(path);
+            new LegacyScoreEncoder(score, working.Beatmap).Encode(stream, leaveOpen: true);
         }
 
         /// <summary>
