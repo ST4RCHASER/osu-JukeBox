@@ -124,6 +124,44 @@ public sealed class ReplayTimeline
     /// because the moment they are knocked out is a break where the current combo has already gone
     /// to zero.
     /// </summary>
+    /// <summary>
+    /// The most recent non-perfect judgement (a miss, a 50 or a 100) at or before
+    /// <paramref name="time"/> and the time it landed, or null if the last such judgement was longer
+    /// ago than <paramref name="windowMs"/>. The combine board's hit badge reads this: it pops on
+    /// each drop and lingers for the window, and a PERFECT hit in between does not clear it — only
+    /// time does. A lookup rather than an event, so the badge is the same after a seek as after
+    /// watching there. Walks back only as far as the window reaches (a handful of objects), not the
+    /// whole play.
+    /// </summary>
+    public (HitResult Result, double Time)? RecentImperfect(double time, double windowMs)
+    {
+        if (points.Count == 0 || time < points[0].Time)
+            return null;
+
+        int low = 0;
+        int high = points.Count - 1;
+
+        while (low < high)
+        {
+            int mid = (low + high + 1) / 2;
+
+            if (points[mid].Time <= time)
+                low = mid;
+            else
+                high = mid - 1;
+        }
+
+        for (int i = low; i >= 0 && time - points[i].Time <= windowMs; i--)
+        {
+            var result = points[i].Judgement;
+
+            if (result is HitResult.Miss or HitResult.Meh or HitResult.Ok)
+                return (result, points[i].Time);
+        }
+
+        return null;
+    }
+
     public int MaxComboUpTo(double time)
     {
         int max = 0;

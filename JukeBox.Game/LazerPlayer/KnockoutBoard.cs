@@ -55,9 +55,11 @@ public partial class KnockoutBoard : CompositeDrawable
     private readonly IReadOnlyList<Entrant> entrants;
     private readonly List<Row> rows = new List<Row>();
 
-    /// <summary>The longest name in the field, in characters. Every row's name column is sized to it
-    /// so the columns after the name line up down the board instead of stepping in and out with each
-    /// player's name length.</summary>
+    /// <summary>The longest name+mods in the field, in characters. Every row's name column is
+    /// RESERVED at this width so the combo — and every column after it — sits AFTER the name rather
+    /// than being drawn on top of it, and so those columns line up down the board instead of stepping
+    /// in and out with each player's name length. Mods are counted because they are drawn beside the
+    /// name and a "+HDDT" is as much a part of the block to clear as the name itself.</summary>
     private readonly int maxNameChars;
 
     /// <summary>The rules in force. Assign to change mode or sorting; the board follows.</summary>
@@ -193,7 +195,7 @@ public partial class KnockoutBoard : CompositeDrawable
     public KnockoutBoard(IReadOnlyList<Entrant> entrants)
     {
         this.entrants = entrants;
-        maxNameChars = entrants.Count == 0 ? 4 : entrants.Max(e => e.Name.Length);
+        maxNameChars = entrants.Count == 0 ? 4 : entrants.Max(e => e.Name.Length + (e.Mods.Length == 0 ? 0 : e.Mods.Length + 1));
 
         // Sized to its CONTAINER, not to its content. Sizing to content is what produced a board
         // over a thousand pixels tall for 47 players, running off the bottom of the player box and
@@ -349,10 +351,15 @@ public partial class KnockoutBoard : CompositeDrawable
             return;
 
         Metrics = metrics;
-        Width = metrics.Width;
 
         foreach (var row in rows)
             row.Apply(metrics);
+
+        // The board is as wide as a row needs to be once the name column is reserved at the field's
+        // longest name+mods — so the right group (combo, score, hit badge) lands AFTER the name
+        // rather than on top of it. Every row reserves the same name width, so they all report the
+        // same natural width; take the first.
+        Width = rows.Count > 0 ? rows[0].NaturalWidth : metrics.Width;
 
         int hidden = entrants.Count - metrics.VisibleRows;
 
@@ -421,10 +428,22 @@ public partial class KnockoutBoard : CompositeDrawable
         private readonly Container accCell = null!;
         private readonly Container ppCell = null!;
         private readonly Container gradeCell = null!;
-        private readonly FillFlowContainer nameCell = null!;
+
+        // The name column is a FIXED-WIDTH masking cell (reserved at the field's longest name+mods),
+        // not an auto-sizing one. Auto-sizing let a long name run rightward under the right-pinned
+        // combo and score — the combo drawn on top of the name. Reserving the width, and sizing the
+        // board so the right group begins after it, keeps them apart. The inner flow holds the name
+        // and mods and is clipped to the reservation if it somehow exceeds it.
+        private readonly Container nameCell = null!;
+        private readonly FillFlowContainer nameFlow = null!;
         private readonly Container comboCell = null!;
         private readonly Container scoreCell = null!;
         private readonly Container judgeCell = null!;
+
+        /// <summary>The row's natural width once the name column is reserved: the right edge of the
+        /// last (hit-badge) column plus its margin. The board sizes itself to this so the right group
+        /// sits after the name rather than over it.</summary>
+        public float NaturalWidth { get; private set; }
 
         private Color4 playerColour;
 
@@ -482,6 +501,13 @@ public partial class KnockoutBoard : CompositeDrawable
         /// nothing recent worth showing.</summary>
         internal string JudgementText => judgement.Text.ToString()!;
 
+        /// <summary>Test hooks: the hit badge's current scale and opacity, which the pop-in animation
+        /// drives — big and opaque on a fresh judgement, settling to normal size and fading to nothing
+        /// across its life.</summary>
+        internal float JudgementScale => judgement.Scale.X;
+
+        internal float JudgementAlpha => judgement.Alpha;
+
         /// <summary>Test hooks: whether each key bar is lit for a held button at the current time.</summary>
         internal bool LeftKeyHeld => key1Held;
 
@@ -493,6 +519,13 @@ public partial class KnockoutBoard : CompositeDrawable
         /// <summary>Test hook: the score column's right edge on screen. Fixed as the value rolls
         /// (right-aligned in a fixed-width cell), which is what stops the digits shaking.</summary>
         internal float ScoreRightEdge => score.ScreenSpaceDrawQuad.TopRight.X;
+
+        /// <summary>Test hooks: the reserved name column's right edge and the combo column's left edge
+        /// on screen. The name must end at or before the combo begins — the two overlapping is the
+        /// combo drawn on top of the name.</summary>
+        internal float NameRightEdge => nameCell.ScreenSpaceDrawQuad.TopRight.X;
+
+        internal float ComboLeftEdge => comboCell.ScreenSpaceDrawQuad.TopLeft.X;
 
         /// <summary>Test hook: whether the numeric columns use a tabular (fixed-width) figure font,
         /// so a changing digit keeps the same advance and nothing reflows.</summary>
@@ -617,36 +650,43 @@ public partial class KnockoutBoard : CompositeDrawable
                     },
                 },
 
-                // Name and mods FLOW left to right from a fixed start x, free to run toward the
-                // numbers because the right group is right-pinned and cannot be pushed out of line by
-                // a long name.
-                nameCell = new FillFlowContainer
+                // Name and mods in a reserved, masking column: the flow inside runs left to right,
+                // but the cell is a fixed width (set per density in Apply) so it cannot push into the
+                // combo column beside it. The board is sized to leave room for this reservation.
+                nameCell = new Container
                 {
                     Anchor = Anchor.CentreLeft,
                     Origin = Anchor.CentreLeft,
-                    AutoSizeAxes = Axes.X,
                     RelativeSizeAxes = Axes.Y,
-                    Direction = FillDirection.Horizontal,
-                    Spacing = new Vector2(4, 0),
-                    Children = new Drawable[]
+                    Masking = true,
+                    Child = nameFlow = new FillFlowContainer
                     {
-                        playerName = new OsuSpriteText
+                        Anchor = Anchor.CentreLeft,
+                        Origin = Anchor.CentreLeft,
+                        AutoSizeAxes = Axes.X,
+                        RelativeSizeAxes = Axes.Y,
+                        Direction = FillDirection.Horizontal,
+                        Spacing = new Vector2(4, 0),
+                        Children = new Drawable[]
                         {
-                            Anchor = Anchor.CentreLeft,
-                            Origin = Anchor.CentreLeft,
-                            Text = entrant.Name,
-                            Font = OsuFont.Torus.With(weight: FontWeight.SemiBold),
-                            Colour = entrant.Colour,
-                            Shadow = true,
-                        },
-                        mods = new OsuSpriteText
-                        {
-                            Anchor = Anchor.CentreLeft,
-                            Origin = Anchor.CentreLeft,
-                            Text = entrant.Mods,
-                            Font = OsuFont.Torus.With(weight: FontWeight.SemiBold),
-                            Colour = Color4.White,
-                            Shadow = true,
+                            playerName = new OsuSpriteText
+                            {
+                                Anchor = Anchor.CentreLeft,
+                                Origin = Anchor.CentreLeft,
+                                Text = entrant.Name,
+                                Font = OsuFont.Torus.With(weight: FontWeight.SemiBold),
+                                Colour = entrant.Colour,
+                                Shadow = true,
+                            },
+                            mods = new OsuSpriteText
+                            {
+                                Anchor = Anchor.CentreLeft,
+                                Origin = Anchor.CentreLeft,
+                                Text = entrant.Mods,
+                                Font = OsuFont.Torus.With(weight: FontWeight.SemiBold),
+                                Colour = Color4.White,
+                                Shadow = true,
+                            },
                         },
                     },
                 },
@@ -747,11 +787,10 @@ public partial class KnockoutBoard : CompositeDrawable
             playerName.Font = playerName.Font.With(size: fs);
             mods.Font = mods.Font.With(size: fs * 0.8f);
             judgement.Font = judgement.Font.With(size: fs * 0.85f);
-            nameCell.Spacing = new Vector2(fs * 0.28f, 0);
+            nameFlow.Spacing = new Vector2(fs * 0.28f, 0);
 
             // Column widths, all derived from the font size so the table scales with the board. The
-            // numeric ones are counted in fixed-width figure glyphs (~0.55 em each); the name block
-            // auto-sizes and flows toward the numbers, so it needs no fixed width of its own.
+            // numeric ones are counted in fixed-width figure glyphs (~0.55 em each).
             float d = fs * 0.55f;
             float gap = fs * 0.5f;
 
@@ -762,9 +801,17 @@ public partial class KnockoutBoard : CompositeDrawable
             float scoreW = 8.5f * d;
             float judgeW = 3.5f * d;
 
+            // The reserved name column: the field's longest name+mods, in em. The name font is
+            // proportional so this is an estimate rather than a fixed-glyph count — 0.6em runs a
+            // little wide of the average, which is the safe direction (extra space, not a clipped
+            // name), and the cell masks anything past it. Clamped so one very long tag cannot make
+            // the whole rail a banner across the playfield.
+            float nameW = Math.Min(maxNameChars, 22) * fs * 0.6f;
+
             accCell.Width = accW;
             ppCell.Width = ppW;
             gradeCell.Width = gradeW;
+            nameCell.Width = nameW;
             comboCell.Width = comboW;
             scoreCell.Width = scoreW;
             judgeCell.Width = judgeW;
@@ -789,6 +836,10 @@ public partial class KnockoutBoard : CompositeDrawable
             judgeCell.X = -rm;
             scoreCell.X = -(rm + judgeW + gap);
             comboCell.X = -(rm + judgeW + gap + scoreW + gap);
+
+            // The board is sized to exactly this, so the combo's left edge (measured back from the
+            // right) falls one gap past the reserved name's right edge — the two never overlap.
+            NaturalWidth = nameCell.X + nameW + gap + comboW + gap + scoreW + gap + judgeW + rm;
 
             // The grade graphic fills the (small, masking) grade cell via RelativeSizeAxes, so it
             // scales with the density automatically — no per-graphic resize here.
@@ -829,14 +880,38 @@ public partial class KnockoutBoard : CompositeDrawable
 
             WantedGrade = pending ? string.Empty : point.Grade;
 
-            // The recent-judgement column: the most recent non-perfect result, but only while it is
-            // still RECENT — a miss lingers a moment then clears, rather than sticking for the song.
-            var recent = !pending && time - point.Time >= 0 && time - point.Time < recent_judgement_ms
-                ? point.Judgement
-                : HitResult.None;
+            // The recent-judgement badge (X / 50 / 100): the most recent non-perfect result, read from
+            // the timeline so it survives a seek and is not wiped by the next perfect hit. It POPS in
+            // large on each new drop, then settles to its normal size and fades away over ~1.5s — the
+            // old hard on/off flashed by too fast to read.
+            var recent = pending ? null : timeline.RecentImperfect(time, badge_duration_ms);
 
-            judgement.Text = judgementText(recent);
-            judgement.Colour = judgementColour(recent);
+            if (recent is { } drop)
+            {
+                judgement.Text = judgementText(drop.Result);
+                judgement.Colour = judgementColour(drop.Result);
+
+                float u = (float)Math.Clamp((time - drop.Time) / badge_duration_ms, 0, 1);
+
+                // Pop: from 1.7x down to normal over the first third, eased out so it snaps in and
+                // eases to rest. Fade: held for the first part, then to nothing by the end.
+                float scale = u < badge_pop_fraction
+                    ? 1f + 0.7f * (1f - easeOutQuad(u / badge_pop_fraction))
+                    : 1f;
+
+                float alpha = u < badge_hold_fraction
+                    ? 1f
+                    : 1f - (u - badge_hold_fraction) / (1f - badge_hold_fraction);
+
+                judgement.Scale = new Vector2(scale);
+                judgement.Alpha = Math.Clamp(alpha, 0, 1);
+            }
+            else
+            {
+                judgement.Text = string.Empty;
+                judgement.Alpha = 0;
+                judgement.Scale = Vector2.One;
+            }
 
             ShownPending = pending;
 
@@ -855,8 +930,18 @@ public partial class KnockoutBoard : CompositeDrawable
             this.FadeTo(RestingAlpha, 300, Easing.OutQuint);
         }
 
-        /// <summary>How long after a judgement it still shows in the column.</summary>
-        private const double recent_judgement_ms = 600;
+        /// <summary>How long the hit badge lingers after the judgement that triggered it — the whole
+        /// pop-in, settle and fade happens across this window.</summary>
+        private const double badge_duration_ms = 1500;
+
+        /// <summary>Fraction of the badge's life spent popping from large down to its normal size.</summary>
+        private const float badge_pop_fraction = 0.33f;
+
+        /// <summary>Fraction of the badge's life it stays fully opaque before it starts fading out.</summary>
+        private const float badge_hold_fraction = 0.4f;
+
+        /// <summary>Quadratic ease-out (fast then slow), for the pop settling to rest.</summary>
+        private static float easeOutQuad(float t) => 1f - (1f - t) * (1f - t);
 
         /// <summary>
         /// Draws the grade as a rank GRAPHIC — lazer's own leaderboard badge, which renders for every

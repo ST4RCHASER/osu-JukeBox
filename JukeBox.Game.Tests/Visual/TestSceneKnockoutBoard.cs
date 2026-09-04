@@ -149,6 +149,65 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("neither key is lit again", () => !rowFor(0).LeftKeyHeld && !rowFor(0).RightKeyHeld);
         }
 
+        /// <summary>
+        /// A long name has to stay in its own column. The name used to auto-size and run rightward
+        /// under the right-pinned combo, so on a real board the combo number was drawn on top of the
+        /// player's name. The name column is now reserved at the field's longest name+mods and the
+        /// board widened to fit, so the combo begins after the name ends.
+        /// </summary>
+        [Test]
+        public void ALongNameDoesNotCollideWithTheComboColumn()
+        {
+            AddStep("build a field whose longest entry is a long name plus mods", () =>
+                hostBoard(new System.Collections.Generic.List<KnockoutBoard.Entrant>
+                {
+                    new KnockoutBoard.Entrant("ALongPlayerNameHere", Color4.White, ready(1_000_000, 500), "+HDDTHR"),
+                    new KnockoutBoard.Entrant("x", Color4.White, ready(500_000, 200)),
+                }));
+            AddUntilStep("rows built", () => board.Rows.Count == 2);
+            AddStep("show a recorded moment", () => showAt(1500));
+
+            // Every row, not just the long one: the column is reserved field-wide, so the short name's
+            // combo lines up with the long one's and neither is overdrawn.
+            AddAssert("the name column ends at or before the combo column begins", () =>
+                board.Rows.All(r => r.NameRightEdge <= r.ComboLeftEdge + 0.5f));
+        }
+
+        /// <summary>
+        /// The hit badge pops in large on a fresh drop, then settles to its normal size and fades to
+        /// nothing over about 1.5s. The old hard on/off flashed by too fast to read; this is driven
+        /// from the timeline by elapsed time so it is the same after a seek.
+        /// </summary>
+        [Test]
+        public void TheHitBadgePopsInThenSettlesAndFades()
+        {
+            AddStep("build a player who missed at 1000ms", () =>
+            {
+                var tl = new ReplayTimeline();
+                tl.Record(new TimelinePoint(1000, 100, 0, 0.9, true, "A", 0, 5,
+                    osu.Game.Rulesets.Scoring.HitResult.Miss));
+                tl.MarkComplete(6000);
+                build(tl);
+            });
+            AddUntilStep("row built", () => board.Rows.Count == 1);
+
+            AddStep("just after the miss", () => showAt(1050));
+            AddAssert("the badge shows, popped large and fully opaque", () =>
+                rowFor(0).JudgementText == "X" && rowFor(0).JudgementScale > 1.3f && rowFor(0).JudgementAlpha > 0.9f);
+
+            AddStep("part way through its life", () => showAt(1600));
+            AddAssert("it has settled to about normal size, still visible", () =>
+                rowFor(0).JudgementScale < 1.1f && rowFor(0).JudgementAlpha > 0.5f);
+
+            AddStep("near the end of its life", () => showAt(2400));
+            AddAssert("it has faded to almost nothing", () =>
+                rowFor(0).JudgementText == "X" && rowFor(0).JudgementAlpha < 0.2f);
+
+            AddStep("after its life", () => showAt(2700));
+            AddAssert("it is gone", () =>
+                rowFor(0).JudgementText.Length == 0 && rowFor(0).JudgementAlpha == 0);
+        }
+
         [Test]
         public void TheScoreIsAbbreviatedTheWayDanserDoesIt()
         {
