@@ -154,35 +154,59 @@ public static class AnalyticOsuJudge
     }
 
     /// <summary>
-    /// A slider: its head is tapped like a circle, then every tick, repeat and its tail is "hit" only
-    /// while the player is TRACKING at that moment — a key held with the cursor inside the follow
-    /// circle of the ball. The slider's own aggregate result is its Max result when the head landed
-    /// (the slider counts for combo), its Min otherwise.
+    /// A slider. How the head tap is scored depends on the CLASSIC slider behaviour (the CL mod, which
+    /// every legacy replay carries): under CLASSIC the head tap's timing is the SLIDER's accuracy grade
+    /// (it lands on the slider's own aggregate — Great/Ok/Meh/Miss) and the head nested object is only a
+    /// combo LARGE TICK; under lazer's default (v2) the head IS the accuracy grade and the slider
+    /// aggregate is ignored. (The renderer confirms both: with CL it reports Slider=Great,
+    /// SliderHeadCircle=LargeTickHit — the opposite of the obvious reading — and without CL the reverse.)
+    /// The ticks, repeats and tail are large/small ticks decided by tracking either way.
     /// </summary>
     private static void judgeSlider(Slider slider, CursorTrack cursor, IReadOnlyList<CursorTrack.Press> presses, ref int pressPointer, List<Judged> results)
     {
         var nested = slider.NestedHitObjects.OfType<OsuHitObject>().ToList();
 
         var head = nested.OfType<SliderHeadCircle>().FirstOrDefault();
-        bool headHit = false;
+        bool classic = slider.ClassicSliderBehaviour;
+
+        // The tap on the head: its timing is the accuracy grade (Great/Ok/Meh), or a Miss when no press
+        // lands. Consumes a press (note-lock), like a circle.
+        HitResult tapResult = HitResult.Miss;
+        double tapTime = slider.StartTime;
 
         if (head != null)
         {
-            var headResult = judgeCircle(head, head, cursor, presses, ref pressPointer);
-            headHit = headResult.Result.IsHit();
-            results.Add(headResult);
+            var tap = judgeCircle(head, head, cursor, presses, ref pressPointer);
+            tapResult = tap.Result;
+            tapTime = tap.Time;
+
+            // Head nested result: under classic it is a combo large tick (hit whenever the tap landed at
+            // all, not the accuracy grade — that goes to the aggregate); under v2 it carries the
+            // accuracy grade itself.
+            HitResult headResult = classic
+                ? (tap.Result.IsHit() ? HitResult.LargeTickHit : HitResult.LargeTickMiss)
+                : tap.Result;
+
+            results.Add(new Judged(head, headResult, tap.Time, head.StackedPosition));
         }
 
-        float followRadius = (float)slider.Radius * follow_radius_multiplier;
+        bool headHit = tapResult.IsHit();
+        float radius = (float)slider.Radius;
+        float followRadius = radius * follow_radius_multiplier;
 
-        // A slider is COMPLETED when the head was hit and the key stayed held to the tail — the classic
-        // slider model: holding to the end completes it, the follow circle being generous. That is what
-        // separates a real held/followed slider (key down through the body) from a tap-and-release,
-        // which drops the tail exactly as the drawable renderer does. Checked by key-held rather than
-        // an instantaneous cursor-on-ball test at the tail, since a real player's cursor is already
-        // sliding to the next object at the tail's precise instant.
+        // The TAIL is very lenient in lazer (a completed slider almost never drops it): hit when the
+        // head landed and the key stayed held to the tail — the classic hold-to-complete model — rather
+        // than an exact-instant follow check, since a real cursor is already leaving at the tail's
+        // precise instant. (An instantaneous tail check missed one tail in three on real play.)
         var tail = nested.LastOrDefault(p => p.CreateJudgement().MaxResult == HitResult.SmallTickHit);
         bool completed = headHit && tail != null && cursor.KeyHeldAt(tail.StartTime);
+
+        // TICKS and repeats follow the follow-circle STATE MACHINE, lazer's SliderBall model: tracking
+        // begins when the head is hit, is MAINTAINED while a key is held and the cursor stays inside the
+        // expanded follow circle (2.4x radius), and is re-ACQUIRED only by coming back inside the base
+        // radius (1x). A stateless "within 2.4x at the instant" check over-hit ticks where the cursor
+        // merely drifted through the outer ring without latching on. Nested parts are in time order.
+        bool tracking = headHit;
 
         foreach (var part in nested)
         {
@@ -192,37 +216,27 @@ public static class AnalyticOsuJudge
             var judgement = part.CreateJudgement();
             bool isTail = judgement.MaxResult == HitResult.SmallTickHit;
 
-            // Ticks and repeats (LargeTick): the strict instantaneous follow-circle check, against the
-            // part's own StackedPosition (which lazer computed exactly) — re-deriving the ball position
-            // by interpolating the path myself only false-misses ticks on real sliders. The tail rides
-            // on slider completion above rather than an exact-instant check.
-            bool hit = isTail ? completed : isTracking(part.StackedPosition, part.StartTime, followRadius, cursor);
+            if (!cursor.KeyHeldAt(part.StartTime))
+                tracking = false;
+            else
+            {
+                float distance = Vector2.Distance(cursor.PositionAt(part.StartTime), part.StackedPosition);
+                tracking = tracking ? distance <= followRadius : distance <= radius;
+            }
 
+            bool hit = isTail ? completed : tracking;
             var result = hit ? judgement.MaxResult : judgement.MinResult;
             results.Add(new Judged(part, result, part.StartTime, part.StackedPosition));
         }
 
-        // The slider's OWN aggregate:
-        //  - COMPLETED → a large tick, carrying combo but NOT accuracy (grading it as the head's Great
-        //    instead added a bogus 300 per slider and pinned accuracy at 100%);
-        //  - head hit but NOT completed (tapped and released) → IGNORED: no combo, but it does not
-        //    break combo either, which is what the drawable renderer records (the tick misses already
-        //    broke the combo) — a large-tick MISS here would diverge on that result;
-        //  - head missed entirely → an ignored miss.
-        var aggregate = completed ? HitResult.LargeTickHit
-            : headHit ? HitResult.IgnoreHit
-            : HitResult.IgnoreMiss;
+        // The slider's OWN aggregate: under classic it carries the ACCURACY grade from the head tap
+        // (Great/Ok/Meh/Miss); under v2 the head already carried accuracy, so the slider itself is an
+        // ignored result (hit when the head landed, an ignored miss otherwise).
+        var aggregate = classic
+            ? tapResult
+            : (headHit ? HitResult.IgnoreHit : HitResult.IgnoreMiss);
+
         results.Add(new Judged(slider, aggregate, slider.GetEndTime(), slider.StackedPosition));
-    }
-
-    /// <summary>Whether the player is tracking the slider ball (at <paramref name="ballPosition"/> at
-    /// <paramref name="time"/>): a key held with the cursor inside the follow circle of the ball.</summary>
-    private static bool isTracking(Vector2 ballPosition, double time, float followRadius, CursorTrack cursor)
-    {
-        if (!cursor.KeyHeldAt(time))
-            return false;
-
-        return Vector2.Distance(cursor.PositionAt(time), ballPosition) <= followRadius;
     }
 
     /// <summary>
