@@ -8,6 +8,7 @@ using JukeBox.Game.Playback;
 using JukeBox.Game.Replays;
 using osu.Framework.Allocation;
 using osu.Framework.Bindables;
+using osu.Framework.Development;
 using osu.Framework.Extensions.Color4Extensions;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
@@ -707,14 +708,34 @@ public partial class PlayersPanel : CompositeDrawable
                 active.BindTo(tracker.Active);
             }
 
+            // Both handlers mutate drawables (Width, Text, a fade transform), and the tracker they are
+            // bound to is written from more than one thread: the combine Reports from the update thread,
+            // but Clear() runs during teardown (MultiReplayCombine.Dispose) on the disposal thread — and
+            // mutating a loaded drawable off the update thread throws InvalidThreadForMutationException,
+            // which aborted the app on close. On the update thread we mutate directly (the normal live
+            // path); off it — only at teardown — we marshal onto the update thread, where a mutation
+            // scheduled after this bar is itself disposed is simply dropped.
             progress.BindValueChanged(e =>
             {
                 float f = (float)Math.Clamp(e.NewValue, 0, 1);
-                fill.Width = f;
-                caption.Text = $"Preloading replays… {(int)(f * 100)}%";
+                onUpdateThread(() =>
+                {
+                    fill.Width = f;
+                    caption.Text = $"Preloading replays… {(int)(f * 100)}%";
+                });
             }, true);
 
-            active.BindValueChanged(e => this.FadeTo(e.NewValue ? 1 : 0, 200, Easing.OutQuint), true);
+            active.BindValueChanged(e => onUpdateThread(() => this.FadeTo(e.NewValue ? 1 : 0, 200, Easing.OutQuint)), true);
+        }
+
+        /// <summary>Runs a drawable mutation on the update thread: straight through when we are already
+        /// on it (the live path), scheduled when we are not (teardown's off-thread <c>Clear()</c>).</summary>
+        private void onUpdateThread(Action mutate)
+        {
+            if (ThreadSafety.IsUpdateThread)
+                mutate();
+            else
+                Schedule(mutate);
         }
 
         /// <summary>Test hook: the buffered fraction the fill currently shows, 0 to 1.</summary>

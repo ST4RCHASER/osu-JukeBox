@@ -286,6 +286,37 @@ namespace JukeBox.Game.Tests.Visual
         }
 
         /// <summary>
+        /// A replay dropped alongside an UNRELATED beatmap archive still binds playback to the map its
+        /// .osr was recorded on — the archive does not hijack it. The archive is listed first in the
+        /// drop (a stray .osz left in the folder), the order that used to let it grab playback while the
+        /// replay group was stranded on the wrong map showing a lone fallback cursor; the fix imports
+        /// the replay group ahead of any co-dropped archive so the group wins and the archive queues.
+        /// </summary>
+        [Test]
+        public void AReplayDroppedWithAnUnrelatedArchiveStillBindsToItsOwnBeatmap()
+        {
+            string osr = null!;
+            string strayOsz = null!;
+
+            AddStep("build a replay and an unrelated .osz to drop with it", () =>
+            {
+                osr = makeReplayFor("bound", setId: 616161, player: "Cookiezi");
+                strayOsz = makeOsz("stray", setId: 999888, title: "Stray Archive");
+            });
+
+            // Archive first — the failing order, where it grabbed playback ahead of the replay.
+            AddStep("drop the stray archive and the replay together", () => importer.ImportMany(new[] { strayOsz, osr }));
+
+            AddUntilStep("the REPLAY's set is what plays, not the stray archive", () =>
+                playback.Current.Value?.SetId == 616161);
+            AddUntilStep("playback selected the recorded difficulty", () =>
+                playback.SelectedOsuFile.Value != null
+                && playback.SelectedOsuFile.Value == queuedOrPlayingReplay()?.OsuFile);
+            AddAssert("the stray archive queues behind rather than playing", () =>
+                queue.Items.Any(i => i.Id == 999888) && playback.Current.Value?.SetId != 999888);
+        }
+
+        /// <summary>
         /// The whole point of the batch import: several people's replays of ONE beatmap are one
         /// viewing session, so they resolve that beatmap once and arrive as a single queue entry
         /// carrying all of them — not three identical rows that each overwrite the last one's

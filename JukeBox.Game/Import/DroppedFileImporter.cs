@@ -137,6 +137,7 @@ public partial class DroppedFileImporter : Component
     public async Task ImportMany(IReadOnlyList<string> paths)
     {
         var replayPaths = new List<string>();
+        var otherPaths = new List<(string Path, DroppedFileKind Kind)>();
 
         foreach (string path in paths)
         {
@@ -146,11 +147,22 @@ public partial class DroppedFileImporter : Component
             if (kind == DroppedFileKind.Replay)
                 replayPaths.Add(path);
             else
-                await importAsync(path, kind).ConfigureAwait(false);
+                otherPaths.Add((path, kind));
         }
 
+        // Replays go in FIRST, ahead of any co-dropped archive. A replay group binds to the exact
+        // beatmap+difficulty its .osr recorded — resolved by checksum, independent of anything else in
+        // the drop — and whatever the drop is going to play should be that group. An incidental .osz
+        // dropped alongside (a stray archive left in the folder) is a DIFFERENT map, and imported first
+        // it grabs playback (EnqueueAndMaybePlay advances while idle) and strands the replays on the
+        // wrong map showing a lone fallback cursor. Ordered this way, the replay group wins playback and
+        // the archive simply queues behind it. Replay resolution never needs the co-dropped set (see
+        // findSetByChecksumAsync), so nothing is lost by importing it after.
         if (replayPaths.Count > 0)
             await importReplayBatchAsync(replayPaths).ConfigureAwait(false);
+
+        foreach (var (path, kind) in otherPaths)
+            await importAsync(path, kind).ConfigureAwait(false);
     }
 
     private async Task importAsync(string path, DroppedFileKind kind)

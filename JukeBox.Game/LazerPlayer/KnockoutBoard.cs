@@ -201,7 +201,9 @@ public partial class KnockoutBoard : CompositeDrawable
         maxNameChars = entrants.Count == 0 ? 4 : entrants.Max(e =>
             e.Name.Length
             + (e.Mods.Length == 0 ? 0 : e.Mods.Length + 1)
-            + (e.Version.Length == 0 ? 0 : e.Version.Length + 1));
+            // Version renders parenthesised ("(V1)") and a bit smaller — count the parens plus a gap so
+            // the reserved name column still leaves room for it.
+            + (e.Version.Length == 0 ? 0 : e.Version.Length + 3));
 
         // Sized to its CONTAINER, not to its content. Sizing to content is what produced a board
         // over a thousand pixels tall for 47 players, running off the bottom of the player box and
@@ -691,15 +693,17 @@ public partial class KnockoutBoard : CompositeDrawable
                                 Colour = Color4.White,
                                 Shadow = true,
                             },
-                            // The scoring-version tag, in a muted accent so it reads as a marker
-                            // distinct from the white mods rather than more of them.
+                            // The scoring-version tag — smaller, lighter, dim grey and PARENTHESISED so
+                            // it reads as a quiet annotation ("stable rules"), never as another mod
+                            // acronym glued to the white mod run ("+HR V1" looked like a "+V1" mod).
                             version = new OsuSpriteText
                             {
                                 Anchor = Anchor.CentreLeft,
                                 Origin = Anchor.CentreLeft,
-                                Text = entrant.Version,
-                                Font = OsuFont.Torus.With(weight: FontWeight.SemiBold, size: 13),
-                                Colour = Color4.White.Opacity(0.6f),
+                                Margin = new MarginPadding { Left = 3 },
+                                Text = entrant.Version.Length == 0 ? string.Empty : $"({entrant.Version})",
+                                Font = OsuFont.Torus.With(weight: FontWeight.Regular, size: 11),
+                                Colour = new Color4(0.62f, 0.62f, 0.68f, 1f),
                                 Shadow = true,
                             },
                         },

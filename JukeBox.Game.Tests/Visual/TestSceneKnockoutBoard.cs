@@ -174,9 +174,9 @@ namespace JukeBox.Game.Tests.Visual
         }
 
         /// <summary>
-        /// The scoring-version tag is drawn beside the mods as its own run, and the name column still
-        /// leaves room for it — the width budget counts the tag, so it does not push into the combo
-        /// column any more than the mods do.
+        /// The scoring-version tag is drawn beside the mods as its own run — parenthesised so it reads
+        /// as a quiet annotation, not another mod acronym — and the name column still leaves room for it,
+        /// so it does not push into the combo column any more than the mods do.
         /// </summary>
         [Test]
         public void TheScoringVersionTagIsShownAndFits()
@@ -190,8 +190,8 @@ namespace JukeBox.Game.Tests.Visual
             AddUntilStep("rows built", () => board.Rows.Count == 2);
             AddStep("show a recorded moment", () => showAt(1500));
 
-            AddAssert("each row shows its version tag", () =>
-                rowFor(0).VersionText == "V1" && rowFor(1).VersionText == "Classic");
+            AddAssert("each row shows its version tag, parenthesised so it is not a mod", () =>
+                rowFor(0).VersionText == "(V1)" && rowFor(1).VersionText == "(Classic)");
             AddAssert("the name column still ends before the combo column", () =>
                 board.Rows.All(r => r.NameRightEdge <= r.ComboLeftEdge + 0.5f));
         }

@@ -1,7 +1,9 @@
 #nullable enable
 
+using System;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using JukeBox.Game.Configuration;
 using JukeBox.Game.LazerPlayer;
 using JukeBox.Game.Playback;
@@ -122,6 +124,42 @@ namespace JukeBox.Game.Tests.Visual
 
             AddStep("report complete", () => preloadTracker.Report(1.0));
             AddUntilStep("the bar hides once fully buffered", () => !panel.PreloadBar.Showing);
+        }
+
+        /// <summary>
+        /// The tracker is cleared during teardown (MultiReplayCombine.Dispose) on the DISPOSAL thread,
+        /// not the update thread — and the buffer bar's handler mutates drawables (a fade transform).
+        /// Mutating a loaded drawable off the update thread throws InvalidThreadForMutationException,
+        /// which aborted the app on close (exit 134). This drives that exact off-thread mutation and
+        /// asserts the bar absorbs it rather than throwing.
+        /// </summary>
+        [Test]
+        public void TheBufferBarSurvivesTrackerMutationOffTheUpdateThread()
+        {
+            AddStep("build three", () => build(3));
+            AddUntilStep("panel loaded", () => panel.IsLoaded);
+
+            AddStep("show the bar so it is a loaded, transformable drawable", () => preloadTracker.Report(0.5));
+            AddUntilStep("the bar is showing", () => panel.PreloadBar.Showing);
+
+            Exception? caught = null;
+            AddStep("clear the tracker from a background thread, as Dispose does", () =>
+            {
+                caught = null;
+                Task.Run(() =>
+                {
+                    try
+                    {
+                        preloadTracker.Clear();
+                    }
+                    catch (Exception e)
+                    {
+                        caught = e;
+                    }
+                }).Wait();
+            });
+
+            AddAssert("no thread-mutation exception escaped", () => caught == null);
         }
 
         [Test]

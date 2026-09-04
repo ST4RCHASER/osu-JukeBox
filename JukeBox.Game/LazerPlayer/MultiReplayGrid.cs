@@ -446,8 +446,9 @@ public partial class MultiReplayGrid : CompositeDrawable
     internal static string FormatCombo(ReplayAttachment replay)
         => replay.Score == null ? string.Empty : replay.Score.ScoreInfo.MaxCombo.ToString("N0") + "x";
 
-    /// <summary>The player, with their mods and scoring-version tag when they apply —
-    /// "WhiteCat +HDDT V1".</summary>
+    /// <summary>The player, with their mods and a parenthesised scoring-version tag when they apply —
+    /// "WhiteCat +HDDT (V1)". The parens keep the tag from reading as another mod acronym, matching the
+    /// rail's quiet treatment where a single label can't style the run separately.</summary>
     internal static string DisplayName(ReplayAttachment replay)
     {
         string name = replay.PlayerName.Length > 0 ? replay.PlayerName : "unknown";
@@ -456,6 +457,6 @@ public partial class MultiReplayGrid : CompositeDrawable
             name = $"{name} +{string.Join(string.Empty, replay.ModAcronyms)}";
 
         string tag = replay.ScoringVersion.Tag();
-        return tag.Length > 0 ? $"{name} {tag}" : name;
+        return tag.Length > 0 ? $"{name} ({tag})" : name;
     }
 }
