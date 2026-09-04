@@ -250,6 +250,13 @@ public enum JukeBoxSetting
     KnockoutLiveSort,
 
     /// <summary>
+    /// Whether a knocked-out player's NAME fades off their rail row, leaving the row and its numbers.
+    /// Off by default — an eliminated row normally just dims — but some prefer the name gone so the
+    /// board reads as the survivors.
+    /// </summary>
+    RemoveNameAfterKnockout,
+
+    /// <summary>
     /// Lets the rendered CHART (playfield) draw past the player box's edges instead of being
     /// clipped at them — the box's mask is what normally crops a ruleset's own overflow (catch's
     /// fruit spawn line and catcher, taiko's post-hit fly-up, a zoomed-in playfield) once it
@@ -573,6 +580,7 @@ public class JukeBoxConfigManager : IniConfigManager<JukeBoxSetting>
         SetDefault(JukeBoxSetting.KnockoutMode, Replays.KnockoutMode.Showcase);
         SetDefault(JukeBoxSetting.KnockoutSortBy, Replays.KnockoutSort.Score);
         SetDefault(JukeBoxSetting.KnockoutLiveSort, true);
+        SetDefault(JukeBoxSetting.RemoveNameAfterKnockout, false);
 
         // Both on, because both describe what the app ALREADY does: it fills an empty queue from
         // the radio, and — since MainScreen starts the jukebox unconditionally and the queue is

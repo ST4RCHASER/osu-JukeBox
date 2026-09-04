@@ -65,6 +65,10 @@ public partial class KnockoutBoard : CompositeDrawable
     /// <summary>The rules in force. Assign to change mode or sorting; the board follows.</summary>
     public KnockoutRules Rules { get; set; } = new KnockoutRules();
 
+    /// <summary>When set, a knocked-out player's NAME fades off their row (the row and its numbers
+    /// stay). Off by default — an eliminated row otherwise just dims. Fed from config by the combine.</summary>
+    public bool FadeNameOnKnockout { get; set; }
+
     /// <summary>
     /// The skin the rail looks its grade textures up in — the SAME chain the chart renders under
     /// (the user's selected skin with the classic legacy skin behind it), set by the combine once the
@@ -305,6 +309,7 @@ public partial class KnockoutBoard : CompositeDrawable
                 row.MoveToY(target, reorder_ms, Easing.OutQuint);
             }
 
+            row.FadeNameOnKnockout = FadeNameOnKnockout;
             row.UpdateFrom(entrants[order[rank]].Timeline, Rules, time, rank + 1, !eliminated.Contains(order[rank]));
         }
 
@@ -354,6 +359,14 @@ public partial class KnockoutBoard : CompositeDrawable
 
         /// <summary>Where this row is heading, so a transform is only started when it changes.</summary>
         public float TargetY;
+
+        /// <summary>Board-fed: whether a knocked-out player's name fades off this row (see the board's
+        /// <see cref="KnockoutBoard.FadeNameOnKnockout"/>).</summary>
+        internal bool FadeNameOnKnockout;
+
+        /// <summary>Whether the name column is currently faded out for a knockout, so the fade is
+        /// issued once rather than every frame.</summary>
+        private bool nameHidden;
 
         /// <summary>Raised with this row's player index on hover and with null when the pointer
         /// leaves, so the combine layer can focus that player's cursor. The board sets it.</summary>
@@ -521,6 +534,10 @@ public partial class KnockoutBoard : CompositeDrawable
         internal Color4 ModsColour => mods.Colour;
 
         internal string NameText => playerName.Text.ToString()!;
+
+        /// <summary>Test hook: whether the name column is currently shown (it fades out for a knocked-out
+        /// player when remove-name-after-knockout is on).</summary>
+        internal bool NameColumnShown => nameCell.Alpha > 0.5f;
 
         internal Color4 NameColour => playerName.Colour;
 
@@ -893,6 +910,18 @@ public partial class KnockoutBoard : CompositeDrawable
             }
 
             ShownPending = pending;
+
+            // Remove-name-after-knockout: with the option on, an eliminated player's name column
+            // (name and mods) fades away while the row and its numbers stay. Checked every frame, not
+            // just on the alive transition, so flipping the option mid-song reaches an already-out
+            // player; the fade is issued only when the wanted state changes.
+            bool wantNameHidden = !alive && FadeNameOnKnockout;
+
+            if (wantNameHidden != nameHidden)
+            {
+                nameHidden = wantNameHidden;
+                nameCell.FadeTo(nameHidden ? 0f : 1f, 300, Easing.OutQuint);
+            }
 
             if (alive == ShownAlive)
                 return;

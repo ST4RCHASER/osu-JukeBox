@@ -141,6 +141,9 @@ namespace JukeBox.Game.Tests.Visual
 
             AddStep("stop re-ordering", () => panel.KnockoutLiveSortCheckbox.Current.Value = false);
             AddAssert("config took live-sort", () => !config.Get<bool>(JukeBoxSetting.KnockoutLiveSort));
+
+            AddStep("turn on remove-name-after-knockout", () => panel.RemoveNameCheckbox.Current.Value = true);
+            AddAssert("config took remove-name", () => config.Get<bool>(JukeBoxSetting.RemoveNameAfterKnockout));
         }
 
         [Test]

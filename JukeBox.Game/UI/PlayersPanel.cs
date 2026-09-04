@@ -93,6 +93,7 @@ public partial class PlayersPanel : CompositeDrawable
     private SettingsEnumDropdown<KnockoutMode> knockoutModeDropdown = null!;
     private SettingsEnumDropdown<KnockoutSort> knockoutSortDropdown = null!;
     private SettingsCheckbox knockoutLiveSortCheckbox = null!;
+    private SettingsCheckbox removeNameCheckbox = null!;
     private SettingsDropdown<string> targetDropdown = null!;
     private SettingsDropdown<string> skinDropdown = null!;
     private FillFlowContainer swatches = null!;
@@ -148,6 +149,7 @@ public partial class PlayersPanel : CompositeDrawable
         knockoutModeDropdown = new SettingsEnumDropdown<KnockoutMode> { LabelText = "Knockout" };
         knockoutSortDropdown = new SettingsEnumDropdown<KnockoutSort> { LabelText = "Rank players by" };
         knockoutLiveSortCheckbox = new SettingsCheckbox { LabelText = "Re-order the board as they play" };
+        removeNameCheckbox = new SettingsCheckbox { LabelText = "Remove name after knockout" };
         targetDropdown = new SettingsDropdown<string> { LabelText = "Per-player settings for" };
         skinDropdown = new SettingsDropdown<string> { LabelText = "Gameplay skin", Items = skinChoices.Select(c => c.Display) };
 
@@ -158,6 +160,7 @@ public partial class PlayersPanel : CompositeDrawable
             knockoutModeDropdown,
             knockoutSortDropdown,
             knockoutLiveSortCheckbox,
+            removeNameCheckbox,
             targetDropdown,
             colourRow(),
             skinDropdown,
@@ -235,6 +238,7 @@ public partial class PlayersPanel : CompositeDrawable
         knockoutModeDropdown.Current = config.GetBindable<KnockoutMode>(JukeBoxSetting.KnockoutMode);
         knockoutSortDropdown.Current = config.GetBindable<KnockoutSort>(JukeBoxSetting.KnockoutSortBy);
         knockoutLiveSortCheckbox.Current = config.GetBindable<bool>(JukeBoxSetting.KnockoutLiveSort);
+        removeNameCheckbox.Current = config.GetBindable<bool>(JukeBoxSetting.RemoveNameAfterKnockout);
 
         buildSwatches();
 
@@ -448,6 +452,8 @@ public partial class PlayersPanel : CompositeDrawable
     internal SettingsEnumDropdown<KnockoutMode> KnockoutModeDropdown => knockoutModeDropdown;
     internal SettingsEnumDropdown<KnockoutSort> KnockoutSortDropdown => knockoutSortDropdown;
     internal SettingsCheckbox KnockoutLiveSortCheckbox => knockoutLiveSortCheckbox;
+
+    internal SettingsCheckbox RemoveNameCheckbox => removeNameCheckbox;
 
     internal IReadOnlyList<ReplayAttachment> CurrentPlayers => currentPlayers;
     internal bool IsShowing => Alpha > 0;

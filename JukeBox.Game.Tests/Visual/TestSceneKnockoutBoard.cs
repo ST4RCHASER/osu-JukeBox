@@ -208,6 +208,73 @@ namespace JukeBox.Game.Tests.Visual
                 rowFor(0).JudgementText.Length == 0 && rowFor(0).JudgementAlpha == 0);
         }
 
+        /// <summary>
+        /// Remove-name-after-knockout: with the option on, a knocked-out player's name column fades
+        /// off their row while the row and its numbers stay; with it off, the name stays. Asserted on
+        /// the name column's visibility, so ignoring the option fails.
+        /// </summary>
+        [Test]
+        public void RemoveNameAfterKnockoutFadesAnEliminatedPlayersName()
+        {
+            void buildBreakingField(bool removeName) => host.Child = board = new KnockoutBoard(
+                new System.Collections.Generic.List<KnockoutBoard.Entrant>
+                {
+                    new KnockoutBoard.Entrant("breaker", Color4.White, brokeAt(2000)),
+                    new KnockoutBoard.Entrant("survivor", Color4.White, ready(2000, 10)),
+                })
+            {
+                Rules = new KnockoutRules(KnockoutMode.ComboBreak, GraceEndSeconds: 0),
+                FadeNameOnKnockout = removeName,
+                Height = 500,
+            };
+
+            // The name fade is a real transform, so the clock has to actually advance for it to run —
+            // showAt freezes time at one instant, which never lets a fade finish.
+            void runClockTo(double target)
+            {
+                for (double t = manual.CurrentTime + 20; t <= target; t += 20)
+                {
+                    manual.CurrentTime = t;
+                    framed.ProcessFrame();
+                    host.UpdateSubTree();
+                }
+            }
+
+            AddStep("build a breaking field, name-removal ON", () =>
+            {
+                buildBreakingField(removeName: true);
+                host.Clock = framed = new FramedClock(manual);
+                manual.CurrentTime = 0;
+            });
+            AddUntilStep("rows built", () => board.Rows.Count == 2);
+
+            AddStep("play up to just before the break", () => runClockTo(1800));
+            AddAssert("both names are shown", () => board.Rows.All(r => r.NameColumnShown));
+
+            AddStep("play past the break and let the fade finish", () => runClockTo(3300));
+            AddAssert("the eliminated player's name has faded", () => !rowFor(0).NameColumnShown);
+            AddAssert("the survivor's name stays", () => rowFor(1).NameColumnShown);
+
+            AddStep("rebuild with name-removal OFF", () =>
+            {
+                buildBreakingField(removeName: false);
+                manual.CurrentTime = 0;
+            });
+            AddUntilStep("rows built", () => board.Rows.Count == 2);
+            AddStep("play past the break", () => runClockTo(3300));
+            AddAssert("the eliminated player's name stays when the option is off", () => rowFor(0).NameColumnShown);
+        }
+
+        /// <summary>A timeline that holds a combo then breaks it at <paramref name="breakTime"/>.</summary>
+        private static ReplayTimeline brokeAt(double breakTime)
+        {
+            var tl = new ReplayTimeline();
+            tl.Record(new TimelinePoint(1000, 1000, 5, 1.0, false, "A"));
+            tl.Record(new TimelinePoint(breakTime, 1000, 0, 0.9, true, "B", 0, 5));
+            tl.MarkComplete(breakTime + 1000);
+            return tl;
+        }
+
         [Test]
         public void TheScoreIsAbbreviatedTheWayDanserDoesIt()
         {

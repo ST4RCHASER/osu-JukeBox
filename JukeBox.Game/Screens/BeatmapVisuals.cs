@@ -67,6 +67,7 @@ public partial class BeatmapVisuals : CompositeDrawable
     private readonly Bindable<KnockoutMode> knockoutMode = new Bindable<KnockoutMode>();
     private readonly Bindable<KnockoutSort> knockoutSortBy = new Bindable<KnockoutSort>();
     private readonly BindableBool knockoutLiveSort = new BindableBool();
+    private readonly BindableBool removeNameAfterKnockout = new BindableBool();
 
     // One clip per layer, each sized to MainScreen's player box (see updateLayerClips) and each
     // masking only while that box has stopped doing it itself. They exist for the two
@@ -586,6 +587,7 @@ public partial class BeatmapVisuals : CompositeDrawable
         config.BindWith(JukeBoxSetting.KnockoutMode, knockoutMode);
         config.BindWith(JukeBoxSetting.KnockoutSortBy, knockoutSortBy);
         config.BindWith(JukeBoxSetting.KnockoutLiveSort, knockoutLiveSort);
+        config.BindWith(JukeBoxSetting.RemoveNameAfterKnockout, removeNameAfterKnockout);
             config.BindWith(JukeBoxSetting.PlayHitSounds, playHitSounds);
             config.BindWith(JukeBoxSetting.BackgroundDim, backgroundDim);
             config.BindWith(JukeBoxSetting.BackgroundBlur, backgroundBlur);
@@ -633,6 +635,7 @@ public partial class BeatmapVisuals : CompositeDrawable
         knockoutMode.BindValueChanged(_ => updateKnockoutRules());
         knockoutSortBy.BindValueChanged(_ => updateKnockoutRules());
         knockoutLiveSort.BindValueChanged(_ => updateKnockoutRules());
+        removeNameAfterKnockout.BindValueChanged(_ => updateKnockoutRules());
         playHitSounds.BindValueChanged(_ => updateLazerLayer());
 
         // Opacity is pure alpha on the layer already on screen — no rebuild, unlike mods or a
@@ -884,6 +887,7 @@ public partial class BeatmapVisuals : CompositeDrawable
                 {
                     AlwaysPresent = true,
                     Rules = currentKnockoutRules(),
+                    RemoveNameAfterKnockout = removeNameAfterKnockout.Value,
                 });
             }
             else if (forThisDifficulty.Count > 1)
@@ -954,7 +958,10 @@ public partial class BeatmapVisuals : CompositeDrawable
     private void updateKnockoutRules()
     {
         if (multiCombine != null)
+        {
             multiCombine.Rules = currentKnockoutRules();
+            multiCombine.RemoveNameAfterKnockout = removeNameAfterKnockout.Value;
+        }
     }
 
     /// <summary>

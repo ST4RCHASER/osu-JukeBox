@@ -102,6 +102,10 @@ public partial class MultiReplayCombine : CompositeDrawable
 
     private KnockoutRules rules = new KnockoutRules();
 
+    /// <summary>Whether a knocked-out player's name fades off the rail (config-driven; see
+    /// <see cref="Configuration.JukeBoxSetting.RemoveNameAfterKnockout"/>). Forwarded to the board.</summary>
+    public bool RemoveNameAfterKnockout { get; set; }
+
     /// <summary>Whether the chart's hit sounds play. One chart, so no flam to avoid here.</summary>
     public bool HitSoundsEnabled
     {
@@ -254,6 +258,9 @@ public partial class MultiReplayCombine : CompositeDrawable
             // grade shows the active skin's own "ranking-X-small" graphic (small, not the giant badge)
             // and matches the play on screen. Null until the chart's skin is built.
             board.GradeSkin = chart.GradeSkin;
+
+            // Config-driven, live: flipping the option mid-song reaches the board next frame.
+            board.FadeNameOnKnockout = RemoveNameAfterKnockout;
         }
     }
 
