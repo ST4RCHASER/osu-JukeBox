@@ -384,6 +384,10 @@ namespace JukeBox.Game
             // the shared Chart-tab selection on purpose (see the class doc).
             dependencies.Cache(new Replays.PlayerOverrideStore());
 
+            // The multi-replay preload's progress, published by the combine layer and read by the
+            // Players panel's buffer bar — the two never touch, they meet here.
+            dependencies.Cache(new Replays.PreloadProgressTracker());
+
             // Spectating. Cached and added unconditionally, like the search and the account above:
             // with no credentials it simply reports that it cannot poll, and it does nothing at all
             // until someone presses Start. The API client is built HERE because it needs the app's

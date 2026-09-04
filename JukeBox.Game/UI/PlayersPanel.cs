@@ -49,6 +49,11 @@ public partial class PlayersPanel : CompositeDrawable
     [Resolved(canBeNull: true)]
     private PlayerOverrideStore? overrideStore { get; set; }
 
+    // The multi-replay preload's progress, published by the combine layer. Null in a bare test host
+    // (no combine to preload), in which case the buffer bar simply never shows.
+    [Resolved(canBeNull: true)]
+    private PreloadProgressTracker? preloadTracker { get; set; }
+
     [Resolved]
     private JukeBoxConfigManager config { get; set; } = null!;
 
@@ -86,6 +91,7 @@ public partial class PlayersPanel : CompositeDrawable
     private SettingsDropdown<string> targetDropdown = null!;
     private SettingsDropdown<string> skinDropdown = null!;
     private FillFlowContainer swatches = null!;
+    private BufferBar preloadBar = null!;
 
     /// <summary>The gameplay skins a player can be given, as (menu label, stored key). A null key is
     /// the reset — fall back to the global skin. Keys are <see cref="JukeBoxSkin"/> names.</summary>
@@ -131,6 +137,7 @@ public partial class PlayersPanel : CompositeDrawable
 
         var content = new List<Drawable>
         {
+            preloadRow(),
             multiReplayModeDropdown,
             knockoutModeDropdown,
             knockoutSortDropdown,
@@ -156,6 +163,23 @@ public partial class PlayersPanel : CompositeDrawable
         InternalChild = new LazerSection("Players", FontAwesome.Solid.Users)
         {
             Children = content.ToArray(),
+        };
+    }
+
+    /// <summary>
+    /// The preload row: a caption and a YouTube-style buffer bar showing how much of the replays'
+    /// timelines have been recorded. The whole row shows only while a preload is running (the combine
+    /// publishes progress through <see cref="PreloadProgressTracker"/>) and fades out once every
+    /// timeline is complete, so it does not sit empty during ordinary playback.
+    /// </summary>
+    private Drawable preloadRow()
+    {
+        return new Container
+        {
+            RelativeSizeAxes = Axes.X,
+            AutoSizeAxes = Axes.Y,
+            Padding = new MarginPadding { Horizontal = SettingsPanel.CONTENT_MARGINS, Vertical = 6 },
+            Child = preloadBar = new BufferBar(),
         };
     }
 
@@ -461,4 +485,95 @@ public partial class PlayersPanel : CompositeDrawable
         protected override void OnHoverLost(HoverLostEvent e)
             => fill.ScaleTo(1f, Theme.HoverFadeDuration, Easing.OutQuint);
     }
+
+    /// <summary>
+    /// A YouTube-style buffer bar: a caption over a thin track whose grey fill grows to show how much
+    /// of the replays' timelines have been preloaded. It reads its fraction from the shared
+    /// <see cref="PreloadProgressTracker"/> and shows only while a preload is running — the combine
+    /// marks the tracker inactive once every timeline is recorded, and the whole row fades away.
+    /// </summary>
+    internal partial class BufferBar : CompositeDrawable
+    {
+        [Resolved(canBeNull: true)]
+        private PreloadProgressTracker? tracker { get; set; }
+
+        private readonly Bindable<double> progress = new Bindable<double>(1);
+        private readonly BindableBool active = new BindableBool();
+
+        private readonly Box fill;
+        private readonly SpriteText caption;
+
+        private static readonly Color4 track_colour = new Color4(0.22f, 0.22f, 0.26f, 1f);
+        private static readonly Color4 buffer_colour = new Color4(0.72f, 0.72f, 0.78f, 1f);
+
+        public BufferBar()
+        {
+            RelativeSizeAxes = Axes.X;
+            AutoSizeAxes = Axes.Y;
+            Alpha = 0;
+
+            InternalChild = new FillFlowContainer
+            {
+                RelativeSizeAxes = Axes.X,
+                AutoSizeAxes = Axes.Y,
+                Direction = FillDirection.Vertical,
+                Spacing = new Vector2(0, 6),
+                Children = new Drawable[]
+                {
+                    caption = new SpriteText
+                    {
+                        Text = "Preloading replays",
+                        Font = FontUsage.Default.With(size: Theme.RowSecondaryTextSize),
+                    },
+                    new Container
+                    {
+                        RelativeSizeAxes = Axes.X,
+                        Height = 6,
+                        Masking = true,
+                        CornerRadius = 3,
+                        Children = new Drawable[]
+                        {
+                            // The whole track — the not-yet-buffered ground, always drawn.
+                            new Box { RelativeSizeAxes = Axes.Both, Colour = track_colour },
+                            // The buffered fill, its width the fraction preloaded.
+                            fill = new Box
+                            {
+                                RelativeSizeAxes = Axes.Both,
+                                Width = 0,
+                                Colour = buffer_colour,
+                            },
+                        },
+                    },
+                },
+            };
+        }
+
+        [BackgroundDependencyLoader]
+        private void load()
+        {
+            if (tracker != null)
+            {
+                progress.BindTo(tracker.Progress);
+                active.BindTo(tracker.Active);
+            }
+
+            progress.BindValueChanged(e =>
+            {
+                float f = (float)Math.Clamp(e.NewValue, 0, 1);
+                fill.Width = f;
+                caption.Text = $"Preloading replays… {(int)(f * 100)}%";
+            }, true);
+
+            active.BindValueChanged(e => this.FadeTo(e.NewValue ? 1 : 0, 200, Easing.OutQuint), true);
+        }
+
+        /// <summary>Test hook: the buffered fraction the fill currently shows, 0 to 1.</summary>
+        internal float FillFraction => fill.Width;
+
+        /// <summary>Test hook: whether the bar is currently shown (a preload is running).</summary>
+        internal bool Showing => Alpha > 0.5f;
+    }
+
+    /// <summary>Test hook: the preload buffer bar.</summary>
+    internal BufferBar PreloadBar => preloadBar;
 }

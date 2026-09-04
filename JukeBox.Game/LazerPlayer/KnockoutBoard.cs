@@ -65,11 +65,6 @@ public partial class KnockoutBoard : CompositeDrawable
     /// <summary>The rules in force. Assign to change mode or sorting; the board follows.</summary>
     public KnockoutRules Rules { get; set; } = new KnockoutRules();
 
-    /// <summary>Preload progress, 0 to 1. While below 1 the board shows a "simulating N%" line — the
-    /// plays are still being recorded and the numbers are not to be trusted yet. Set by the combine
-    /// layer from its simulator; defaults to 1 (ready) for a board with no preload behind it.</summary>
-    public double LoadingProgress { get; set; } = 1;
-
     /// <summary>
     /// The skin the rail looks its grade textures up in — the SAME chain the chart renders under
     /// (the user's selected skin with the classic legacy skin behind it), set by the combine once the
@@ -230,23 +225,9 @@ public partial class KnockoutBoard : CompositeDrawable
             Alpha = 0,
             Margin = new MarginPadding { Left = 6 },
         });
-
-        // Shown across the top of the board while the plays are still being preloaded, so a fresh
-        // load reads as "working" rather than as a rail full of zeros.
-        AddInternal(progressNote = new OsuSpriteText
-        {
-            Anchor = Anchor.TopLeft,
-            Origin = Anchor.TopLeft,
-            Colour = Color4.White,
-            Alpha = 0,
-            Margin = new MarginPadding { Left = 6, Top = 3 },
-            Font = OsuFont.Torus.With(size: 13, weight: FontWeight.SemiBold),
-            Shadow = true,
-        });
     }
 
     private OsuSpriteText overflowNote = null!;
-    private OsuSpriteText progressNote = null!;
 
     protected override void Update()
     {
@@ -257,12 +238,10 @@ public partial class KnockoutBoard : CompositeDrawable
 
         applyDensity();
 
-        // Preload banner: while the recordings are still being made, say so and by how much, and
-        // keep it above the rows so it is the first thing read on a fresh load.
-        bool loading = LoadingProgress < 0.999;
-        progressNote.Alpha = loading ? 1 : 0;
-        if (loading)
-            progressNote.Text = $"Simulating replays… {(int)(LoadingProgress * 100)}%";
+        // The "simulating N%" indicator no longer lives on the rail — it moved to an unobtrusive
+        // bottom-right caption on the combine layer, with the full buffered picture in the Playback
+        // tab's buffer bar. The rail simply shows neutral zeros for a still-pending player (see
+        // UpdateFrom) rather than captioning its own load.
 
         double time = Clock.CurrentTime;
         var timelines = entrants.Select(e => e.Timeline).ToList();

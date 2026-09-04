@@ -123,6 +123,15 @@ public partial class MultiReplayCombine : CompositeDrawable
     [Resolved(canBeNull: true)]
     private Replays.PlayerOverrideStore? overrideStore { get; set; }
 
+    /// <summary>Where the preload progress is published for the Players panel's buffer bar to read.
+    /// Null in a bare test host.</summary>
+    [Resolved(canBeNull: true)]
+    private Replays.PreloadProgressTracker? preloadTracker { get; set; }
+
+    /// <summary>The small "Simulating N%" indicator, low in the bottom-right corner so it says the
+    /// numbers are still settling without sitting over the rail or the play.</summary>
+    private OsuSpriteText progressNote = null!;
+
     [BackgroundDependencyLoader]
     private void load()
     {
@@ -151,7 +160,25 @@ public partial class MultiReplayCombine : CompositeDrawable
 
         simulator = new ReplaySimulator(osuFile, replays);
 
-        InternalChildren = new Drawable[] { chart, simulator };
+        InternalChildren = new Drawable[]
+        {
+            chart,
+            simulator,
+
+            // Unobtrusive, bottom-right: a small caption that the plays are still being recorded, so a
+            // fresh load reads as "working" rather than as a rail full of zeros. Hidden the moment the
+            // preload is done. The full buffered picture is the buffer bar over in the Playback tab.
+            progressNote = new OsuSpriteText
+            {
+                Anchor = Anchor.BottomRight,
+                Origin = Anchor.BottomRight,
+                Margin = new MarginPadding { Right = 8, Bottom = 8 },
+                Colour = Color4.White.Opacity(0.7f),
+                Font = OsuFont.Torus.With(size: 12, weight: FontWeight.SemiBold),
+                Shadow = true,
+                Alpha = 0,
+            },
+        };
     }
 
     /// <summary>
@@ -209,12 +236,20 @@ public partial class MultiReplayCombine : CompositeDrawable
         attachCursors();
         updateCursors();
 
-        // Feed the preload progress to the rail so it can show "simulating N%" until every play is
-        // recorded — after which the whole board is a pure lookup.
+        // The preload progress: a small bottom-right caption here, and the buffered-bar in the
+        // Playback tab through the shared tracker. Both say the same thing — the plays are still
+        // being recorded and the numbers are not final — until every timeline is complete.
+        double progress = simulator.Progress;
+        bool loading = progress < 0.999;
+
+        progressNote.Alpha = loading ? 1 : 0;
+        if (loading)
+            progressNote.Text = $"Simulating replays… {(int)(progress * 100)}%";
+
+        preloadTracker?.Report(progress);
+
         if (board != null)
         {
-            board.LoadingProgress = simulator.Progress;
-
             // The rail looks up its grade textures in the SAME skin the chart renders under, so a
             // grade shows the active skin's own "ranking-X-small" graphic (small, not the giant badge)
             // and matches the play on screen. Null until the chart's skin is built.
@@ -519,6 +554,10 @@ public partial class MultiReplayCombine : CompositeDrawable
     {
         if (overrideStore != null)
             overrideStore.Changed -= onOverrideChanged;
+
+        // The preload belongs to this combine; with it gone there is nothing left to buffer, so the
+        // Playback tab's bar must not linger showing a stale fraction.
+        preloadTracker?.Clear();
 
         base.Dispose(isDisposing);
     }

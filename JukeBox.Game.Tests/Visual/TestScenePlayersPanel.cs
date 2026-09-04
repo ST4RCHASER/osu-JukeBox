@@ -29,6 +29,7 @@ namespace JukeBox.Game.Tests.Visual
         private PlaybackController playback = null!;
         private ReplayStore replays = null!;
         private PlayerOverrideStore overrides = null!;
+        private PreloadProgressTracker preloadTracker = null!;
         private OverlayColourProvider colourProvider = null!;
 
         private Container host = null!;
@@ -42,6 +43,7 @@ namespace JukeBox.Game.Tests.Visual
             playback = new PlaybackController();
             replays = new ReplayStore();
             overrides = new PlayerOverrideStore();
+            preloadTracker = new PreloadProgressTracker();
             colourProvider = new OverlayColourProvider(OverlayColourScheme.Purple);
 
             var deps = new DependencyContainer(parent);
@@ -49,6 +51,7 @@ namespace JukeBox.Game.Tests.Visual
             deps.CacheAs(playback);
             deps.Cache(replays);
             deps.Cache(overrides);
+            deps.Cache(preloadTracker);
             deps.CacheAs(colourProvider);
             return deps;
         }
@@ -91,6 +94,29 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("build with three", () => build(3));
             AddUntilStep("panel loaded", () => panel.IsLoaded);
             AddAssert("now showing", () => panel.IsShowing && panel.CurrentPlayers.Count == 3);
+        }
+
+        /// <summary>
+        /// The preload buffer bar (YouTube-style): it shows while the replays are being recorded, its
+        /// grey fill tracking the fraction preloaded, and hides once every timeline is complete. Driven
+        /// by the shared <see cref="PreloadProgressTracker"/> the combine publishes to.
+        /// </summary>
+        [Test]
+        public void ThePreloadBufferBarFillsWithProgressThenHides()
+        {
+            AddStep("build three", () => build(3));
+            AddUntilStep("panel loaded", () => panel.IsLoaded);
+
+            AddStep("report a half-recorded preload", () => preloadTracker.Report(0.5));
+            AddUntilStep("the bar shows, filled about halfway", () =>
+                panel.PreloadBar.Showing && System.Math.Abs(panel.PreloadBar.FillFraction - 0.5f) < 0.02f);
+
+            AddStep("report nearly done", () => preloadTracker.Report(0.9));
+            AddUntilStep("the fill grows and it is still shown", () =>
+                panel.PreloadBar.Showing && panel.PreloadBar.FillFraction > 0.85f);
+
+            AddStep("report complete", () => preloadTracker.Report(1.0));
+            AddUntilStep("the bar hides once fully buffered", () => !panel.PreloadBar.Showing);
         }
 
         [Test]
