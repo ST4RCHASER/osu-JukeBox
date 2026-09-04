@@ -411,14 +411,18 @@ public partial class ReplaySimulator : CompositeDrawable
 
             var score = Layer.LiveScore;
 
-            ScoreInfo? classicScore = classic && Layer.Ruleset != null
-                ? new ScoreInfo { Ruleset = Layer.Ruleset.RulesetInfo }
-                : null;
+            // A CL play is scored as osu!STABLE ScoreV1 (what the play scored on stable / what danser
+            // shows), driven off the renderer's own per-object results — NOT lazer's
+            // GetDisplayScore(Classic), a remap that does not match stable. Difficulty multiplier is on
+            // the map's ORIGINAL stats, so it reads the unmodified beatmap.
+            var scoreV1 = classic ? new StableScoreV1(beatmap.Beatmap, Mods) : null;
 
             var performance = performanceFor(Layer);
 
             Layer.DrawableRuleset.NewResult += result =>
             {
+                scoreV1?.Apply(result.HitObject, result.Type);
+
                 int combo = score.Combo.Value;
 
                 bool broke = lastCombo > 0 && combo == 0;
@@ -426,17 +430,7 @@ public partial class ReplaySimulator : CompositeDrawable
 
                 lastCombo = combo;
 
-                long total;
-
-                if (classicScore != null)
-                {
-                    score.PopulateScore(classicScore);
-                    total = classicScore.GetDisplayScore(osu.Game.Rulesets.Scoring.ScoringMode.Classic);
-                }
-                else
-                {
-                    total = score.TotalScore.Value;
-                }
+                long total = scoreV1 != null ? scoreV1.Score : score.TotalScore.Value;
 
                 var position = result.HitObject is osu.Game.Rulesets.Osu.Objects.OsuHitObject osuObject
                     ? osuObject.StackedPosition

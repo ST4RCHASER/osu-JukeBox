@@ -55,13 +55,14 @@ public static class AnalyticReplayRecorder
 
         var performance = ReplayPerformance.Create(ruleset, working, mods, attributeCache);
 
-        // A CL play (every legacy .osr, or a per-player Classic override) is SCORED the classic way —
-        // its rail number and its knockout ranking are the classic score, not lazer's standardised
-        // one. Same conversion the drawable path used: lazer's own PopulateScore → GetDisplayScore,
-        // into a single reused ScoreInfo.
+        // A CL play (every legacy .osr, or a per-player Classic override) is SCORED as osu!STABLE
+        // ScoreV1 — the number the play actually scored on stable and that danser reproduces, driven
+        // off these same ordered judgements (see StableScoreV1). lazer's GetDisplayScore(Classic) is a
+        // remap of the standardised score and does NOT match stable's number. The difficulty
+        // multiplier is on the map's ORIGINAL stats, so it reads the unmodified beatmap.
         bool classic = mods.Any(m => m is ModClassic);
         var scoringMode = classic ? ScoringMode.Classic : ScoringMode.Standardised;
-        var classicScore = classic ? new ScoreInfo { Ruleset = ruleset.RulesetInfo } : null;
+        var scoreV1 = classic ? new StableScoreV1(working.Beatmap, mods) : null;
 
         int lastCombo = 0;
 
@@ -69,6 +70,7 @@ public static class AnalyticReplayRecorder
         {
             var jr = new JudgementResult(j.Object, j.Object.CreateJudgement()) { Type = j.Result };
             processor.ApplyResult(jr);
+            scoreV1?.Apply(j.Object, j.Result);
 
             int combo = processor.Combo.Value;
 
@@ -78,17 +80,7 @@ public static class AnalyticReplayRecorder
             int lost = broke ? lastCombo : 0;
             lastCombo = combo;
 
-            long total;
-
-            if (classicScore != null)
-            {
-                processor.PopulateScore(classicScore);
-                total = classicScore.GetDisplayScore(ScoringMode.Classic);
-            }
-            else
-            {
-                total = processor.TotalScore.Value;
-            }
+            long total = scoreV1 != null ? scoreV1.Score : processor.TotalScore.Value;
 
             timeline.Record(new TimelinePoint(
                 j.Time,
