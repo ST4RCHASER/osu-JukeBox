@@ -102,8 +102,7 @@ public partial class PlayersPanel : CompositeDrawable
     /// <summary>The BUNDLED gameplay skins a player can be given, as (menu label, stored key). A null
     /// key is the reset — fall back to the global skin. The user's imported skins are appended to
     /// these at load and whenever the library changes (see <see cref="rebuildSkinChoices"/>), keyed by
-    /// folder through <see cref="LazerChartLayer.CustomSkinKey"/> so a per-player custom skin actually
-    /// renders.</summary>
+    /// folder through LazerChartLayer.CustomSkinKey so a per-player custom skin actually renders.</summary>
     private static readonly (string Display, string? Key)[] bundled_skin_choices =
     {
         ("Default (global skin)", null),

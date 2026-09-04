@@ -51,7 +51,7 @@ public static class AnalyticOsuJudge
     /// <summary>
     /// Judges every object in <paramref name="beatmap"/> against <paramref name="frames"/>, returning
     /// the results in the exact order a play produces them (by judgement time, nested slider parts
-    /// before the slider that owns them) — the order <see cref="ScoreProcessor.ApplyResult"/> expects.
+    /// before the slider that owns them) — the order the score processor's ApplyResult expects.
     /// </summary>
     public static IReadOnlyList<Judged> Evaluate(IBeatmap beatmap, IReadOnlyList<ReplayFrame> frames)
     {
