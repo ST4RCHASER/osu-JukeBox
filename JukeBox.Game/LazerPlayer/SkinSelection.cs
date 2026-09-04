@@ -253,6 +253,37 @@ public partial class SkinSelection : Component
     }
 
     /// <summary>
+    /// Builds a SPECIFIC imported skin by its folder name — for a per-player skin override, where
+    /// each player can be on a different imported skin (so the global <see cref="CreateEffectiveSkin"/>,
+    /// which only ever builds the ONE globally-selected custom skin, is not enough). Needs this
+    /// instance's storage access, which the static <see cref="CreateSkin"/> lacks. Degrades to
+    /// <see cref="JukeBoxSkin.Argon"/> when the folder is empty, gone, or fails to load.
+    /// </summary>
+    public Skin CreateSkinFromFolder(string folder, IStorageResourceProvider resources)
+    {
+        if (folder.Length > 0 && folder == Path.GetFileName(folder))
+        {
+            string path = Path.Combine(skinsRoot, folder);
+
+            if (Directory.Exists(path))
+            {
+                try
+                {
+                    return new ImportedLegacySkin(path, resources, host);
+                }
+                catch (Exception e)
+                {
+                    Logger.Error(e, $"Failed to load per-player imported skin '{folder}' — falling back to Argon");
+                }
+            }
+            else
+                Logger.Log($"Per-player skin folder '{folder}' is not installed — falling back to Argon");
+        }
+
+        return CreateSkin(JukeBoxSkin.Argon, resources);
+    }
+
+    /// <summary>
     /// Builds the concrete BUNDLED skin instance for a resolved choice. The caller owns (and must
     /// dispose) the returned skin. <paramref name="skin"/> must be neither
     /// <see cref="JukeBoxSkin.Random"/> (resolve through <see cref="Effective"/> first) nor

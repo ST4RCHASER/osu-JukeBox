@@ -151,7 +151,7 @@ public partial class MultiReplayCombine : CompositeDrawable
             // Their per-player mod override, if any, so the rendered chart matches the re-scored
             // numbers on their rail row.
             OverrideMods = driver != null ? overrideStore?.Peek(driver)?.Mods : null,
-            OverrideSkin = driver != null ? LazerChartLayer.ParseSkin(overrideStore?.Peek(driver)?.SkinKey) : null,
+            OverrideSkinKey = driver != null ? overrideStore?.Peek(driver)?.SkinKey : null,
 
             // No per-hit judgement popups on the combine playfield — it should read as cursors only.
             // The recent 100/50/miss is shown on the rail's judgement column instead.

@@ -3,6 +3,7 @@
 using System.IO;
 using System.Linq;
 using JukeBox.Game.Configuration;
+using JukeBox.Game.LazerPlayer;
 using JukeBox.Game.Playback;
 using JukeBox.Game.Replays;
 using JukeBox.Game.UI;
@@ -30,6 +31,7 @@ namespace JukeBox.Game.Tests.Visual
         private ReplayStore replays = null!;
         private PlayerOverrideStore overrides = null!;
         private PreloadProgressTracker preloadTracker = null!;
+        private SkinLibrary skinLibrary = null!;
         private OverlayColourProvider colourProvider = null!;
 
         private Container host = null!;
@@ -44,6 +46,7 @@ namespace JukeBox.Game.Tests.Visual
             replays = new ReplayStore();
             overrides = new PlayerOverrideStore();
             preloadTracker = new PreloadProgressTracker();
+            skinLibrary = new SkinLibrary();
             colourProvider = new OverlayColourProvider(OverlayColourScheme.Purple);
 
             var deps = new DependencyContainer(parent);
@@ -52,6 +55,7 @@ namespace JukeBox.Game.Tests.Visual
             deps.Cache(replays);
             deps.Cache(overrides);
             deps.Cache(preloadTracker);
+            deps.Cache(skinLibrary);
             deps.CacheAs(colourProvider);
             return deps;
         }
@@ -59,6 +63,7 @@ namespace JukeBox.Game.Tests.Visual
         [BackgroundDependencyLoader]
         private void load()
         {
+            Add(skinLibrary);
             Add(playback);
             Add(host = new Container { RelativeSizeAxes = Axes.Both });
         }
@@ -195,6 +200,43 @@ namespace JukeBox.Game.Tests.Visual
 
             AddStep("remove Hard Rock again", () => panel.SetMod("HR", false));
             AddAssert("player 0 falls back to recorded", () => overrides.Peek(players[0])?.Mods == null);
+        }
+
+        /// <summary>
+        /// A user's IMPORTED skin can be given to one player, not just the bundled skins. The dropdown
+        /// lists imported skins alongside the bundled ones, and picking one stores a per-player key by
+        /// FOLDER (so a custom skin actually resolves at render time). Asserted on the stored key — the
+        /// bug was that only bundled skins were selectable/applied per player.
+        /// </summary>
+        [Test]
+        public void APerPlayerImportedSkinCanBeSelectedAndIsStoredByFolder()
+        {
+            const string folder = "test-imported-skin";
+
+            AddStep("install a fake imported skin", () =>
+            {
+                string dir = Path.Combine(skinLibrary.Root, folder);
+                Directory.CreateDirectory(dir);
+                File.WriteAllText(Path.Combine(dir, "skin.ini"), "[General]\nName: My Test Skin\n");
+                skinLibrary.Refresh();
+            });
+
+            AddStep("build three", () => build(3));
+            AddUntilStep("panel loaded", () => panel.IsLoaded);
+
+            AddAssert("the imported skin is offered in the dropdown", () =>
+                panel.SkinChoiceKeys.Contains(LazerChartLayer.CustomSkinKey(folder)));
+
+            AddStep("target player 0, pick the imported skin", () =>
+            {
+                panel.SelectTarget(0);
+                panel.SelectSkinKey(LazerChartLayer.CustomSkinKey(folder));
+            });
+
+            AddAssert("player 0's override stores the custom folder key", () =>
+                overrides.Peek(players[0])?.SkinKey == LazerChartLayer.CustomSkinKey(folder));
+            AddAssert("players 1 and 2 keep the global skin", () =>
+                overrides.Peek(players[1])?.SkinKey == null && overrides.Peek(players[2])?.SkinKey == null);
         }
 
         [Test]

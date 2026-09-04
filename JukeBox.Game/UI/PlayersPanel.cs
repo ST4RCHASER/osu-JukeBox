@@ -54,6 +54,11 @@ public partial class PlayersPanel : CompositeDrawable
     [Resolved(canBeNull: true)]
     private PreloadProgressTracker? preloadTracker { get; set; }
 
+    // The user's imported-skin library, so a per-player skin override can offer imported skins, not
+    // just the bundled ones. Null in a bare test host (no imports to offer).
+    [Resolved(canBeNull: true)]
+    private JukeBox.Game.LazerPlayer.SkinLibrary? skinLibrary { get; set; }
+
     [Resolved]
     private JukeBoxConfigManager config { get; set; } = null!;
 
@@ -93,9 +98,12 @@ public partial class PlayersPanel : CompositeDrawable
     private FillFlowContainer swatches = null!;
     private BufferBar preloadBar = null!;
 
-    /// <summary>The gameplay skins a player can be given, as (menu label, stored key). A null key is
-    /// the reset — fall back to the global skin. Keys are <see cref="JukeBoxSkin"/> names.</summary>
-    private static readonly (string Display, string? Key)[] skin_choices =
+    /// <summary>The BUNDLED gameplay skins a player can be given, as (menu label, stored key). A null
+    /// key is the reset — fall back to the global skin. The user's imported skins are appended to
+    /// these at load and whenever the library changes (see <see cref="rebuildSkinChoices"/>), keyed by
+    /// folder through <see cref="LazerChartLayer.CustomSkinKey"/> so a per-player custom skin actually
+    /// renders.</summary>
+    private static readonly (string Display, string? Key)[] bundled_skin_choices =
     {
         ("Default (global skin)", null),
         ("Argon", "Argon"),
@@ -103,10 +111,18 @@ public partial class PlayersPanel : CompositeDrawable
         ("Triangles", "Triangles"),
         ("Classic", "Classic"),
     };
+
+    /// <summary>The bundled skins plus every imported one, as the dropdown currently lists them.</summary>
+    private List<(string Display, string? Key)> skinChoices = bundled_skin_choices.ToList();
     private readonly Dictionary<string, SettingsCheckbox> modCheckboxes = new Dictionary<string, SettingsCheckbox>();
     private readonly Dictionary<string, BindableBool> modBindables = new Dictionary<string, BindableBool>();
 
     private readonly Bindable<string?> selectedOsuFile = new Bindable<string?>();
+
+    /// <summary>A bound copy of the imported-skin library, so the skin dropdown re-lists the moment a
+    /// .osk is imported. A bound copy (unbound on disposal) rather than a direct subscription, so a
+    /// dead panel does not keep answering the shared library's changes. Null in a bare test host.</summary>
+    private IBindableList<JukeBox.Game.LazerPlayer.ImportedSkin>? importedSkins;
 
     private IReadOnlyList<ReplayAttachment> currentPlayers = Array.Empty<ReplayAttachment>();
 
@@ -133,7 +149,7 @@ public partial class PlayersPanel : CompositeDrawable
         knockoutSortDropdown = new SettingsEnumDropdown<KnockoutSort> { LabelText = "Rank players by" };
         knockoutLiveSortCheckbox = new SettingsCheckbox { LabelText = "Re-order the board as they play" };
         targetDropdown = new SettingsDropdown<string> { LabelText = "Per-player settings for" };
-        skinDropdown = new SettingsDropdown<string> { LabelText = "Gameplay skin", Items = skin_choices.Select(c => c.Display) };
+        skinDropdown = new SettingsDropdown<string> { LabelText = "Gameplay skin", Items = skinChoices.Select(c => c.Display) };
 
         var content = new List<Drawable>
         {
@@ -233,6 +249,12 @@ public partial class PlayersPanel : CompositeDrawable
         selectedOsuFile.BindTo(playback.SelectedOsuFile);
         selectedOsuFile.BindValueChanged(_ => refreshPlayers());
 
+        // Re-list the skin dropdown from the library now and whenever it changes (a .osk imported
+        // while the panel is open). runOnceImmediately builds the initial list; with no library
+        // (bare test host) the dropdown keeps just the bundled skins.
+        importedSkins = skinLibrary?.Skins.GetBoundCopy();
+        importedSkins?.BindCollectionChanged((_, __) => rebuildSkinChoices(), true);
+
         refreshPlayers();
     }
 
@@ -241,6 +263,7 @@ public partial class PlayersPanel : CompositeDrawable
         // A rebuilt screen disposes this panel but the shared SelectedOsuFile lives on; without this
         // the dead panel keeps answering its changes and touches disposed drawables.
         selectedOsuFile.UnbindAll();
+        importedSkins?.UnbindAll();
         base.Dispose(isDisposing);
     }
 
@@ -301,7 +324,7 @@ public partial class PlayersPanel : CompositeDrawable
             modBindables[acronym].Value = mods.Contains(acronym);
 
         string? skinKey = target == target_all ? null : overrideStore?.Peek(currentPlayers[target])?.SkinKey;
-        skinDropdown.Current.Value = skin_choices.FirstOrDefault(c => c.Key == skinKey).Display ?? skin_choices[0].Display;
+        skinDropdown.Current.Value = skinChoices.FirstOrDefault(c => c.Key == skinKey).Display ?? skinChoices[0].Display;
 
         refreshing = false;
 
@@ -313,10 +336,29 @@ public partial class PlayersPanel : CompositeDrawable
         if (refreshing || display == null)
             return;
 
-        string? key = skin_choices.FirstOrDefault(c => c.Display == display).Key;
+        string? key = skinChoices.FirstOrDefault(c => c.Display == display).Key;
 
         foreach (var replay in targetReplays())
             overrideStore?.SetSkin(replay, key);
+    }
+
+    /// <summary>
+    /// Rebuilds the skin dropdown from the bundled skins plus every imported one, preserving the
+    /// current target's selection across the rebuild. Called at load and whenever the library changes,
+    /// so a .osk imported while the panel is open shows up as a per-player choice immediately.
+    /// </summary>
+    private void rebuildSkinChoices()
+    {
+        var imported = skinLibrary?.Skins ?? (IEnumerable<JukeBox.Game.LazerPlayer.ImportedSkin>)Array.Empty<JukeBox.Game.LazerPlayer.ImportedSkin>();
+
+        skinChoices = bundled_skin_choices
+                      .Concat(imported.Select(s => (Display: s.Label, Key: (string?)JukeBox.Game.LazerPlayer.LazerChartLayer.CustomSkinKey(s.Folder))))
+                      .ToList();
+
+        skinDropdown.Items = skinChoices.Select(c => c.Display);
+
+        // Re-point the dropdown at the current target's stored skin — setting Items above resets it.
+        refreshPlayers();
     }
 
     private void buildSwatches()
@@ -426,7 +468,11 @@ public partial class PlayersPanel : CompositeDrawable
     /// <summary>Test hook: pick a gameplay skin for the current target by its stored key (null =
     /// default/global).</summary>
     internal void SelectSkinKey(string? key)
-        => skinDropdown.Current.Value = skin_choices.First(c => c.Key == key).Display;
+        => skinDropdown.Current.Value = skinChoices.First(c => c.Key == key).Display;
+
+    /// <summary>Test hook: the stored keys the skin dropdown currently offers, imported skins included
+    /// (a null entry is the "default/global" reset).</summary>
+    internal IEnumerable<string?> SkinChoiceKeys => skinChoices.Select(c => c.Key);
 
     /// <summary>One clickable colour chip. A null colour is the reset chip, drawn as an outlined
     /// ring rather than a filled dot.</summary>

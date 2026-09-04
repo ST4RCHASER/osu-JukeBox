@@ -98,12 +98,27 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
     internal IReadOnlyList<Mod>? OverrideMods { get; init; }
 
     /// <summary>
-    /// A per-player GAMEPLAY SKIN override, from <see cref="Replays.PlayerOverrideStore"/>. When set,
-    /// this layer builds under that bundled skin instead of the global selection — so one player's
-    /// cell can wear Classic while the rest are on Argon. Null uses the global skin. Init-only: the
-    /// skin chain is built once, so a change is a rebuilt layer (BeatmapVisuals rebuilds on it).
+    /// A per-player GAMEPLAY SKIN override key, from <see cref="Replays.PlayerOverrideStore"/>. When
+    /// set, this layer builds under that skin instead of the global selection — so one player's cell
+    /// can wear Classic, an imported skin, or Argon while the rest are on the shared choice. The key
+    /// is a bundled skin name ("Argon", "Classic", …) or <see cref="CustomSkinKey"/> for one of the
+    /// user's imported skins by folder. Null uses the global skin. Init-only: the skin chain is built
+    /// once, so a change is a rebuilt layer (BeatmapVisuals rebuilds on it).
     /// </summary>
-    internal JukeBoxSkin? OverrideSkin { get; init; }
+    internal string? OverrideSkinKey { get; init; }
+
+    /// <summary>The prefix marking a per-player skin key as one of the user's IMPORTED skins, followed
+    /// by its folder name — distinguishing "custom:Aristia" from the bundled skin names.</summary>
+    internal const string CustomSkinKeyPrefix = "custom:";
+
+    /// <summary>The per-player skin key for an imported skin in <paramref name="folder"/>.</summary>
+    internal static string CustomSkinKey(string folder) => CustomSkinKeyPrefix + folder;
+
+    /// <summary>The imported-skin folder a key names, or null when the key is not a custom one.</summary>
+    internal static string? CustomSkinFolder(string? key)
+        => key != null && key.StartsWith(CustomSkinKeyPrefix, StringComparison.Ordinal)
+            ? key.Substring(CustomSkinKeyPrefix.Length)
+            : null;
 
     /// <summary>Parses a stored skin key back to a bundled skin, or null when it names none.</summary>
     internal static JukeBoxSkin? ParseSkin(string? key)
@@ -393,23 +408,36 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
             osu.Framework.Logging.Logger.Error(e, $"Failed to load beatmap folder skin for '{osuFile}' — continuing with default skin only");
         }
 
-        // The user's bundled-skin choice (settings panel; Random is already resolved to a concrete
-        // entry by SkinSelection). Selection changes rebuild this whole layer (BeatmapVisuals),
-        // so the choice is read once here. Argon when no service is cached (bare test scenes).
-        // A per-player skin override wins over the global selection: this player's cell is built
-        // under the bundled skin they were given, everyone else under the shared choice.
-        var selectedChoice = OverrideSkin ?? skinSelection?.Effective.Value ?? JukeBoxSkin.Argon;
+        // The skin to build. A per-player override (a bundled name, or "custom:<folder>" for one of
+        // the user's imported skins) wins over the global selection; with no override it is the shared
+        // choice (settings panel; Random already resolved to a concrete entry by SkinSelection). All
+        // custom resolution goes through the service, which has the storage access to open an imported
+        // .osk — the static builder handles only the bundled skins. Argon when no service is cached
+        // (bare test scenes) or a custom folder cannot be resolved.
+        JukeBoxSkin selectedChoice;
+        Skin selected;
+
+        string? customFolder = CustomSkinFolder(OverrideSkinKey);
+
+        if (customFolder != null && skinSelection != null)
+        {
+            selectedChoice = JukeBoxSkin.Custom;
+            selected = skinSelection.CreateSkinFromFolder(customFolder, resourceProvider);
+        }
+        else if (OverrideSkinKey != null && ParseSkin(OverrideSkinKey) is { } bundled && bundled != JukeBoxSkin.Custom && bundled != JukeBoxSkin.Random)
+        {
+            selectedChoice = bundled;
+            selected = SkinSelection.CreateSkin(bundled, resourceProvider);
+        }
+        else
+        {
+            selectedChoice = skinSelection?.Effective.Value ?? JukeBoxSkin.Argon;
+            selected = skinSelection?.CreateEffectiveSkin(resourceProvider)
+                       ?? SkinSelection.CreateSkin(selectedChoice, resourceProvider);
+        }
+
         SelectedSkin = selectedChoice;
         osu.Framework.Logging.Logger.Log($"[LazerChartLayer] building {ruleset.ShortName} chart with skin: {selectedChoice}");
-
-        // Routed through the service (not the static) so JukeBoxSkin.Custom can resolve the
-        // user-imported .osk folder, which needs storage access this layer has no business doing.
-        // With no service cached (bare test scenes) the choice is always Argon anyway. An override is
-        // always a bundled skin, so it goes straight through the static builder.
-        var selected = OverrideSkin is { } overrideSkin
-            ? SkinSelection.CreateSkin(overrideSkin, resourceProvider)
-            : skinSelection?.CreateEffectiveSkin(resourceProvider)
-              ?? SkinSelection.CreateSkin(selectedChoice, resourceProvider);
         var rulesetResources = new ResourceStoreBackedSkin(ruleset.CreateResourceStore(), host, audio);
         ownedSkins.Add(selected);
         ownedSkins.Add(rulesetResources);
