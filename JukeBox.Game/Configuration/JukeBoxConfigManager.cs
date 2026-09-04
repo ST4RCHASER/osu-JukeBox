@@ -122,6 +122,13 @@ public enum JukeBoxSetting
     CustomSkinPath,
 
     /// <summary>
+    /// The cursor colours the user has picked with the per-player colour picker, remembered as
+    /// reusable swatches. A comma-separated list of "#RRGGBB" hex, most-recent last, capped so the
+    /// row does not grow without bound. Empty until the first pick.
+    /// </summary>
+    RememberedCursorColours,
+
+    /// <summary>
     /// Which backend answers beatmap SEARCHES (see <see cref="Online.SearchApi"/>). Downloads are
     /// unaffected and always go through <see cref="PreferredMirror"/>'s chain.
     /// </summary>
@@ -541,6 +548,7 @@ public class JukeBoxConfigManager : IniConfigManager<JukeBoxSetting>
         SetDefault(JukeBoxSetting.DetachPlayOnMain, false);
         SetDefault(JukeBoxSetting.LastImportDirectory, string.Empty);
         SetDefault(JukeBoxSetting.CustomSkinPath, string.Empty);
+        SetDefault(JukeBoxSetting.RememberedCursorColours, string.Empty);
 
         // Mirror by default: the official API needs credentials the user has to create themselves,
         // so anything else would leave a fresh install unable to search at all.

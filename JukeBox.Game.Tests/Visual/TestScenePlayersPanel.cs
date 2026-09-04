@@ -170,6 +170,56 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("the override is cleared", () => overrides.Peek(players[1])?.CursorColour == null);
         }
 
+        /// <summary>
+        /// The colour picker sets any colour on the target and REMEMBERS it as a reusable swatch —
+        /// picked colours accumulate, de-duplicated. Asserted on the override the store now holds and
+        /// on the remembered set growing (then not growing on a repeat pick).
+        /// </summary>
+        [Test]
+        public void PickingAColourAppliesItAndRemembersItAsASwatch()
+        {
+            AddStep("build three", () => build(3));
+            AddUntilStep("panel loaded", () => panel.IsLoaded);
+
+            int baseSwatches = 0;
+            AddStep("note the swatch count", () => baseSwatches = panel.SwatchCount);
+
+            AddStep("target player 0, pick a custom colour", () =>
+            {
+                panel.SelectTarget(0);
+                panel.ColourPicker.Current.Value = new osu.Framework.Graphics.Colour4(0.1f, 0.7f, 0.3f, 1f);
+                panel.ApplyPickedColour();
+            });
+
+            AddAssert("player 0 got the picked colour", () =>
+            {
+                var c = overrides.Peek(players[0])?.CursorColour;
+                return c.HasValue
+                       && System.Math.Abs(c.Value.R - 0.1f) < 0.01f
+                       && System.Math.Abs(c.Value.G - 0.7f) < 0.01f
+                       && System.Math.Abs(c.Value.B - 0.3f) < 0.01f;
+            });
+            AddAssert("players 1 and 2 unaffected", () =>
+                overrides.Peek(players[1])?.CursorColour == null && overrides.Peek(players[2])?.CursorColour == null);
+
+            AddAssert("it was remembered, as one new swatch", () =>
+                config.Get<string>(JukeBoxSetting.RememberedCursorColours).Length > 0 && panel.SwatchCount == baseSwatches + 1);
+
+            AddStep("pick the very same colour again", () =>
+            {
+                panel.ColourPicker.Current.Value = new osu.Framework.Graphics.Colour4(0.1f, 0.7f, 0.3f, 1f);
+                panel.ApplyPickedColour();
+            });
+            AddAssert("no duplicate swatch is added", () => panel.SwatchCount == baseSwatches + 1);
+
+            AddStep("pick a different colour", () =>
+            {
+                panel.ColourPicker.Current.Value = new osu.Framework.Graphics.Colour4(0.9f, 0.2f, 0.5f, 1f);
+                panel.ApplyPickedColour();
+            });
+            AddAssert("that one adds another swatch", () => panel.SwatchCount == baseSwatches + 2);
+        }
+
         [Test]
         public void TargetingAllPlayersColoursEveryone()
         {

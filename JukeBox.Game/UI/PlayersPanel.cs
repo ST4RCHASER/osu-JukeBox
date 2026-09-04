@@ -120,6 +120,16 @@ public partial class PlayersPanel : CompositeDrawable
 
     private readonly Bindable<string?> selectedOsuFile = new Bindable<string?>();
 
+    /// <summary>The cursor colours the user has picked, remembered across sessions (config-backed) and
+    /// shown as reusable swatches after the fixed palette. Newest last; capped so the row stays sane.</summary>
+    private readonly Bindable<string> rememberedColoursSetting = new Bindable<string>(string.Empty);
+    private List<Color4> rememberedColours = new List<Color4>();
+
+    /// <summary>How many picked colours are remembered before the oldest drops off.</summary>
+    private const int max_remembered_colours = 10;
+
+    private osu.Game.Graphics.UserInterfaceV2.OsuColourPicker colourPicker = null!;
+
     /// <summary>A bound copy of the imported-skin library, so the skin dropdown re-lists the moment a
     /// .osk is imported. A bound copy (unbound on disposal) rather than a direct subscription, so a
     /// dead panel does not keep answering the shared library's changes. Null in a bare test host.</summary>
@@ -218,6 +228,7 @@ public partial class PlayersPanel : CompositeDrawable
                 Children = new Drawable[]
                 {
                     new SpriteText { Text = "Cursor colour", Font = FontUsage.Default.With(size: Theme.RowSecondaryTextSize) },
+                    // The palette, the reset chip, and every colour the user has picked so far.
                     swatches = new FillFlowContainer
                     {
                         RelativeSizeAxes = Axes.X,
@@ -225,9 +236,68 @@ public partial class PlayersPanel : CompositeDrawable
                         Direction = FillDirection.Full,
                         Spacing = new Vector2(6, 6),
                     },
+                    // A real colour picker (HSV + hex) for any colour beyond the palette. Applying a
+                    // picked colour also REMEMBERS it as a new swatch, so the user builds up their own
+                    // reusable set — see applyPickedColour.
+                    colourPicker = new osu.Game.Graphics.UserInterfaceV2.OsuColourPicker
+                    {
+                        RelativeSizeAxes = Axes.X,
+                    },
+                    new osu.Game.Graphics.UserInterfaceV2.RoundedButton
+                    {
+                        RelativeSizeAxes = Axes.X,
+                        Height = 32,
+                        Text = "Apply picked colour",
+                        Action = applyPickedColour,
+                    },
                 },
             },
         };
+    }
+
+    /// <summary>Applies the colour picker's current colour to the target and REMEMBERS it as a new
+    /// swatch, so picked colours accumulate as a reusable set.</summary>
+    private void applyPickedColour()
+    {
+        var picked = colourPicker.Current.Value;
+        var colour = new Color4(picked.R, picked.G, picked.B, 1f);
+
+        rememberColour(colour);
+        applyColour(colour);
+    }
+
+    /// <summary>Adds a picked colour to the remembered set (newest last, de-duplicated, capped) and
+    /// persists it to config, which rebuilds the swatches.</summary>
+    private void rememberColour(Color4 colour)
+    {
+        var updated = rememberedColours.Where(c => !sameColour(c, colour)).ToList();
+        updated.Add(colour);
+
+        if (updated.Count > max_remembered_colours)
+            updated.RemoveRange(0, updated.Count - max_remembered_colours);
+
+        rememberedColoursSetting.Value = string.Join(",", updated.Select(toHex));
+    }
+
+    private static bool sameColour(Color4 a, Color4 b)
+        => toHex(a) == toHex(b);
+
+    private static string toHex(Color4 c)
+        => $"#{(int)Math.Round(c.R * 255):X2}{(int)Math.Round(c.G * 255):X2}{(int)Math.Round(c.B * 255):X2}";
+
+    private static Color4? fromHex(string hex)
+    {
+        hex = hex.Trim().TrimStart('#');
+
+        if (hex.Length != 6
+            || !int.TryParse(hex.Substring(0, 2), System.Globalization.NumberStyles.HexNumber, null, out int r)
+            || !int.TryParse(hex.Substring(2, 2), System.Globalization.NumberStyles.HexNumber, null, out int g)
+            || !int.TryParse(hex.Substring(4, 2), System.Globalization.NumberStyles.HexNumber, null, out int b))
+        {
+            return null;
+        }
+
+        return new Color4(r / 255f, g / 255f, b / 255f, 1f);
     }
 
     protected override void LoadComplete()
@@ -240,7 +310,19 @@ public partial class PlayersPanel : CompositeDrawable
         knockoutLiveSortCheckbox.Current = config.GetBindable<bool>(JukeBoxSetting.KnockoutLiveSort);
         removeNameCheckbox.Current = config.GetBindable<bool>(JukeBoxSetting.RemoveNameAfterKnockout);
 
-        buildSwatches();
+        // The remembered picked colours, parsed from config and re-parsed (rebuilding the swatches)
+        // whenever they change — including a pick made just now, which persists through here.
+        config.BindWith(JukeBoxSetting.RememberedCursorColours, rememberedColoursSetting);
+        rememberedColoursSetting.BindValueChanged(e =>
+        {
+            rememberedColours = e.NewValue
+                                 .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                                 .Select(fromHex)
+                                 .Where(c => c.HasValue)
+                                 .Select(c => c!.Value)
+                                 .ToList();
+            buildSwatches();
+        }, true);
 
         targetDropdown.Current.BindValueChanged(e => onTargetChanged(e.NewValue));
         skinDropdown.Current.BindValueChanged(e => onSkinChanged(e.NewValue));
@@ -375,6 +457,14 @@ public partial class PlayersPanel : CompositeDrawable
             swatches.Add(new ColourSwatch(colour, () => applyColour(captured)));
         }
 
+        // The user's own remembered picks, after the fixed palette so a colour used once is a click
+        // away next time.
+        foreach (var colour in rememberedColours)
+        {
+            var captured = colour;
+            swatches.Add(new ColourSwatch(colour, () => applyColour(captured)));
+        }
+
         // The reset chip: hands the player back their hue-spread default.
         swatches.Add(new ColourSwatch(null, () => applyColour(null)));
 
@@ -479,6 +569,13 @@ public partial class PlayersPanel : CompositeDrawable
     /// <summary>Test hook: the stored keys the skin dropdown currently offers, imported skins included
     /// (a null entry is the "default/global" reset).</summary>
     internal IEnumerable<string?> SkinChoiceKeys => skinChoices.Select(c => c.Key);
+
+    /// <summary>Test hooks for the cursor colour picker and its remembered swatches.</summary>
+    internal osu.Game.Graphics.UserInterfaceV2.OsuColourPicker ColourPicker => colourPicker;
+
+    internal void ApplyPickedColour() => applyPickedColour();
+
+    internal int SwatchCount => swatches.Count;
 
     /// <summary>One clickable colour chip. A null colour is the reset chip, drawn as an outlined
     /// ring rather than a filled dot.</summary>
