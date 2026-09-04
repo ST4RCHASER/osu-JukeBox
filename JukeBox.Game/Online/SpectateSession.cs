@@ -382,6 +382,7 @@ public sealed class SpectateSession
                 OsuFile = osuFile,
                 Score = decoded,
                 ModAcronyms = ReplayMods.Acronyms(mods),
+                ScoringVersion = ScoringVersions.Detect(decoded.ScoreInfo),
                 RateTempo = rateTempo,
                 RateFrequency = rateFrequency,
                 PlayedAt = score.EndedAt,

@@ -56,6 +56,15 @@ public class ReplayAttachment
     public IReadOnlyList<string> ModAcronyms { get; init; } = Array.Empty<string>();
 
     /// <summary>
+    /// Which scoring lineage the play was under — stable ScoreV1, lazer classic, lazer standardised,
+    /// or ScoreV2. Read once off the decoded score (see <see cref="ScoringVersions.Detect"/>); it both
+    /// tags the play in the rail and picks the formula that scores it. Defaults to
+    /// <see cref="ScoringVersion.V1"/> — the stable assumption — for an attachment whose replay never
+    /// decoded, since that is what the rest of the app treats a creditless drop as.
+    /// </summary>
+    public ScoringVersion ScoringVersion { get; init; } = ScoringVersion.V1;
+
+    /// <summary>
     /// The play's speed change applied as TEMPO — faster or slower with pitch preserved. This is
     /// DoubleTime's and HalfTime's half of the story; 1 when neither is present. See
     /// <see cref="ReplayMods.TrackAdjustmentsFor"/> for why the two are tracked separately.

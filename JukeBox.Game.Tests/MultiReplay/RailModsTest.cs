@@ -8,15 +8,16 @@ using osu.Game.Rulesets.Osu.Mods;
 namespace JukeBox.Game.Tests.MultiReplay
 {
     /// <summary>
-    /// The rail names more mods than the now-playing card does. Comparing 47 plays, "this one was on
-    /// a tablet" (TD) and "this one was under stable's rules" (CL) are worth seeing; on a single card
-    /// they are noise. This pins that the rail keeps both while the general display still drops CL.
+    /// The rail drops <c>CL</c> just as the general display does — its old job of marking "played
+    /// under stable's rules" now belongs to the scoring-version TAG (see
+    /// <see cref="ScoringVersions.Tag"/>), so keeping "+CL" too would be redundant. It still keeps
+    /// <c>TD</c> ("on a tablet") and the real mods.
     /// </summary>
     [TestFixture]
     public class RailModsTest
     {
         [Test]
-        public void TheRailKeepsClassicAndTouchDeviceWhereTheGeneralDisplayDropsClassic()
+        public void TheRailDropsClassicButKeepsTouchDeviceAndTheRealMods()
         {
             var mods = new osu.Game.Rulesets.Mods.Mod[]
             {
@@ -32,8 +33,8 @@ namespace JukeBox.Game.Tests.MultiReplay
             Assert.That(general, Does.Not.Contain("CL"));
             Assert.That(general, Does.Contain("TD"));
 
-            // The rail keeps BOTH, alongside the real mods.
-            Assert.That(rail, Does.Contain("CL"));
+            // The rail now drops CL too — the version tag carries that — while keeping the rest.
+            Assert.That(rail, Does.Not.Contain("CL"));
             Assert.That(rail, Does.Contain("TD"));
             Assert.That(rail, Does.Contain("HR"));
         }

@@ -205,7 +205,8 @@ public partial class MultiReplayCombine : CompositeDrawable
                            effectiveColour(index),
                            simulator.Timelines[index],
                            railMods(replay),
-                           replay.Score?.Replay?.Frames))
+                           replay.Score?.Replay?.Frames,
+                           replay.ScoringVersion.Tag()))
                        .ToList();
 
         AddInternal(board = new KnockoutBoard(entrants)

@@ -50,7 +50,10 @@ public partial class KnockoutBoard : CompositeDrawable
     /// coloured name rather than folded into it — the reference colours the two separately.</param>
     /// <param name="Frames">Their replay's input frames, for the key-press indicator at the row's
     /// left. Null (as in the grid, or a test) simply draws no keys.</param>
-    public readonly record struct Entrant(string Name, Color4 Colour, ReplayTimeline Timeline, string Mods = "", IReadOnlyList<ReplayFrame>? Frames = null);
+    /// <param name="Version">The scoring-version tag ("V1", "Classic", "Lazer", "V2"), drawn in a
+    /// muted accent AFTER the mods — a distinct marker, not folded into the white mod run. Empty
+    /// draws nothing.</param>
+    public readonly record struct Entrant(string Name, Color4 Colour, ReplayTimeline Timeline, string Mods = "", IReadOnlyList<ReplayFrame>? Frames = null, string Version = "");
 
     private readonly IReadOnlyList<Entrant> entrants;
     private readonly List<Row> rows = new List<Row>();
@@ -195,7 +198,10 @@ public partial class KnockoutBoard : CompositeDrawable
     public KnockoutBoard(IReadOnlyList<Entrant> entrants)
     {
         this.entrants = entrants;
-        maxNameChars = entrants.Count == 0 ? 4 : entrants.Max(e => e.Name.Length + (e.Mods.Length == 0 ? 0 : e.Mods.Length + 1));
+        maxNameChars = entrants.Count == 0 ? 4 : entrants.Max(e =>
+            e.Name.Length
+            + (e.Mods.Length == 0 ? 0 : e.Mods.Length + 1)
+            + (e.Version.Length == 0 ? 0 : e.Version.Length + 1));
 
         // Sized to its CONTAINER, not to its content. Sizing to content is what produced a board
         // over a thousand pixels tall for 47 players, running off the bottom of the player box and
@@ -398,6 +404,7 @@ public partial class KnockoutBoard : CompositeDrawable
 
         private readonly OsuSpriteText playerName = null!;
         private readonly OsuSpriteText mods = null!;
+        private readonly OsuSpriteText version = null!;
 
         // The key-press indicator at the row's far left: two bars (osu!'s left and right buttons —
         // lazer collapses M1/M2 into these), lit as the player holds them, read from the replay
@@ -529,6 +536,10 @@ public partial class KnockoutBoard : CompositeDrawable
         internal string ModsText => mods.Text.ToString()!;
 
         internal Color4 ModsColour => mods.Colour;
+
+        /// <summary>Test hook: the scoring-version tag this row shows ("V1", "Classic", …), empty when
+        /// the entrant carried none.</summary>
+        internal string VersionText => version.Text.ToString()!;
 
         internal string NameText => playerName.Text.ToString()!;
 
@@ -678,6 +689,17 @@ public partial class KnockoutBoard : CompositeDrawable
                                 Text = entrant.Mods,
                                 Font = OsuFont.Torus.With(weight: FontWeight.SemiBold),
                                 Colour = Color4.White,
+                                Shadow = true,
+                            },
+                            // The scoring-version tag, in a muted accent so it reads as a marker
+                            // distinct from the white mods rather than more of them.
+                            version = new OsuSpriteText
+                            {
+                                Anchor = Anchor.CentreLeft,
+                                Origin = Anchor.CentreLeft,
+                                Text = entrant.Version,
+                                Font = OsuFont.Torus.With(weight: FontWeight.SemiBold, size: 13),
+                                Colour = Color4.White.Opacity(0.6f),
                                 Shadow = true,
                             },
                         },

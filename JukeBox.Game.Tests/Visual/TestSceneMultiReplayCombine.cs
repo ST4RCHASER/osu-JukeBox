@@ -999,14 +999,17 @@ namespace JukeBox.Game.Tests.Visual
         }
 
         /// <summary>
-        /// A Classic (CL) play is SCORED under classic rules, a non-CL play under standardised — per
-        /// player, off its own mods. Driven here through the override store (the same per-replay mod
-        /// path that carries CL): one player forced to Classic, one forced to no mods.
+        /// The scoring LINEAGE is a property of the replay, read off its decoded scoring info — NOT of
+        /// a mod toggle. Forcing a Classic mod override onto one player does NOT reclassify how that
+        /// play is scored, which is the whole point of not treating "has CL" as "lazer-classic" (lazer
+        /// auto-attaches CL to every legacy replay). Both these fixture replays share one origin, so
+        /// they stay on the same scoring mode whatever mods are forced on top. (The full
+        /// legacy→V1 / lazer+CL→Classic / lazer→standardised mapping is pinned in ScoringVersionTest.)
         /// </summary>
         [Test]
-        public void AClassicPlayIsScoredClassicAndANonClassicPlayStandardised()
+        public void AClassicOverrideDoesNotChangeAReplaysScoringLineage()
         {
-            AddStep("build two, one forced Classic, one forced no-mod", () =>
+            AddStep("build two, force CL onto one via the override store", () =>
             {
                 var replays = new[] { replayFor("player0"), replayFor("player1") };
                 overrideStore.SetMods(replays[0], System.Array.Empty<Mod>());
@@ -1020,9 +1023,8 @@ namespace JukeBox.Game.Tests.Visual
 
             AddUntilStep("recorded", () => combine.Simulator.AllComplete);
 
-            AddAssert("player 0 scored standardised, player 1 classic", () =>
-                combine.Simulator.ScoringModes[0] == osu.Game.Rulesets.Scoring.ScoringMode.Standardised
-                && combine.Simulator.ScoringModes[1] == osu.Game.Rulesets.Scoring.ScoringMode.Classic);
+            AddAssert("both scored on the same lineage, the CL override notwithstanding", () =>
+                combine.Simulator.ScoringModes[0] == combine.Simulator.ScoringModes[1]);
         }
 
         /// <summary>

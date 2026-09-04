@@ -68,6 +68,15 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
     internal bool UsingUserReplay => replayScore != null && gameplayScore == replayScore;
 
     /// <summary>
+    /// The scoring lineage of the replay this layer plays back — stable ScoreV1, lazer classic, lazer
+    /// standardised, or ScoreV2. Read off the decoded score so the drawable simulator scores each play
+    /// with the right formula (see <see cref="Replays.ScoringVersions.Detect"/>). Falls back to
+    /// <see cref="Replays.ScoringVersion.V1"/> for an autoplay layer with no user replay.
+    /// </summary>
+    internal Replays.ScoringVersion ReplayScoringVersion
+        => replayScore != null ? Replays.ScoringVersions.Detect(replayScore.ScoreInfo) : Replays.ScoringVersion.V1;
+
+    /// <summary>
     /// Ignore the Chart tab's shared mod selection and play under THIS replay's own recorded mods.
     /// Set by every multi-replay view.
     ///

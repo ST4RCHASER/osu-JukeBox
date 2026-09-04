@@ -2,7 +2,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using JukeBox.Game.LazerPlayer;
 using osu.Game.Beatmaps;
 using osu.Game.Rulesets;
@@ -55,14 +54,18 @@ public static class AnalyticReplayRecorder
 
         var performance = ReplayPerformance.Create(ruleset, working, mods, attributeCache);
 
-        // A CL play (every legacy .osr, or a per-player Classic override) is SCORED as osu!STABLE
-        // ScoreV1 — the number the play actually scored on stable and that danser reproduces, driven
-        // off these same ordered judgements (see StableScoreV1). lazer's GetDisplayScore(Classic) is a
-        // remap of the standardised score and does NOT match stable's number. The difficulty
-        // multiplier is on the map's ORIGINAL stats, so it reads the unmodified beatmap.
-        bool classic = mods.Any(m => m is ModClassic);
-        var scoringMode = classic ? ScoringMode.Classic : ScoringMode.Standardised;
-        var scoreV1 = classic ? new StableScoreV1(working.Beatmap, mods) : null;
+        // The SCORING lineage decides the formula, and it is NOT "has the CL mod" — lazer attaches CL
+        // to every legacy .osr, so that would score genuine lazer plays as stable too. A STABLE play
+        // (ScoringVersion.V1) is scored as osu!STABLE ScoreV1 — the number it earned on stable and that
+        // danser reproduces, driven off these same ordered judgements (see StableScoreV1); its
+        // difficulty multiplier is on the map's ORIGINAL stats, so it reads the unmodified beatmap.
+        // Every other lineage falls back to lazer's own processor total in the matching display mode
+        // (Classic remap for a lazer-classic play, Standardised for lazer/ScoreV2).
+        var version = ScoringVersions.Detect(replayScore.ScoreInfo);
+        var scoringMode = version is ScoringVersion.V1 or ScoringVersion.Classic
+            ? ScoringMode.Classic
+            : ScoringMode.Standardised;
+        var scoreV1 = version.UsesStableScoreV1() ? new StableScoreV1(working.Beatmap, mods) : null;
 
         int lastCombo = 0;
 
@@ -80,7 +83,7 @@ public static class AnalyticReplayRecorder
             int lost = broke ? lastCombo : 0;
             lastCombo = combo;
 
-            long total = scoreV1 != null ? scoreV1.Score : processor.TotalScore.Value;
+            long total = scoreV1 != null ? scoreV1.Score : processor.GetDisplayScore(scoringMode);
 
             timeline.Record(new TimelinePoint(
                 j.Time,

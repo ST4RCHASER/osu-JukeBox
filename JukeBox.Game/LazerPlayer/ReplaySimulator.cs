@@ -406,16 +406,22 @@ public partial class ReplaySimulator : CompositeDrawable
             Mods = Layer.ActiveMods;
             RecordedModsOnly = Layer.UseRecordedReplayModsOnly;
 
-            bool classic = Mods.Any(m => m is ModClassic);
-            ScoringMode = classic ? osu.Game.Rulesets.Scoring.ScoringMode.Classic : osu.Game.Rulesets.Scoring.ScoringMode.Standardised;
+            // The scoring lineage — read off the replay, NOT "has the CL mod" (lazer attaches CL to
+            // every stable .osr, which would score genuine lazer plays as stable too; see
+            // Replays.ScoringVersions.Detect). A STABLE play uses stable ScoreV1; every other lineage
+            // uses lazer's own processor total in the matching display mode.
+            var version = Layer.ReplayScoringVersion;
+            ScoringMode = version is Replays.ScoringVersion.Classic or Replays.ScoringVersion.V1
+                ? osu.Game.Rulesets.Scoring.ScoringMode.Classic
+                : osu.Game.Rulesets.Scoring.ScoringMode.Standardised;
 
             var score = Layer.LiveScore;
 
-            // A CL play is scored as osu!STABLE ScoreV1 (what the play scored on stable / what danser
-            // shows), driven off the renderer's own per-object results — NOT lazer's
+            // A STABLE play is scored as osu!STABLE ScoreV1 (what the play scored on stable / what
+            // danser shows), driven off the renderer's own per-object results — NOT lazer's
             // GetDisplayScore(Classic), a remap that does not match stable. Difficulty multiplier is on
             // the map's ORIGINAL stats, so it reads the unmodified beatmap.
-            var scoreV1 = classic ? new StableScoreV1(beatmap.Beatmap, Mods) : null;
+            var scoreV1 = version.UsesStableScoreV1() ? new StableScoreV1(beatmap.Beatmap, Mods) : null;
 
             var performance = performanceFor(Layer);
 
@@ -430,7 +436,7 @@ public partial class ReplaySimulator : CompositeDrawable
 
                 lastCombo = combo;
 
-                long total = scoreV1 != null ? scoreV1.Score : score.TotalScore.Value;
+                long total = scoreV1 != null ? scoreV1.Score : score.GetDisplayScore(ScoringMode);
 
                 var position = result.HitObject is osu.Game.Rulesets.Osu.Objects.OsuHitObject osuObject
                     ? osuObject.StackedPosition

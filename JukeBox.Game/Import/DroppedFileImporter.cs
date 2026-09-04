@@ -353,6 +353,7 @@ public partial class DroppedFileImporter : Component
                 OsuFile = osuFile,
                 Score = score,
                 ModAcronyms = ReplayMods.Acronyms(mods),
+                ScoringVersion = score != null ? ScoringVersions.Detect(score.ScoreInfo) : ScoringVersion.V1,
                 RateTempo = rateTempo,
                 RateFrequency = rateFrequency,
                 PlayedAt = replayHeader.PlayedAt,

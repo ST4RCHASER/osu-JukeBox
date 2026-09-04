@@ -117,16 +117,18 @@ public static class ReplayMods
                .ToArray();
 
     /// <summary>
-    /// Mod names for the multi-replay RAIL, which — unlike <see cref="Acronyms"/> — keeps
-    /// <c>CL</c> (Classic) and <c>TD</c> (Touch Device). When you are comparing 47 plays side by
-    /// side, "this one was on a tablet" and "this one was under stable's rules" are exactly the sort
-    /// of thing worth seeing, where on a single now-playing card they are just noise. TD already
-    /// flows through <see cref="Acronyms"/>; CL is the one the general path drops.
+    /// Mod names for the multi-replay RAIL. Same set as <see cref="Acronyms"/> — <c>TD</c> (Touch
+    /// Device) and the rest, but NOT <c>CL</c> (Classic).
+    ///
+    /// <para>
+    /// CL used to be kept here, to show "this one was under stable's rules" when comparing plays side
+    /// by side. That job now belongs to the scoring-version TAG the rail draws beside the mods (see
+    /// <see cref="ScoringVersions.Tag"/>): a stable play reads "V1", a lazer-classic play "Classic",
+    /// which is both more legible and correct where "+CL" was not — lazer auto-attaches CL to every
+    /// stable .osr, so it marked nothing a stable play didn't already have. With the tag carrying the
+    /// lineage, CL in the mod string is pure redundancy, so it comes out.
+    /// </para>
     /// </summary>
     public static IReadOnlyList<string> RailAcronyms(IEnumerable<Mod> mods)
-        => mods.Where(m => m is not ModAutoplay)
-               .Select(m => m.Acronym)
-               .OrderBy(a => Array.IndexOf(display_order, a) is var i && i >= 0 ? i : display_order.Length)
-               .ThenBy(a => a, StringComparer.Ordinal)
-               .ToArray();
+        => Acronyms(mods);
 }

@@ -174,6 +174,29 @@ namespace JukeBox.Game.Tests.Visual
         }
 
         /// <summary>
+        /// The scoring-version tag is drawn beside the mods as its own run, and the name column still
+        /// leaves room for it — the width budget counts the tag, so it does not push into the combo
+        /// column any more than the mods do.
+        /// </summary>
+        [Test]
+        public void TheScoringVersionTagIsShownAndFits()
+        {
+            AddStep("build entrants with version tags", () =>
+                hostBoard(new System.Collections.Generic.List<KnockoutBoard.Entrant>
+                {
+                    new KnockoutBoard.Entrant("WhiteCat", Color4.White, ready(1_000_000, 500), "+HDDT", null, "V1"),
+                    new KnockoutBoard.Entrant("someone", Color4.White, ready(500_000, 200), string.Empty, null, "Classic"),
+                }));
+            AddUntilStep("rows built", () => board.Rows.Count == 2);
+            AddStep("show a recorded moment", () => showAt(1500));
+
+            AddAssert("each row shows its version tag", () =>
+                rowFor(0).VersionText == "V1" && rowFor(1).VersionText == "Classic");
+            AddAssert("the name column still ends before the combo column", () =>
+                board.Rows.All(r => r.NameRightEdge <= r.ComboLeftEdge + 0.5f));
+        }
+
+        /// <summary>
         /// The hit badge pops in large on a fresh drop, then settles to its normal size and fades to
         /// nothing over about 1.5s. The old hard on/off flashed by too fast to read; this is driven
         /// from the timeline by elapsed time so it is the same after a seek.
