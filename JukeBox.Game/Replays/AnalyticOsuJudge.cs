@@ -248,20 +248,30 @@ public static class AnalyticOsuJudge
             frames = source.OfType<OsuReplayFrame>().OrderBy(f => f.Time).ToList();
         }
 
-        /// <summary>Every moment a key goes down that was not down the frame before.</summary>
+        /// <summary>
+        /// Every moment a key goes down — PER KEY. osu! registers each individual button press as a
+        /// hit, so in a stream the player holds one key and alternates the other; treating "any key
+        /// held" as one continuous hold (an edge only from nothing-held to something-held) sees ONE
+        /// press at the start of a stream and none after, which misses almost the whole map. A press
+        /// is emitted whenever an action appears that was not held the frame before.
+        /// </summary>
         public IReadOnlyList<Press> PressEdges()
         {
             var edges = new List<Press>();
-            bool wasHeld = false;
+            var previous = new HashSet<OsuAction>();
 
             foreach (var frame in frames)
             {
-                bool held = frame.Actions.Count > 0;
+                foreach (var action in frame.Actions)
+                {
+                    if (!previous.Contains(action))
+                        edges.Add(new Press(frame.Time, frame.Position));
+                }
 
-                if (held && !wasHeld)
-                    edges.Add(new Press(frame.Time, frame.Position));
+                previous.Clear();
 
-                wasHeld = held;
+                foreach (var action in frame.Actions)
+                    previous.Add(action);
             }
 
             return edges;

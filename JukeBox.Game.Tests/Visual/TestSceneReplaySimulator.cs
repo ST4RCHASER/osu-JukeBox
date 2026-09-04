@@ -497,15 +497,20 @@ namespace JukeBox.Game.Tests.Visual
         }
 
         /// <summary>
-        /// An osu map is judged by the analytic path, not the drawable renderer: the whole preload runs
-        /// with no gameplay renderer ever mounted and no 16ms simulation steps taken — which is what
-        /// makes 50 replays a second's work instead of two minutes. Asserted on the absence of both,
-        /// so reverting to the drawable simulator (renderers mounted, steps taken) fails here.
+        /// With the analytic judge opted in, an osu map is judged with no gameplay renderer ever
+        /// mounted and no 16ms simulation steps taken — a whole map in milliseconds. The judge is OFF
+        /// by default (it still diverges from lazer on real slider-heavy maps), so this enables it
+        /// explicitly; asserted on the absence of renderer and steps, so a regression that starts
+        /// stepping fails here.
         /// </summary>
         [Test]
         public void OsuMapsAreJudgedAnalyticallyWithNoRenderer()
         {
-            AddStep("simulate several osu plays", () => simulate(replay("a"), replay("b", 3), replay("c", 7)));
+            AddStep("simulate several osu plays through the analytic judge", () =>
+                host.Child = simulator = new ReplaySimulator(beatmapPath, new[] { replay("a"), replay("b", 3), replay("c", 7) })
+                {
+                    UseAnalyticJudge = true,
+                });
             AddUntilStep("all recorded", () => simulator.AllComplete);
 
             AddAssert("no drawable renderer was ever mounted and no steps were taken", () =>
