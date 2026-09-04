@@ -569,14 +569,19 @@ public partial class NowPlayingPanel : CompositeDrawable
         string title = change.NewValue?.DisplayTitle ?? string.Empty;
         string artist = change.NewValue?.DisplayArtist ?? string.Empty;
         string creator = change.NewValue?.Creator ?? string.Empty;
-        string player = change.NewValue?.Replay?.PlayerName ?? string.Empty;
-        var replayMods = change.NewValue?.Replay?.ModAcronyms;
+
+        // Up to two players are named, more collapse to a count — see BeatmapSetInfo.PlayerRoster.
+        string roster = change.NewValue?.PlayerRoster ?? string.Empty;
+
+        // The mods line credits ONE play's mods, so it only makes sense for a single replay — a
+        // multi-replay set has no single mod set to name.
+        var replayMods = change.NewValue?.Replays.Count == 1 ? change.NewValue.Replay?.ModAcronyms : null;
 
         songInfo.FadeOut(Theme.DurationFast, Theme.EaseExit).OnComplete(_ =>
         {
             titleText.Text = title;
             artistText.Text = artist;
-            replayText.Text = player.Length > 0 ? $"Played by {player}" : string.Empty;
+            replayText.Text = roster.Length > 0 ? $"Played by {roster}" : string.Empty;
             replayModsText.Text = replayMods is { Count: > 0 } ? string.Join(" ", replayMods) : string.Empty;
             // Sets served without a creator (and the nothing-playing state) leave this blank rather
             // than printing a credit to nobody; SpriteText collapses to zero height, so the flow

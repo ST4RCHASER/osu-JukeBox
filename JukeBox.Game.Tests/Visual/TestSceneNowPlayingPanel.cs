@@ -1486,6 +1486,7 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("no mods row", () => nowPlaying.ReplayModsText.Text.ToString().Length == 0);
         }
 
+
         // The queue row is a fixed-height three-line card, so the replay credit takes the mapper
         // line's place there rather than adding a fourth line (see QueuePanel.QueueRow).
         [Test]

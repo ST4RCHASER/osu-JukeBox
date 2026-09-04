@@ -306,6 +306,23 @@ namespace JukeBox.Game.Tests.MultiReplay
         }
 
         [Test]
+        public void SortingByComboRanksTheBiggestComboFirst()
+        {
+            // The bigger score is holding the smaller combo, so ranking by combo has to disagree with
+            // ranking by score — a fixture where they agree could not tell the Combo setting is read.
+            var bigScore = new ReplayTimeline();
+            bigScore.Record(new TimelinePoint(1000, 900_000, 8, 0.95, false, "A", 120));
+
+            var bigCombo = new ReplayTimeline();
+            bigCombo.Record(new TimelinePoint(1000, 500_000, 200, 0.99, false, "S", 90));
+
+            var timelines = new List<ReplayTimeline> { bigScore, bigCombo };
+
+            Assert.That(new KnockoutRules(SortBy: KnockoutSort.Score).Standings(timelines, 1000), Is.EqualTo(new[] { 0, 1 }));
+            Assert.That(new KnockoutRules(SortBy: KnockoutSort.Combo).Standings(timelines, 1000), Is.EqualTo(new[] { 1, 0 }));
+        }
+
+        [Test]
         public void CursorsGrowAsTheFieldThins()
         {
             Assert.That(KnockoutRules.CursorScale(4, 4), Is.EqualTo(1).Within(0.001), "everyone in: smallest");

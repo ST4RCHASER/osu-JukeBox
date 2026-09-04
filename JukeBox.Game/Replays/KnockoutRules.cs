@@ -24,18 +24,17 @@ public enum KnockoutMode
 }
 
 /// <summary>
-/// What the board is ordered by — the same three the reference offers.
-///
-/// <para>
-/// Combo used to be the third option here, chosen because there was no pp to offer. The reference
-/// has no combo option and does have pp, and pp is the number people actually rank plays by.
-/// </para>
+/// What the board is ordered by. Score, pp and accuracy are the reference's three; Combo is offered
+/// alongside them by user request — it was dropped once as redundant with pp, but ranking a knockout
+/// by who is holding the biggest combo right now is a distinct, legible way to watch it, so it is
+/// back as a fourth choice rather than a replacement.
 /// </summary>
 public enum KnockoutSort
 {
     Score,
     Performance,
     Accuracy,
+    Combo,
 }
 
 /// <summary>
@@ -197,6 +196,7 @@ public sealed record KnockoutRules(
         {
             KnockoutSort.Accuracy => point.Accuracy,
             KnockoutSort.Performance => point.Performance,
+            KnockoutSort.Combo => point.Combo,
             _ => point.Score,
         };
     }

@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -93,6 +94,30 @@ public class BeatmapSetInfo
     /// </summary>
     [JsonIgnore]
     public IReadOnlyList<Replays.ReplayAttachment> Replays { get; set; } = Array.Empty<Replays.ReplayAttachment>();
+
+    /// <summary>
+    /// The players of this set for a "Played by …" credit: up to two are listed by name; more than
+    /// two collapse to a count ("5 players"), so a big multi-replay set does not spill a paragraph of
+    /// names into a one-line credit. Empty for a set with no replays. Does NOT include the "Played by"
+    /// prefix — the caller adds it, since the queue card and the playback panel word it slightly
+    /// differently.
+    /// </summary>
+    [JsonIgnore]
+    public string PlayerRoster
+    {
+        get
+        {
+            var names = Replays.Select(r => r.PlayerName.Length > 0 ? r.PlayerName : "an unknown player").ToList();
+
+            return names.Count switch
+            {
+                0 => string.Empty,
+                1 => names[0],
+                2 => $"{names[0]}, {names[1]}",
+                _ => $"{names.Count} players",
+            };
+        }
+    }
     // Prefer the romanized Title/Artist: the default font has no CJK (or other non-Latin) glyph
     // coverage, so preferring TitleUnicode/ArtistUnicode drew as "????" tofu boxes whenever a set's
     // metadata was non-Latin. Fall back to the unicode variant only when the romanized one is

@@ -632,7 +632,7 @@ public partial class QueuePanel : CompositeDrawable
                                 Font = FontUsage.Default.With(size: Theme.CaptionTextSize - 1),
                                 Colour = set.Replay != null ? Theme.Accent : Theme.TextTertiary,
                                 Text = set.Replay != null
-                                    ? replayCredit(set.Replay)
+                                    ? replayCredit(set)
                                     : $"mapped by {set.Creator}",
                             },
                         },
@@ -829,15 +829,16 @@ public partial class QueuePanel : CompositeDrawable
         }
 
         /// <summary>
-        /// "Played by Cookiezi · HD HR DT" — the mods share this one line rather than getting their
-        /// own, since the row is a fixed three-line card. The text truncates like every other line
-        /// here, so a long mod list on a narrow column simply clips after the player's name, which
-        /// is the part that identifies the entry.
+        /// "Played by Cookiezi · HD HR DT" for a single replay — the mods share this one line rather
+        /// than getting their own, since the row is a fixed three-line card. For a multi-replay set it
+        /// names up to two players ("Played by A, B") and collapses more to a count ("Played by 5
+        /// players"), with no mods line, since there is no single mod set to credit. The text truncates
+        /// like every other line here.
         /// </summary>
-        private static string replayCredit(Replays.ReplayAttachment replay)
-            => replay.ModAcronyms.Count > 0
-                ? $"Played by {replay.PlayerName} · {string.Join(" ", replay.ModAcronyms)}"
-                : $"Played by {replay.PlayerName}";
+        private static string replayCredit(Online.BeatmapSetInfo set)
+            => set.Replays.Count == 1 && set.Replay!.ModAcronyms.Count > 0
+                ? $"Played by {set.Replay.PlayerName} · {string.Join(" ", set.Replay.ModAcronyms)}"
+                : $"Played by {set.PlayerRoster}";
 
         public void TriggerRemove() => removeButton.TriggerClick();
 
