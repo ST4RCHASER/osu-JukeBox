@@ -158,7 +158,7 @@ public partial class PlayersPanel : CompositeDrawable
         knockoutModeDropdown = new SettingsEnumDropdown<KnockoutMode> { LabelText = "Knockout" };
         knockoutSortDropdown = new SettingsEnumDropdown<KnockoutSort> { LabelText = "Rank players by" };
         knockoutLiveSortCheckbox = new SettingsCheckbox { LabelText = "Re-order the board as they play" };
-        removeNameCheckbox = new SettingsCheckbox { LabelText = "Remove name after knockout" };
+        removeNameCheckbox = new SettingsCheckbox { LabelText = "Remove row after knockout" };
         targetDropdown = new SettingsDropdown<string> { LabelText = "Per-player settings for" };
         skinDropdown = new SettingsDropdown<string> { LabelText = "Gameplay skin", Items = skinChoices.Select(c => c.Display) };
 
@@ -237,10 +237,12 @@ public partial class PlayersPanel : CompositeDrawable
                     },
                     // A real colour picker (HSV + hex) for any colour beyond the palette. Applying a
                     // picked colour also REMEMBERS it as a new swatch, so the user builds up their own
-                    // reusable set — see applyPickedColour.
+                    // reusable set — see applyPickedColour. A FIXED width (it auto-sizes its height):
+                    // RelativeSizeAxes.X let the saturation/value square grow to the full panel width
+                    // and render as a giant block, so it is bounded to a small, tidy picker instead.
                     colourPicker = new osu.Game.Graphics.UserInterfaceV2.OsuColourPicker
                     {
-                        RelativeSizeAxes = Axes.X,
+                        Width = 200,
                     },
                     new osu.Game.Graphics.UserInterfaceV2.RoundedButton
                     {

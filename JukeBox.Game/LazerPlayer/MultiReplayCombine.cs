@@ -102,7 +102,7 @@ public partial class MultiReplayCombine : CompositeDrawable
 
     private KnockoutRules rules = new KnockoutRules();
 
-    /// <summary>Whether a knocked-out player's name fades off the rail (config-driven; see
+    /// <summary>Whether a knocked-out player's whole row is removed from the rail (config-driven; see
     /// <see cref="Configuration.JukeBoxSetting.RemoveNameAfterKnockout"/>). Forwarded to the board.</summary>
     public bool RemoveNameAfterKnockout { get; set; }
 
@@ -260,7 +260,7 @@ public partial class MultiReplayCombine : CompositeDrawable
             board.GradeSkin = chart.GradeSkin;
 
             // Config-driven, live: flipping the option mid-song reaches the board next frame.
-            board.FadeNameOnKnockout = RemoveNameAfterKnockout;
+            board.RemoveRowOnKnockout = RemoveNameAfterKnockout;
         }
     }
 

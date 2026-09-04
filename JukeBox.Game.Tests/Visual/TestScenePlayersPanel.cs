@@ -220,6 +220,25 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("that one adds another swatch", () => panel.SwatchCount == baseSwatches + 2);
         }
 
+        /// <summary>
+        /// The colour picker is a small bounded control, not a giant block filling the panel. It used
+        /// to stretch to the full panel width, which made its saturation/value square render as a huge
+        /// white rectangle. Asserted on its drawn width staying compact — far under the panel width.
+        /// </summary>
+        [Test]
+        public void TheColourPickerIsBoundedNotAFullPanelBlock()
+        {
+            AddStep("build three", () => build(3));
+            AddUntilStep("panel loaded", () => panel.IsLoaded);
+            AddUntilStep("picker laid out", () => panel.ColourPicker.DrawWidth > 0);
+
+            AddAssert("the picker is a small bounded control, not the full panel width", () =>
+                panel.ColourPicker.DrawWidth <= 260 && panel.ColourPicker.DrawWidth < host.DrawWidth * 0.9f);
+
+            AddAssert("and its height is bounded too (no runaway square)", () =>
+                panel.ColourPicker.DrawHeight > 0 && panel.ColourPicker.DrawHeight <= 420);
+        }
+
         [Test]
         public void TargetingAllPlayersColoursEveryone()
         {
