@@ -9,7 +9,10 @@ using JukeBox.Game.LazerPlayer;
 using JukeBox.Game.Replays;
 using JukeBox.Game.Tests.Import;
 using osu.Framework.Timing;
+using osu.Game.Beatmaps;
+using osu.Game.Rulesets.Difficulty;
 using osu.Game.Rulesets.Mods;
+using osu.Game.Rulesets.Osu;
 using osu.Game.Rulesets.Osu.Mods;
 using NUnit.Framework;
 using osu.Framework.Graphics;
@@ -431,6 +434,127 @@ namespace JukeBox.Game.Tests.Visual
                 return Enumerable.Range(0, slider_count)
                                  .All(i => recorded.Any(t => Math.Abs(t - (1000 + i * 1500)) < 700));
             });
+        }
+
+        /// <summary>
+        /// The danser-style analytic judge (no gameplay renderer) has to produce the SAME play as the
+        /// drawable simulator it replaces — same judgements, same combo at every step, same final
+        /// score and accuracy. The drawable simulator is lazer's real gameplay, so it is the oracle;
+        /// if the two agree here, the fast path is trustworthy. Run on a mixed hit/miss circle play.
+        /// </summary>
+        [Test]
+        public void TheAnalyticJudgeMatchesTheDrawableSimulatorOnCircles()
+        {
+            ReplayAttachment att = null!;
+
+            AddStep("simulate a mixed hit/miss play through the drawable renderer", () =>
+            {
+                att = replay("mixed", 3, 7, 8);
+                host.Child = simulator = new ReplaySimulator(beatmapPath, new[] { att }) { ForceDrawableSimulation = true };
+            });
+            AddUntilStep("recorded", () => simulator.AllComplete);
+
+            AddAssert("the analytic judge produces the same timeline", () =>
+                sameTimeline(simulator.Timelines[0], analytic(att)));
+        }
+
+        /// <summary>
+        /// The same agreement on a map of nothing but sliders — the hard case, where the analytic
+        /// geometry has to reproduce lazer's slider head tap, tick/repeat/tail tracking and the
+        /// slider's own combo. If the combo and score line up here, the follow-circle model is right.
+        /// </summary>
+        [Test]
+        public void TheAnalyticJudgeMatchesTheDrawableSimulatorOnSliders()
+        {
+            ReplayAttachment att = null!;
+
+            AddStep("simulate a slider play through the drawable renderer", () =>
+            {
+                string sliderPath = Path.Combine(tmp, "sliders [Sliders].osu");
+                File.WriteAllText(sliderPath, sliderMap());
+
+                string osr = Path.Combine(tmp, "slider-cmp.osr");
+                ReplayFixture.WriteHitting(osr, sliderPath, "slider-cmp");
+
+                att = new ReplayAttachment
+                {
+                    PlayerName = "slider-cmp",
+                    SourcePath = osr,
+                    OsuFile = sliderPath,
+                    Score = new JukeBoxScoreDecoder(sliderPath).Decode(osr),
+                    RateTempo = 1,
+                    RateFrequency = 1,
+                };
+
+                host.Child = simulator = new ReplaySimulator(sliderPath, new[] { att }) { ForceDrawableSimulation = true };
+            });
+            AddUntilStep("recorded", () => simulator.AllComplete);
+
+            AddAssert("the analytic judge produces the same timeline", () =>
+                sameTimeline(simulator.Timelines[0], analytic(att)));
+        }
+
+        /// <summary>
+        /// An osu map is judged by the analytic path, not the drawable renderer: the whole preload runs
+        /// with no gameplay renderer ever mounted and no 16ms simulation steps taken — which is what
+        /// makes 50 replays a second's work instead of two minutes. Asserted on the absence of both,
+        /// so reverting to the drawable simulator (renderers mounted, steps taken) fails here.
+        /// </summary>
+        [Test]
+        public void OsuMapsAreJudgedAnalyticallyWithNoRenderer()
+        {
+            AddStep("simulate several osu plays", () => simulate(replay("a"), replay("b", 3), replay("c", 7)));
+            AddUntilStep("all recorded", () => simulator.AllComplete);
+
+            AddAssert("no drawable renderer was ever mounted and no steps were taken", () =>
+                simulator.LiveRenderers == 0 && simulator.StepsRun == 0);
+
+            AddAssert("and every play is a real recording", () =>
+                simulator.Timelines.Count == 3 && simulator.Timelines.All(t => t.Points.Count > 0));
+        }
+
+        /// <summary>Runs the attachment through the analytic recorder (no renderer) for comparison.</summary>
+        private static ReplayTimeline analytic(ReplayAttachment att)
+        {
+            var timeline = new ReplayTimeline();
+            AnalyticReplayRecorder.Record(
+                new FlatWorkingBeatmap(att.OsuFile!),
+                new OsuRuleset(),
+                ReplayMods.ForGameplay(att.Score!),
+                att.Score!,
+                new Dictionary<string, DifficultyAttributes>(),
+                timeline);
+            return timeline;
+        }
+
+        /// <summary>
+        /// Whether two timelines describe the same play: the same judgement at every step, the same
+        /// combo at every step, and the same final score and accuracy. Times are allowed to differ by
+        /// a hair (the analytic judge dates a hit at the press, the renderer at the frame it processed
+        /// it), so this compares the sequences of outcomes, not their timestamps.
+        /// </summary>
+        private static bool sameTimeline(ReplayTimeline oracle, ReplayTimeline candidate)
+        {
+            var a = oracle.Points;
+            var b = candidate.Points;
+
+            if (a.Count != b.Count)
+                return false;
+
+            for (int i = 0; i < a.Count; i++)
+            {
+                if (a[i].Judgement != b[i].Judgement)
+                    return false;
+                if (a[i].Combo != b[i].Combo)
+                    return false;
+            }
+
+            var lastA = a[^1];
+            var lastB = b[^1];
+
+            return lastA.Score == lastB.Score
+                   && Math.Abs(lastA.Accuracy - lastB.Accuracy) < 0.0001
+                   && lastA.Grade == lastB.Grade;
         }
 
         private static string map()
