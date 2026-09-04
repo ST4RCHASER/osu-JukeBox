@@ -377,6 +377,62 @@ namespace JukeBox.Game.Tests.Visual
                 new KnockoutRules().AliveCount(simulator.Timelines, timeOf(11)) == 3);
         }
 
+        /// <summary>
+        /// The 2:28 freeze, in miniature. On a map of nothing but sliders the score processor's
+        /// JudgedHits counts every nested part — head, ticks, tail — so it reaches the count of
+        /// TOP-LEVEL objects roughly a third of the way in. A completion check that finishes there
+        /// records only the first handful of sliders and calls the play done; on the real
+        /// slider-heavy map that landed the whole board at 2:28 with everything past it missing. The
+        /// recording has to reach the LAST slider.
+        /// </summary>
+        [Test]
+        public void ASliderHeavyPlayIsRecordedToItsEndNotItsFirstThird()
+        {
+            AddStep("simulate a play on a map of nothing but sliders", () =>
+            {
+                string sliderPath = Path.Combine(tmp, "sliders [Sliders].osu");
+                File.WriteAllText(sliderPath, sliderMap());
+
+                string osr = Path.Combine(tmp, "slider-player.osr");
+                ReplayFixture.WriteHitting(osr, sliderPath, "slider-player");
+
+                var attachment = new ReplayAttachment
+                {
+                    PlayerName = "slider-player",
+                    SourcePath = osr,
+                    OsuFile = sliderPath,
+                    Score = new JukeBoxScoreDecoder(sliderPath).Decode(osr),
+                    RateTempo = 1,
+                    RateFrequency = 1,
+                };
+
+                host.Child = simulator = new ReplaySimulator(sliderPath, new[] { attachment });
+            });
+
+            AddUntilStep("recorded", () => simulator.AllComplete);
+
+            // The mutation killer. Under a top-level-count completion check the play is declared
+            // done once JudgedHits reaches slider_count — reached around the first third, since every
+            // slider carries several judgeable parts — so the recording stops there. It has to reach
+            // the LAST slider's time instead: that is the difference between a board that reads the
+            // whole map and one frozen a third of the way in.
+            AddAssert("the recording reaches the final slider", () =>
+            {
+                double lastSliderTime = 1000 + (slider_count - 1) * 1500;
+                return simulator.Timelines[0].Points.Last().Time >= lastSliderTime;
+            });
+
+            // Every slider left its mark: the recording is not merely long but covers each one, so a
+            // completion that stopped early (fewer sliders touched) is caught here too.
+            AddAssert("all twelve sliders are represented", () =>
+            {
+                var recorded = simulator.Timelines[0].Points.Select(p => p.Time).ToList();
+
+                return Enumerable.Range(0, slider_count)
+                                 .All(i => recorded.Any(t => Math.Abs(t - (1000 + i * 1500)) < 700));
+            });
+        }
+
         private static string map()
         {
             var sb = new StringBuilder();
@@ -388,6 +444,37 @@ namespace JukeBox.Game.Tests.Visual
 
             for (int i = 0; i < object_count; i++)
                 sb.Append($"{100 + i * 37 % 350},{80 + i * 53 % 240},{(int)timeOf(i)},1,0,0:0:0:0:\n");
+
+            return sb.ToString();
+        }
+
+        private const int slider_count = 12;
+
+        /// <summary>
+        /// A map of nothing but sliders, spread evenly across its whole length. Every slider carries
+        /// several JUDGEABLE parts — a head, a tail and (on this multiplier/length) at least one tick
+        /// — so the score processor's JudgedHits climbs several times faster than the count of
+        /// TOP-LEVEL objects. That mismatch is the whole point of the fixture: a completion check that
+        /// stops once JudgedHits reaches the top-level object count stops around the map's FIRST third
+        /// (the 2:28 freeze on the real slider-heavy map), leaving the rest of the play unrecorded.
+        /// </summary>
+        private static string sliderMap()
+        {
+            var sb = new StringBuilder();
+
+            sb.Append("osu file format v14\n\n[General]\nAudioFilename: audio.wav\nMode: 0\n\n");
+            sb.Append("[Metadata]\nTitle:Sim\nArtist:A\nCreator:C\nVersion:Sliders\n\n");
+            sb.Append("[Difficulty]\nHPDrainRate:5\nCircleSize:4\nOverallDifficulty:8\nApproachRate:9\nSliderMultiplier:1.4\nSliderTickRate:1\n\n");
+            sb.Append("[TimingPoints]\n0,500,4,2,0,60,1,0\n\n[HitObjects]\n");
+
+            // Linear sliders, length 280px: on this 500ms beat and 1.4 multiplier that runs ~1000ms,
+            // long enough to carry ticks as well as a head and tail, so each slider is worth several
+            // judgements. Spaced 1500ms apart so the whole map spans well past its first third.
+            for (int i = 0; i < slider_count; i++)
+            {
+                int time = 1000 + i * 1500;
+                sb.Append($"100,192,{time},2,0,L|380:192,1,280\n");
+            }
 
             return sb.ToString();
         }

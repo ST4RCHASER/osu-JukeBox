@@ -199,6 +199,30 @@ public partial class LazerChartLayer : CompositeDrawable, IBeatSyncProvider
     /// <summary>Number of hit objects in the playable (converted) beatmap, 0 until loaded (test hook).</summary>
     internal int ObjectCount => playableBeatmap?.HitObjects.Count ?? 0;
 
+    /// <summary>
+    /// Total number of JUDGEABLE objects — every top-level object AND every nested one (a slider's
+    /// head, ticks, repeats and tail). This is what the score processor's JudgedHits counts up to,
+    /// so it is the right target for "has the play finished". Using the top-level
+    /// <see cref="ObjectCount"/> instead finishes a slider-heavy map at roughly its MIDPOINT — the
+    /// nested slider judgements push JudgedHits to the object count long before the last object —
+    /// which is the 2:28 freeze on this map. Cached: the beatmap does not change.
+    /// </summary>
+    internal int JudgeableObjectCount
+    {
+        get
+        {
+            if (judgeableObjectCount < 0 && playableBeatmap != null)
+                judgeableObjectCount = playableBeatmap.HitObjects.Sum(countWithNested);
+
+            return judgeableObjectCount < 0 ? 0 : judgeableObjectCount;
+        }
+    }
+
+    private int judgeableObjectCount = -1;
+
+    private static int countWithNested(osu.Game.Rulesets.Objects.HitObject h)
+        => 1 + h.NestedHitObjects.Sum(countWithNested);
+
     /// <summary>The mod-converted beatmap gameplay actually runs on (test hook) — lets a test see
     /// that a replay's difficulty mods reached the conversion, not just the mods list.</summary>
     internal IBeatmap? PlayableBeatmap => playableBeatmap;

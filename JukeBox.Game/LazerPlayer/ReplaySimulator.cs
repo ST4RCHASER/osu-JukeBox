@@ -265,7 +265,10 @@ public partial class ReplaySimulator : CompositeDrawable
         simulation.Layer.UpdateSubTree();
         StepsRun++;
 
-        int objects = simulation.Layer.ObjectCount;
+        // The TOTAL judgeable count (nested slider judgements included), not the top-level object
+        // count — the play is done only when every judgement has landed, and on a slider-heavy map
+        // JudgedHits reaches the top-level count at the map's midpoint (the 2:28 freeze).
+        int objects = simulation.Layer.JudgeableObjectCount;
         var score = simulation.Layer.LiveScore;
 
         if (objects > 0 && score != null && score.JudgedHits >= objects)
