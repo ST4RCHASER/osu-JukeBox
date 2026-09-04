@@ -180,48 +180,14 @@ public partial class PlayerCursor : CompositeDrawable
         return PositionSpace is { } space ? space.ToScreenSpace(position) : ToScreenSpace(position);
     }
 
-    /// <summary>
-    /// The combo-break cue on the playfield: the player's NAME appears at the point where they
-    /// dropped it, in red, and fades.
-    ///
-    /// <para>
-    /// The name is not on the cursor any more — with a dozen or more players the tags overlapped
-    /// into an unreadable pile, and the rail is where names belong. It comes back for a moment at
-    /// the one instant it answers a question the rail cannot: not "who is that", but "who just
-    /// missed, and where". It is left behind at the point of the miss rather than following the
-    /// cursor, because the interesting place is where the break happened.
-    /// </para>
-    /// </summary>
-    public void FlashComboBreak()
-    {
-        dot.FlashColour(Color4.Red, 900, Easing.OutQuint);
+    /// <summary>An arbitrary osu!-playfield position (0..512, 0..384) in SCREEN space, through the same
+    /// playfield transform the cursor uses — for placing the death name at the HIT OBJECT the player
+    /// was knocked out on rather than at their cursor.</summary>
+    internal Vector2 ScreenSpaceOf(Vector2 osuPosition)
+        => PositionSpace is { } space ? space.ToScreenSpace(osuPosition) : ToScreenSpace(osuPosition);
 
-        // Jittered a few pixels off the miss point so two players who break on the same object do
-        // not drop identical names on top of each other into one illegible smear — danser scatters
-        // its death bubbles the same way.
-        var start = body.Position + new Vector2(RNG.NextSingle(-5, 5), RNG.NextSingle(-5, 5));
-
-        var marker = new OsuSpriteText
-        {
-            Origin = Anchor.Centre,
-            Position = start,
-            Text = playerName,
-            Font = OsuFont.Torus.With(size: 14, weight: FontWeight.Bold),
-            Colour = Color4.Red,
-            Shadow = true,
-            Alpha = 0,
-        };
-
-        content.Add(marker);
-
-        // danser's death bubble: it SLIDES down ~50px over two seconds on an OutQuad, rather than
-        // popping and fading in place. The slide is what reads as "dropped" — a name settling
-        // downward off the playfield instead of a label blinking where the cursor happened to be.
-        marker.MoveToY(start.Y + 50, 2000, Easing.OutQuad);
-
-        // Fade in over 200ms, hold, then out from 800ms to 1200ms — the bubble is gone well before
-        // the slide finishes, so its last stretch of travel is spent invisible, exactly as danser
-        // times it.
-        marker.FadeIn(200).Then().Delay(600).FadeOut(400).Expire();
-    }
+    // No combo-break name/flash on the cursor. In combine — the only place PlayerCursor is used —
+    // the one dropped name is the knockout death name (see MultiReplayCombine.updateDeaths), in the
+    // player's own colour at the missed note; the old red name-and-dot flash here was the "sea of
+    // red" cue the user asked to remove. The grid draws its own cell-label flash and never used this.
 }

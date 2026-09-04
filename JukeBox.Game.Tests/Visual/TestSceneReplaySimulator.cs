@@ -14,7 +14,9 @@ using osu.Game.Rulesets.Difficulty;
 using osu.Game.Rulesets.Mods;
 using osu.Game.Rulesets.Osu;
 using osu.Game.Rulesets.Osu.Mods;
+using osu.Game.Rulesets.Osu.Objects;
 using NUnit.Framework;
+using osuTK;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Testing;
@@ -511,6 +513,37 @@ namespace JukeBox.Game.Tests.Visual
 
             AddAssert("and every play is a real recording", () =>
                 simulator.Timelines.Count == 3 && simulator.Timelines.All(t => t.Points.Count > 0));
+        }
+
+        /// <summary>
+        /// Each recorded judgement carries the playfield position of the object it landed on, so the
+        /// combine can drop a knocked-out player's name at the NOTE they broke on rather than at their
+        /// cursor. Asserted on a break carrying the missed object's own position — zero (not recorded)
+        /// fails.
+        /// </summary>
+        [Test]
+        public void TheTimelineRecordsTheNotePositionOfEachJudgement()
+        {
+            ReplayAttachment att = null!;
+
+            AddStep("simulate a play that breaks on the fifth object", () =>
+            {
+                att = replay("noteposition", 4);
+                simulate(att);
+            });
+            AddUntilStep("recorded", () => simulator.AllComplete);
+
+            AddAssert("the break carries the missed note's playfield position", () =>
+            {
+                var mods = ReplayMods.ForGameplay(att.Score!);
+                var playable = new FlatWorkingBeatmap(att.OsuFile!).GetPlayableBeatmap(new OsuRuleset().RulesetInfo, mods);
+                var missed = (OsuHitObject)playable.HitObjects[4];
+
+                var breakPoint = simulator.Timelines[0].Points.First(p => p.BrokeCombo);
+
+                return breakPoint.Position != Vector2.Zero
+                       && Vector2.Distance(breakPoint.Position, missed.StackedPosition) < 0.5f;
+            });
         }
 
         /// <summary>Runs the attachment through the analytic recorder (no renderer) for comparison.</summary>

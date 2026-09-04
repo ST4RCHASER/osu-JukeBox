@@ -327,12 +327,11 @@ public partial class MultiReplayCombine : CompositeDrawable
 
             cursor.Scale = new Vector2(stillIn ? scale : 1);
             cursor.Alpha = stillIn ? 1 : 0;
-
-            flashNewBreaks(i, cursor, timelines[i], time);
         }
 
-        lastFlashCheck = time;
-
+        // No red combo-break flash in combine — that red cursor-dot-and-name cue was the wrong one
+        // here (a sea of red when a hard section drops many players at once). Combine's ONE dropped
+        // name is the knockout death name below, in the player's colour at the missed note.
         updateDeaths(time);
         applyFocus();
     }
@@ -381,17 +380,30 @@ public partial class MultiReplayCombine : CompositeDrawable
 
             if (!deaths.TryGetValue(i, out var death))
             {
-                if (cursors[i]?.ScreenPositionAt(ko) is not { } screen)
+                if (cursors[i] is not { } cursor)
+                    continue;
+
+                var breakPoint = timelines[i].At(ko);
+
+                // At the NOTE they broke on, not at their cursor — the object that killed them is the
+                // interesting spot, and where the eye already is. Through the cursor's own playfield
+                // transform so the note lands exactly where it is drawn. Falls back to the cursor
+                // position for a play that recorded no note position (a non-osu oracle run).
+                Vector2? screen = breakPoint.Position != Vector2.Zero
+                    ? cursor.ScreenSpaceOf(breakPoint.Position)
+                    : cursor.ScreenPositionAt(ko);
+
+                if (screen is not { } screenPos)
                     continue;
 
                 string name = replays[i].PlayerName.Length > 0 ? replays[i].PlayerName : "unknown";
 
                 // The combo they BROKE on — the combo held going into the break, not their peak.
-                int combo = timelines[i].At(ko).ComboLost;
+                int combo = breakPoint.ComboLost;
 
                 death = new PlayerDeathName(name, combo, effectiveColour(i), showCombo)
                 {
-                    BasePosition = ToLocalSpace(screen),
+                    BasePosition = ToLocalSpace(screenPos),
                 };
 
                 AddInternal(death);
@@ -445,51 +457,6 @@ public partial class MultiReplayCombine : CompositeDrawable
 
         appliedFocus = focusedPlayer;
     }
-
-    /// <summary>
-    /// Fires the combo-break cue when the playhead crosses a break this player has not been flashed
-    /// for yet.
-    ///
-    /// <para>
-    /// Driven off the recorded timeline rather than off a live judgement, which is what makes it
-    /// work at all here: the breaks are all known before the song starts, so a break is a comparison
-    /// against the clock instead of an event that has to be caught as it happens.
-    /// </para>
-    ///
-    /// <para>
-    /// Only breaks the playhead moves FORWARD across count. Seeking backwards past one and playing
-    /// it again does flash again, which is right — the viewer is watching that moment again. Jumping
-    /// backwards does not fire anything, or scrubbing would set the whole board flashing.
-    /// </para>
-    /// </summary>
-    private void flashNewBreaks(int player, PlayerCursor cursor, ReplayTimeline timeline, double time)
-    {
-        if (lastFlashCheck is not { } previous || time <= previous)
-            return;
-
-        foreach (var point in timeline.Points)
-        {
-            if (!point.BrokeCombo)
-                continue;
-
-            if (point.Time > previous && point.Time <= time)
-            {
-                // Only breaks big enough to matter get announced on the playfield. At high player
-                // counts, flashing every dropped combo is a continuous flicker of red names and the
-                // cue stops meaning anything — the board still shows the break either way.
-                if (rules.WorthAnnouncing(point.ComboLost))
-                    cursor.FlashComboBreak();
-
-                // The board itself does NOT flash the name in combine mode: the rail shows a recent
-                // judgement column (X / 50 / 100) instead, which reads as "who is dropping" without
-                // the name jumping around. The name flash stays the GRID's cue (see MultiReplayGrid).
-                break;
-            }
-        }
-    }
-
-    /// <summary>Where the playhead was last frame, so a break can be spotted being crossed.</summary>
-    private double? lastFlashCheck;
 
     /// <summary>
     /// This player's colour, spread evenly around the hue circle so neighbouring cursors are as

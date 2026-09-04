@@ -428,6 +428,10 @@ public partial class ReplaySimulator : CompositeDrawable
                     total = score.TotalScore.Value;
                 }
 
+                var position = result.HitObject is osu.Game.Rulesets.Osu.Objects.OsuHitObject osuObject
+                    ? osuObject.StackedPosition
+                    : osuTK.Vector2.Zero;
+
                 Timeline.Record(new TimelinePoint(
                     result.TimeAbsolute,
                     total,
@@ -437,7 +441,8 @@ public partial class ReplaySimulator : CompositeDrawable
                     score.Rank.Value.ToString(),
                     performance?.PointsFor(score) ?? 0,
                     lost,
-                    result.Type));
+                    result.Type,
+                    position));
             };
         }
     }

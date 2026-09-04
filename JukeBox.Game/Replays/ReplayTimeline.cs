@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Generic;
 using osu.Game.Rulesets.Scoring;
+using osuTK;
 
 namespace JukeBox.Game.Replays;
 
@@ -21,6 +22,9 @@ namespace JukeBox.Game.Replays;
 /// <param name="Judgement">The result THIS judgement landed — a miss, a 50, a 100, a 300. The
 /// combine board shows the recent non-perfect ones (X/50/100) beside a player so you can see who is
 /// dropping, in place of the name flash the grid uses.</param>
+/// <param name="Position">The hit object's position in osu!-playfield space (0..512, 0..384). The
+/// combine drops a knocked-out player's name at the NOTE they broke on, not at their cursor, so this
+/// is the note that killed them. Zero for a non-osu play, where no cursor overlay reads it.</param>
 public readonly record struct TimelinePoint(
     double Time,
     long Score,
@@ -30,7 +34,8 @@ public readonly record struct TimelinePoint(
     string Grade = "",
     double Performance = 0,
     int ComboLost = 0,
-    HitResult Judgement = HitResult.None);
+    HitResult Judgement = HitResult.None,
+    Vector2 Position = default);
 
 /// <summary>
 /// A player's whole play, recorded once as a list of states over time, so that what the scoreboard

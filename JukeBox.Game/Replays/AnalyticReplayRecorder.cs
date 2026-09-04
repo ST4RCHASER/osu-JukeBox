@@ -101,7 +101,8 @@ public static class AnalyticReplayRecorder
                 processor.Rank.Value.ToString(),
                 performance?.PointsFor(processor) ?? 0,
                 lost,
-                j.Result));
+                j.Result,
+                j.Position));
         }
 
         double endTime = playable.HitObjects.Count == 0 ? 0 : playable.HitObjects[^1].GetEndTime();

@@ -714,34 +714,28 @@ namespace JukeBox.Game.Tests.Visual
         }
 
         /// <summary>
-        /// The combo-break bubble as danser draws it: the breaker's name appears at the miss and
-        /// SLIDES downward as it fades, rather than blinking in place. Asserted on the drawn marker
-        /// actually travelling down the screen and fading in — a bubble that never moved, or never
-        /// showed, would fail this even though the flash "fired".
+        /// Combine does NOT drop the red combo-break bubble on the cursor — that cue (red cursor dot,
+        /// red name sliding off the miss) was the "sea of red" when a hard section drops many players
+        /// at once, and it belonged to the grid. A combo break in combine leaves the cursor alone; the
+        /// rail's judgement column carries "who is dropping" instead. Asserted on the marker never
+        /// appearing, so restoring the flash fails here.
         /// </summary>
         [Test]
-        public void AComboBreakDropsASlidingBubble()
+        public void AComboBreakShowsNoRedCursorBubbleInCombine()
         {
             AddStep("build two, one of whom breaks at the fifth object", () =>
                 build(2, misses: new[] { Array.Empty<int>(), new[] { 4 } }));
 
             AddUntilStep("recorded", () => combine.Simulator.AllComplete);
 
-            // The playfield bubble is gated to sizeable breaks so it does not flicker at high player
-            // counts; the fixture's twelve-object map can never reach the default 200, so drop the
-            // gate to make the one break here worth announcing.
+            // Even with the announce gate wide open — under the old behaviour this is exactly when the
+            // bubble would have fired.
             AddStep("announce even a small break", () => combine.Rules = new KnockoutRules(BubbleMinimumCombo: 1));
             AddStep("play across the break", () => playTo(timeOf(5)));
 
-            AddAssert("a red break bubble is on the breaker's cursor", () => breakBubble() != null);
-            AddAssert("and it has faded in", () => breakBubble()!.Alpha > 0.5f);
-
-            float startY = 0;
-            AddStep("note where it starts", () => startY = breakBubble()!.Y);
-
-            AddStep("let it slide", () => advanceBy(400));
-
-            AddAssert("the bubble has slid downward", () => breakBubble()!.Y > startY + 2);
+            AddAssert("no red bubble is ever drawn on a cursor", () => breakBubble() == null);
+            AddStep("let any late animation run", () => advanceBy(400));
+            AddAssert("still none", () => breakBubble() == null);
         }
 
         /// <summary>
