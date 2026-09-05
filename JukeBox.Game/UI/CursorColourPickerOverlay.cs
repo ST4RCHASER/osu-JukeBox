@@ -83,32 +83,45 @@ public partial class CursorColourPickerOverlay : FocusedOverlayContainer
                                 Colour = Theme.TextPrimary,
                                 Text = "Pick a cursor colour",
                             },
-                            picker = new osu.Game.Graphics.UserInterfaceV2.OsuColourPicker
+                            // Every direct child of a vertical flow must share one anchor (the
+                            // framework throws otherwise — and did, the first time this opened), so
+                            // the centred picker and the right-aligned buttons each sit inside a
+                            // full-width strip and are anchored within THAT.
+                            new Container
                             {
-                                Anchor = Anchor.TopCentre,
-                                Origin = Anchor.TopCentre,
-                            },
-                            new FillFlowContainer
-                            {
-                                Anchor = Anchor.CentreRight,
-                                Origin = Anchor.CentreRight,
+                                RelativeSizeAxes = Axes.X,
                                 AutoSizeAxes = Axes.Y,
-                                Width = 200,
-                                Direction = FillDirection.Horizontal,
-                                Spacing = new Vector2(Theme.RowSpacing, 0),
-                                Children = new Drawable[]
+                                Child = picker = new osu.Game.Graphics.UserInterfaceV2.OsuColourPicker
                                 {
-                                    cancelButton = new TextButton("Cancel")
+                                    Anchor = Anchor.TopCentre,
+                                    Origin = Anchor.TopCentre,
+                                },
+                            },
+                            new Container
+                            {
+                                RelativeSizeAxes = Axes.X,
+                                AutoSizeAxes = Axes.Y,
+                                Child = new FillFlowContainer
+                                {
+                                    Anchor = Anchor.TopRight,
+                                    Origin = Anchor.TopRight,
+                                    AutoSizeAxes = Axes.Both,
+                                    Direction = FillDirection.Horizontal,
+                                    Spacing = new Vector2(Theme.RowSpacing, 0),
+                                    Children = new Drawable[]
                                     {
-                                        Size = new Vector2(88, 34),
-                                        Action = Hide,
-                                    },
-                                    applyButton = new TextButton("Apply")
-                                    {
-                                        Size = new Vector2(88, 34),
-                                        IdleColour = Theme.AccentDim,
-                                        HoverColour = Theme.Accent,
-                                        Action = apply,
+                                        cancelButton = new TextButton("Cancel")
+                                        {
+                                            Size = new Vector2(88, 34),
+                                            Action = Hide,
+                                        },
+                                        applyButton = new TextButton("Apply")
+                                        {
+                                            Size = new Vector2(88, 34),
+                                            IdleColour = Theme.AccentDim,
+                                            HoverColour = Theme.Accent,
+                                            Action = apply,
+                                        },
                                     },
                                 },
                             },
