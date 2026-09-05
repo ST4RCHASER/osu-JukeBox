@@ -35,13 +35,10 @@ namespace JukeBox.Game.UI.Render;
 /// </para>
 ///
 /// <para>
-/// <b>What is guarded:</b> a fully-headless, per-scene off-screen framebuffer readback at an
-/// arbitrary resolution is NOT implemented — <see cref="Capture.ByWindowScreenshot"/> uses
-/// osu!framework's <see cref="GameHost.TakeScreenshotAsync"/>, which reads the WINDOW back-buffer
-/// (real pixels, but the whole composited window) and is resized to the requested size. That is the
-/// WYSIWYG capture path the spec allows; a true off-screen <c>IFrameBuffer</c> readback is the
-/// documented next step. <see cref="IsSupported"/> refuses (with a reason) rather than fake output
-/// when ffmpeg is missing.
+/// <b>Capture:</b> the scene is drawn into an off-screen frame buffer of exactly the requested size
+/// (<see cref="OffscreenCapture"/>) and never to the window, so a frame is the render scene's own
+/// pixels at the requested resolution — not a resized screenshot of the composited window.
+/// <see cref="IsSupported"/> refuses (with a reason) rather than fake output when ffmpeg is missing.
 /// </para>
 /// </summary>
 public sealed class OfflineRenderer
@@ -204,20 +201,6 @@ public sealed class OfflineRenderer
     }
 
     /// <summary>
-    /// Frame capture from a live <see cref="BeatmapVisuals"/> scene. Window-backbuffer path via
-    /// <see cref="GameHost.TakeScreenshotAsync"/> — see the class remarks for what this does and does
-    /// not guarantee. Kept as a small seam so the encode loop above stays capture-agnostic.
-    /// </summary>
-    public static class Capture
-    {
-        public static async Task<byte[]> ByWindowScreenshot(GameHost host, int width, int height)
-        {
-            using var shot = await host.TakeScreenshotAsync().ConfigureAwait(false);
-            return ExtractRgba(shot, width, height);
-        }
-    }
-
-    /// <summary>
     /// The deterministic, off-clock visual stack driven for the render: a <see cref="BeatmapVisuals"/>
     /// built off a <see cref="ManualClock"/> wrapped in a <see cref="FramedClock"/>, sized to the
     /// render resolution, stepped a fixed <see cref="RenderRequest.FrameStepMs"/> at a time exactly as
@@ -231,6 +214,7 @@ public sealed class OfflineRenderer
         private readonly string? osuFile;
         private readonly ManualClock manual = new ManualClock();
         private readonly FramedClock framed;
+        private readonly OffscreenCapture capture;
 
         private BeatmapVisuals visuals = null!;
 
@@ -240,24 +224,47 @@ public sealed class OfflineRenderer
             this.osuFile = osuFile;
             framed = new FramedClock(manual);
 
-            // Fixed-size, off to the side and invisible to the user — the scene is rendered for
-            // capture, not to be watched. AlwaysPresent so the framework keeps updating it even while
-            // it draws nothing on screen (an absent drawable never advances).
-            Size = new osuTK.Vector2(request.Width, request.Height);
-            Alpha = 0.0001f;
+            // The whole stack lives inside an off-screen capture: it is drawn into a buffer of the
+            // requested pixel size and never to the window, so the user sees nothing of it and the
+            // frames are exactly the requested resolution whatever the window is. AlwaysPresent so
+            // the framework keeps updating it (an absent drawable never advances).
+            capture = new OffscreenCapture(request.Width, request.Height);
+            AutoSizeAxes = Axes.Both;
             AlwaysPresent = true;
 
             manual.CurrentTime = request.StartMs;
         }
 
+        // Never in the way of the user's mouse while a render runs.
+        public override bool ReceivePositionalInputAt(osuTK.Vector2 screenSpacePos) => false;
+
+        /// <summary>
+        /// The scene's combine simulates its own copy of the replays, and a combine publishes its
+        /// preload into the <see cref="Replays.PreloadProgressTracker"/> it resolves. Handing it a
+        /// PRIVATE tracker keeps that off the app's own playback bar — otherwise the user watches the
+        /// buffer fill and "Simulating replays…" restart for a scene they can't see.
+        /// </summary>
+        protected override IReadOnlyDependencyContainer CreateChildDependencies(IReadOnlyDependencyContainer parent)
+        {
+            var dependencies = new DependencyContainer(base.CreateChildDependencies(parent));
+            dependencies.Cache(new Replays.PreloadProgressTracker());
+            return dependencies;
+        }
+
         [BackgroundDependencyLoader]
         private void load()
         {
-            AddInternal(visuals = new BeatmapVisuals(set, framed, osuFile)
+            capture.Child = visuals = new BeatmapVisuals(set, framed, osuFile)
             {
                 RelativeSizeAxes = Axes.Both,
-            });
+            };
+
+            AddInternal(capture);
         }
+
+        /// <summary>Reads back the frame for the most recent <see cref="StepTo"/> — call after the
+        /// update frame that stepped has ended, so the draw nodes it generated are what gets drawn.</summary>
+        public Task<Image<Rgba32>> CaptureAsync(GameHost host) => capture.CaptureAsync(host);
 
         /// <summary>Advances the whole stack to <paramref name="timeMs"/> and lets it settle — the
         /// ReplaySimulator.advance() pattern: set the manual clock, pump the framed clock, update the
