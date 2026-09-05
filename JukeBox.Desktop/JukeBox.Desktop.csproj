@@ -14,4 +14,22 @@
   <ItemGroup Label="Resources">
     <EmbeddedResource Include="game.ico" />
   </ItemGroup>
+  <PropertyGroup Label="Single-file publish" Condition="'$(PublishSingleFile)' == 'true'">
+    <!-- osu!framework's native libraries (SDL, BASS, Veldrid) and any bundled content must
+         self-extract for a single-file exe to run. With extraction in play,
+         AppContext.BaseDirectory points at the EXTRACTION directory - which is exactly where the
+         bundled ffmpeg.exe below lands, and where FfmpegEncoder's beside-the-app probe looks. -->
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
+  </PropertyGroup>
+  <!-- A static win64 ffmpeg bundled into the Windows publish, so a single exe renders video with
+       nothing to install. The binary is NOT in git: scripts/fetch-ffmpeg-win64.sh downloads it to
+       JukeBox.Desktop/ffmpeg/win-x64/ first (see the guard target below). Linked to the publish
+       root so the runtime probe finds it right in AppContext.BaseDirectory. -->
+  <ItemGroup Label="Bundled ffmpeg" Condition="'$(RuntimeIdentifier)' == 'win-x64' And Exists('$(MSBuildThisFileDirectory)ffmpeg/win-x64/ffmpeg.exe')">
+    <Content Include="ffmpeg/win-x64/ffmpeg.exe" Link="ffmpeg.exe" CopyToOutputDirectory="Never" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+  <Target Name="EnsureBundledFfmpeg" BeforeTargets="PrepareForPublish" Condition="'$(RuntimeIdentifier)' == 'win-x64' And '$(PublishSingleFile)' == 'true' And !Exists('$(MSBuildThisFileDirectory)ffmpeg/win-x64/ffmpeg.exe')">
+    <Error Text="No bundled ffmpeg for win-x64: run scripts/fetch-ffmpeg-win64.sh before publishing (it downloads ffmpeg.exe to JukeBox.Desktop/ffmpeg/win-x64/, which stays out of git)." />
+  </Target>
 </Project>

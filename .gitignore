@@ -19,3 +19,6 @@ obj/
 
 ## Agent worktrees / tooling
 .claude/
+
+## Bundled ffmpeg (downloaded by scripts/fetch-ffmpeg-win64.sh, never committed)
+JukeBox.Desktop/ffmpeg/
