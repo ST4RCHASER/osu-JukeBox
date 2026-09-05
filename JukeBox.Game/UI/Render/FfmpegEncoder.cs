@@ -7,6 +7,7 @@ using System.Globalization;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
+using osu.Framework;
 
 namespace JukeBox.Game.UI.Render;
 
@@ -24,24 +25,25 @@ namespace JukeBox.Game.UI.Render;
 /// </summary>
 public sealed class FfmpegEncoder : IDisposable
 {
-    /// <summary>The well-known install locations checked before falling back to <c>PATH</c> — the two
-    /// Homebrew prefixes (Apple-silicon and Intel) plus a bare <c>ffmpeg</c> the OS resolves itself.</summary>
-    private static readonly string[] candidate_paths =
-    {
-        "/opt/homebrew/bin/ffmpeg",
-        "/usr/local/bin/ffmpeg",
-        "/usr/bin/ffmpeg",
-    };
-
     /// <summary>
-    /// Finds a usable ffmpeg: the first of the <see cref="candidate_paths"/> that exists on disk,
-    /// otherwise a bare <c>ffmpeg</c> left for the OS to resolve on <c>PATH</c>. Returns false only
-    /// when neither a known path nor a PATH lookup finds one, so the dialog can say "install ffmpeg"
-    /// rather than failing mid-render.
+    /// Finds a usable ffmpeg the same way on every OS: the user's own <c>PATH</c> first (their
+    /// install wins), then a copy shipped next to the app, then the OS's usual install spots
+    /// (<see cref="CandidateLocations"/> — a Finder-launched mac app has no Homebrew on its PATH).
+    /// Returns false only when nothing is found, so the dialog can say "install ffmpeg" rather than
+    /// failing mid-render.
     /// </summary>
     public static bool IsFfmpegAvailable(out string path)
     {
-        foreach (string candidate in candidate_paths)
+        foreach (string name in ExecutableNames(RuntimeInfo.OS))
+        {
+            if (existsOnPath(name, out string? resolved))
+            {
+                path = resolved!;
+                return true;
+            }
+        }
+
+        foreach (string candidate in CandidateLocations(RuntimeInfo.OS, AppContext.BaseDirectory))
         {
             if (File.Exists(candidate))
             {
@@ -50,14 +52,41 @@ public sealed class FfmpegEncoder : IDisposable
             }
         }
 
-        if (existsOnPath("ffmpeg", out string? resolved))
-        {
-            path = resolved!;
-            return true;
-        }
-
         path = string.Empty;
         return false;
+    }
+
+    /// <summary>The binary names ffmpeg goes by on <paramref name="platform"/> — <c>ffmpeg.exe</c>
+    /// (then a bare <c>ffmpeg</c>) on Windows, <c>ffmpeg</c> elsewhere. Internal for the tests.</summary>
+    internal static IReadOnlyList<string> ExecutableNames(RuntimeInfo.Platform platform)
+        => platform == RuntimeInfo.Platform.Windows
+            ? new[] { "ffmpeg.exe", "ffmpeg" }
+            : new[] { "ffmpeg" };
+
+    /// <summary>
+    /// The on-disk locations probed after <c>PATH</c>, in order: next to the app (a bundled copy on
+    /// any OS), then the platform's usual installs — Homebrew's two prefixes and the system bin on
+    /// macOS, the distro and local bins on Linux, nothing further on Windows (installs there live
+    /// on PATH or beside the app). Pure and internal for the tests.
+    /// </summary>
+    internal static IEnumerable<string> CandidateLocations(RuntimeInfo.Platform platform, string baseDirectory)
+    {
+        foreach (string name in ExecutableNames(platform))
+            yield return Path.Combine(baseDirectory, name);
+
+        switch (platform)
+        {
+            case RuntimeInfo.Platform.macOS:
+                yield return "/opt/homebrew/bin/ffmpeg";
+                yield return "/usr/local/bin/ffmpeg";
+                yield return "/usr/bin/ffmpeg";
+                break;
+
+            case RuntimeInfo.Platform.Linux:
+                yield return "/usr/bin/ffmpeg";
+                yield return "/usr/local/bin/ffmpeg";
+                break;
+        }
     }
 
     private static bool existsOnPath(string executable, out string? resolved)

@@ -165,5 +165,44 @@ namespace JukeBox.Game.Tests.Render
             Assert.That(FfmpegEncoder.ExtensionFor("webm"), Is.EqualTo("webm"));
             Assert.That(FfmpegEncoder.ExtensionFor("mov"), Is.EqualTo("mov"));
         }
+
+        [Test]
+        public void WindowsLooksForTheExeNameFirst()
+        {
+            // A Windows PATH holds ffmpeg.exe, not a bare ffmpeg — probing only the bare name is
+            // how a present install goes "not found".
+            Assert.That(FfmpegEncoder.ExecutableNames(osu.Framework.RuntimeInfo.Platform.Windows), Is.EqualTo(new[] { "ffmpeg.exe", "ffmpeg" }));
+            Assert.That(FfmpegEncoder.ExecutableNames(osu.Framework.RuntimeInfo.Platform.macOS), Is.EqualTo(new[] { "ffmpeg" }));
+            Assert.That(FfmpegEncoder.ExecutableNames(osu.Framework.RuntimeInfo.Platform.Linux), Is.EqualTo(new[] { "ffmpeg" }));
+        }
+
+        [Test]
+        public void CandidateLocationsStartBesideTheAppThenTheOsUsualInstalls()
+        {
+            var mac = FfmpegEncoder.CandidateLocations(osu.Framework.RuntimeInfo.Platform.macOS, "/app").ToArray();
+            Assert.That(mac, Is.EqualTo(new[]
+            {
+                System.IO.Path.Combine("/app", "ffmpeg"),
+                "/opt/homebrew/bin/ffmpeg",
+                "/usr/local/bin/ffmpeg",
+                "/usr/bin/ffmpeg",
+            }));
+
+            var linux = FfmpegEncoder.CandidateLocations(osu.Framework.RuntimeInfo.Platform.Linux, "/app").ToArray();
+            Assert.That(linux, Is.EqualTo(new[]
+            {
+                System.IO.Path.Combine("/app", "ffmpeg"),
+                "/usr/bin/ffmpeg",
+                "/usr/local/bin/ffmpeg",
+            }));
+
+            // Windows installs live on PATH or beside the app — no unix-style spots to probe.
+            var windows = FfmpegEncoder.CandidateLocations(osu.Framework.RuntimeInfo.Platform.Windows, "C:\\app").ToArray();
+            Assert.That(windows, Is.EqualTo(new[]
+            {
+                System.IO.Path.Combine("C:\\app", "ffmpeg.exe"),
+                System.IO.Path.Combine("C:\\app", "ffmpeg"),
+            }));
+        }
     }
 }

@@ -1,28 +1,32 @@
 #nullable enable
 
-using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.Threading.Tasks;
 using osu.Framework;
-using osu.Framework.Logging;
 
 namespace JukeBox.Game.Import;
 
 /// <summary>
 /// The operating system's own "save file" panel — what the Render dialog's Browse… drives to pick a
-/// save location. osu!framework exposes no native SAVE dialog at all (its system file SELECTOR is
-/// an open-style picker that never presents on macOS), so on macOS this drives the standard
-/// NSSavePanel through <c>osascript</c> (<c>choose file name</c>) — the same proven route
-/// <see cref="NativeOpenDialog"/> takes for File → Open…. The user names the file in the panel; the
-/// answer comes back as one POSIX path. Elsewhere <see cref="IsAvailable"/> is false and the caller
-/// falls back to whatever it has (for Browse…, the framework selector, then the text field).
+/// save location. osu!framework exposes no native SAVE dialog on any desktop OS, so each platform
+/// drives its own, exactly as <see cref="NativeOpenDialog"/> does for opening: macOS the standard
+/// NSSavePanel through <c>osascript</c> (<c>choose file name</c>), Windows the stock WinForms
+/// SaveFileDialog through PowerShell, Linux <c>zenity</c>/<c>kdialog</c>. The user names the file
+/// in the panel; the answer comes back as one path. A Linux box with neither tool reports
+/// <see cref="IsAvailable"/> false and the caller falls back to typing the path.
 /// </summary>
 public static class NativeSaveDialog
 {
-    /// <summary>Whether this platform has a native save panel to offer. macOS only for now.</summary>
-    public static bool IsAvailable => RuntimeInfo.IsApple;
+    /// <summary>Whether this platform has a native save panel to offer: macOS and Windows always,
+    /// Linux when a dialog tool (zenity/kdialog) is installed.</summary>
+    public static bool IsAvailable => RuntimeInfo.OS switch
+    {
+        RuntimeInfo.Platform.macOS => true,
+        RuntimeInfo.Platform.Windows => true,
+        RuntimeInfo.Platform.Linux => NativeFileDialogs.LinuxDialogTool() != null,
+        _ => false,
+    };
 
     /// <summary>
     /// Shows the panel and returns the chosen path — null when the user cancelled. Never throws for
@@ -30,40 +34,83 @@ public static class NativeSaveDialog
     /// </summary>
     public static async Task<string?> PickSaveAsync(string? initialDirectory, string? defaultFileName)
     {
-        if (!IsAvailable)
+        var command = BuildCommand(RuntimeInfo.OS, initialDirectory, defaultFileName, RuntimeInfo.OS == RuntimeInfo.Platform.Linux ? NativeFileDialogs.LinuxDialogTool() : null);
+
+        if (command == null)
             return null;
 
-        try
-        {
-            var start = new ProcessStartInfo("osascript")
-            {
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-            };
+        string output = await NativeFileDialogs.RunAsync(command, "[render]").ConfigureAwait(false);
+        return ParseOutput(output);
+    }
 
-            foreach (string line in Script(initialDirectory, defaultFileName))
+    /// <summary>
+    /// The exact process invocation for one platform's save panel — every tool prints the chosen
+    /// location as one path, so <see cref="ParseOutput"/> is shared. Pure and internal so the tests
+    /// exercise every platform's argv from any machine. Null when the platform has no dialog.
+    /// </summary>
+    internal static NativeFileDialogs.Command? BuildCommand(RuntimeInfo.Platform platform, string? initialDirectory, string? defaultFileName, string? linuxTool)
+    {
+        bool haveDirectory = !string.IsNullOrEmpty(initialDirectory) && Directory.Exists(initialDirectory);
+        bool haveName = !string.IsNullOrEmpty(defaultFileName);
+
+        switch (platform)
+        {
+            case RuntimeInfo.Platform.macOS:
             {
-                start.ArgumentList.Add("-e");
-                start.ArgumentList.Add(line);
+                var arguments = new List<string>();
+
+                foreach (string line in Script(initialDirectory, defaultFileName))
+                {
+                    arguments.Add("-e");
+                    arguments.Add(line);
+                }
+
+                return new NativeFileDialogs.Command("osascript", arguments);
             }
 
-            using var process = Process.Start(start);
+            case RuntimeInfo.Platform.Windows:
+            {
+                // The stock WinForms dialog via PowerShell (present on every Windows), seeded with
+                // the current name/folder; a cancel prints nothing. Overwrite confirmation is the
+                // dialog's own default.
+                string seedName = haveName ? $"$d.FileName = '{NativeFileDialogs.EscapePowerShell(defaultFileName!)}'; " : string.Empty;
+                string seedDirectory = haveDirectory ? $"$d.InitialDirectory = '{NativeFileDialogs.EscapePowerShell(initialDirectory!)}'; " : string.Empty;
 
-            if (process == null)
+                string script =
+                    "Add-Type -AssemblyName System.Windows.Forms | Out-Null; " +
+                    "$d = New-Object System.Windows.Forms.SaveFileDialog; " +
+                    "$d.Title = 'Choose where to save the rendered video'; " +
+                    "$d.Filter = 'Video files (*.mp4;*.webm;*.mov)|*.mp4;*.webm;*.mov|All files (*.*)|*.*'; " +
+                    seedName + seedDirectory +
+                    "if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $d.FileName }";
+
+                return new NativeFileDialogs.Command("powershell", new[] { "-NoProfile", "-ExecutionPolicy", "Bypass", "-STA", "-Command", script });
+            }
+
+            case RuntimeInfo.Platform.Linux when linuxTool == "zenity":
+            {
+                var arguments = new List<string>
+                {
+                    "--file-selection",
+                    "--save",
+                    "--title=Choose where to save the rendered video",
+                };
+
+                if (haveDirectory || haveName)
+                    arguments.Add($"--filename={Path.Combine(haveDirectory ? initialDirectory! : ".", haveName ? defaultFileName! : string.Empty)}");
+
+                return new NativeFileDialogs.Command("zenity", arguments);
+            }
+
+            case RuntimeInfo.Platform.Linux when linuxTool == "kdialog":
+                return new NativeFileDialogs.Command("kdialog", new[]
+                {
+                    "--getsavefilename",
+                    Path.Combine(haveDirectory ? initialDirectory! : ".", haveName ? defaultFileName! : string.Empty),
+                });
+
+            default:
                 return null;
-
-            string output = await process.StandardOutput.ReadToEndAsync().ConfigureAwait(false);
-            await process.WaitForExitAsync().ConfigureAwait(false);
-
-            // A cancelled panel is osascript exiting non-zero with "User canceled" on stderr — the
-            // normal way out, not an error worth a toast.
-            return process.ExitCode == 0 ? ParseOutput(output) : null;
-        }
-        catch (Exception e)
-        {
-            Logger.Error(e, "[render] the native save dialog could not be shown");
-            return null;
         }
     }
 

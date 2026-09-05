@@ -2,22 +2,22 @@
 
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using osu.Framework;
-using osu.Framework.Logging;
 
 namespace JukeBox.Game.Import;
 
 /// <summary>
 /// The operating system's own "open files" dialog, with MULTI-SELECT — what File → Open… uses
-/// where one is available. osu!framework provides no native picker of its own, so on macOS this
-/// drives the system panel through <c>osascript</c> (<c>choose file … with multiple selections
-/// allowed</c>), which is the standard NSOpenPanel the user already knows: any mix of .osz / .osk /
-/// .osr, several at once, Cmd-click and Shift-click included. Elsewhere <see cref="IsAvailable"/>
-/// is false and the caller falls back to the in-app picker.
+/// where one is available. osu!framework provides no native picker on any desktop OS
+/// (<c>GameHost.CreateSystemFileSelector</c> is unimplemented there), so each platform drives its
+/// own: macOS the standard NSOpenPanel through <c>osascript</c> (<c>choose file … with multiple
+/// selections allowed</c>), Windows the stock WinForms OpenFileDialog through PowerShell, Linux
+/// <c>zenity</c> or <c>kdialog</c> — whichever the desktop has. Any mix of .osz / .osk / .osr,
+/// several at once. A Linux box with neither tool reports <see cref="IsAvailable"/> false and the
+/// caller falls back to the in-app picker.
 ///
 /// <para>
 /// The paths come back in the order the panel returns them and go through the SAME importer as a
@@ -27,8 +27,15 @@ namespace JukeBox.Game.Import;
 /// </summary>
 public static class NativeOpenDialog
 {
-    /// <summary>Whether this platform has a native dialog to offer. macOS only for now.</summary>
-    public static bool IsAvailable => RuntimeInfo.IsApple;
+    /// <summary>Whether this platform has a native dialog to offer: macOS and Windows always, Linux
+    /// when a dialog tool (zenity/kdialog) is installed.</summary>
+    public static bool IsAvailable => RuntimeInfo.OS switch
+    {
+        RuntimeInfo.Platform.macOS => true,
+        RuntimeInfo.Platform.Windows => true,
+        RuntimeInfo.Platform.Linux => NativeFileDialogs.LinuxDialogTool() != null,
+        _ => false,
+    };
 
     /// <summary>
     /// Shows the dialog and returns the chosen files — empty when the user cancelled. Never throws
@@ -36,40 +43,85 @@ public static class NativeOpenDialog
     /// </summary>
     public static async Task<IReadOnlyList<string>> PickFilesAsync(string? initialDirectory)
     {
-        if (!IsAvailable)
+        var command = BuildCommand(RuntimeInfo.OS, initialDirectory, RuntimeInfo.OS == RuntimeInfo.Platform.Linux ? NativeFileDialogs.LinuxDialogTool() : null);
+
+        if (command == null)
             return Array.Empty<string>();
 
-        try
-        {
-            var start = new ProcessStartInfo("osascript")
-            {
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-            };
+        string output = await NativeFileDialogs.RunAsync(command, "[open]").ConfigureAwait(false);
+        return ParseOutput(output);
+    }
 
-            foreach (string line in Script(initialDirectory))
+    /// <summary>
+    /// The exact process invocation for one platform's multi-select panel — every tool prints the
+    /// chosen files one POSIX/OS path per line, so <see cref="ParseOutput"/> is shared. Pure and
+    /// internal so the tests exercise every platform's argv from any machine. Null when the
+    /// platform has no dialog (a Linux desktop with no <paramref name="linuxTool"/>).
+    /// </summary>
+    internal static NativeFileDialogs.Command? BuildCommand(RuntimeInfo.Platform platform, string? initialDirectory, string? linuxTool)
+    {
+        bool haveDirectory = !string.IsNullOrEmpty(initialDirectory) && Directory.Exists(initialDirectory);
+
+        switch (platform)
+        {
+            case RuntimeInfo.Platform.macOS:
             {
-                start.ArgumentList.Add("-e");
-                start.ArgumentList.Add(line);
+                var arguments = new List<string>();
+
+                foreach (string line in Script(initialDirectory))
+                {
+                    arguments.Add("-e");
+                    arguments.Add(line);
+                }
+
+                return new NativeFileDialogs.Command("osascript", arguments);
             }
 
-            using var process = Process.Start(start);
+            case RuntimeInfo.Platform.Windows:
+            {
+                // The stock WinForms dialog via PowerShell (present on every Windows): multi-select
+                // on, chosen files echoed one per line, a cancel printing nothing.
+                string initial = haveDirectory ? $"$d.InitialDirectory = '{NativeFileDialogs.EscapePowerShell(initialDirectory!)}'; " : string.Empty;
 
-            if (process == null)
-                return Array.Empty<string>();
+                string script =
+                    "Add-Type -AssemblyName System.Windows.Forms | Out-Null; " +
+                    "$d = New-Object System.Windows.Forms.OpenFileDialog; " +
+                    "$d.Multiselect = $true; " +
+                    "$d.Title = 'Open beatmaps (.osz), skins (.osk) or replays (.osr)'; " +
+                    "$d.Filter = 'osu! files (*.osz;*.osk;*.osr)|*.osz;*.osk;*.osr|All files (*.*)|*.*'; " +
+                    initial +
+                    "if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { $d.FileNames | ForEach-Object { Write-Output $_ } }";
 
-            string output = await process.StandardOutput.ReadToEndAsync().ConfigureAwait(false);
-            await process.WaitForExitAsync().ConfigureAwait(false);
+                return new NativeFileDialogs.Command("powershell", new[] { "-NoProfile", "-ExecutionPolicy", "Bypass", "-STA", "-Command", script });
+            }
 
-            // A cancelled panel is osascript exiting non-zero with "User canceled" on stderr — the
-            // normal way out, not an error worth a toast.
-            return process.ExitCode == 0 ? ParseOutput(output) : Array.Empty<string>();
-        }
-        catch (Exception e)
-        {
-            Logger.Error(e, "[open] the native file dialog could not be shown");
-            return Array.Empty<string>();
+            case RuntimeInfo.Platform.Linux when linuxTool == "zenity":
+            {
+                var arguments = new List<string>
+                {
+                    "--file-selection",
+                    "--multiple",
+                    "--separator=\n",
+                    "--title=Open beatmaps (.osz), skins (.osk) or replays (.osr)",
+                };
+
+                if (haveDirectory)
+                    arguments.Add($"--filename={initialDirectory!.TrimEnd('/')}/");
+
+                return new NativeFileDialogs.Command("zenity", arguments);
+            }
+
+            case RuntimeInfo.Platform.Linux when linuxTool == "kdialog":
+                return new NativeFileDialogs.Command("kdialog", new[]
+                {
+                    "--multiple",
+                    "--separate-output",
+                    "--getopenfilename",
+                    haveDirectory ? initialDirectory! : ".",
+                });
+
+            default:
+                return null;
         }
     }
 

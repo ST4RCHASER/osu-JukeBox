@@ -282,10 +282,11 @@ public partial class RenderDialog : FocusedOverlayContainer
 
     private void browse()
     {
-        // A real SAVE panel on macOS, driven through osascript exactly like File → Open…'s picker
-        // (see NativeSaveDialog): the framework's system file selector never presents a panel on
-        // macOS, which is what left this button dead. Seeded with the current field's folder and
-        // file name so the panel opens where the user already is.
+        // A real SAVE panel wherever the platform has one (see NativeSaveDialog — macOS osascript,
+        // Windows the stock dialog via PowerShell, Linux zenity/kdialog): the framework's system
+        // file selector never presents on any desktop OS, which is what left this button dead.
+        // Seeded with the current field's folder and file name so the panel opens where the user
+        // already is.
         if (Import.NativeSaveDialog.IsAvailable)
         {
             string current = (pathBox.Text ?? string.Empty).Trim();

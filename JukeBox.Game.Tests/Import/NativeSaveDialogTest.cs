@@ -1,3 +1,4 @@
+using System;
 using System.Linq;
 using JukeBox.Game.Import;
 using NUnit.Framework;
@@ -60,6 +61,50 @@ namespace JukeBox.Game.Tests.Import
         {
             Assert.That(NativeSaveDialog.ParseOutput(string.Empty), Is.Null);
             Assert.That(NativeSaveDialog.ParseOutput("\n"), Is.Null);
+        }
+
+        [Test]
+        public void EachDesktopPlatformDrivesItsOwnSavePanel()
+        {
+            var mac = NativeSaveDialog.BuildCommand(osu.Framework.RuntimeInfo.Platform.macOS, null, "render.mp4", null);
+            Assert.That(mac!.FileName, Is.EqualTo("osascript"));
+            Assert.That(mac.Arguments, Has.Some.Contains("choose file name"));
+
+            var windows = NativeSaveDialog.BuildCommand(osu.Framework.RuntimeInfo.Platform.Windows, null, "render.mp4", null);
+            Assert.That(windows!.FileName, Is.EqualTo("powershell"));
+            // -STA because WinForms dialogs refuse to show on an MTA thread.
+            Assert.That(windows.Arguments, Does.Contain("-STA"));
+            string script = windows.Arguments.Last();
+            Assert.That(script, Does.Contain("SaveFileDialog"));
+            Assert.That(script, Does.Contain("$d.FileName = 'render.mp4'"));
+            Assert.That(script, Does.Contain("Write-Output $d.FileName"));
+
+            string existing = System.IO.Path.GetTempPath();
+
+            var zenity = NativeSaveDialog.BuildCommand(osu.Framework.RuntimeInfo.Platform.Linux, existing, "render.mp4", "zenity");
+            Assert.That(zenity!.FileName, Is.EqualTo("zenity"));
+            Assert.That(zenity.Arguments, Does.Contain("--file-selection"));
+            Assert.That(zenity.Arguments, Does.Contain("--save"));
+            Assert.That(zenity.Arguments, Has.Some.Matches<string>(a => a.StartsWith("--filename=", StringComparison.Ordinal) && a.EndsWith("render.mp4", StringComparison.Ordinal)));
+
+            var kdialog = NativeSaveDialog.BuildCommand(osu.Framework.RuntimeInfo.Platform.Linux, existing, "render.mp4", "kdialog");
+            Assert.That(kdialog!.FileName, Is.EqualTo("kdialog"));
+            Assert.That(kdialog.Arguments, Does.Contain("--getsavefilename"));
+            Assert.That(kdialog.Arguments, Has.Some.EndsWith("render.mp4"));
+        }
+
+        [Test]
+        public void APlatformWithNoSavePanelBuildsNoCommand()
+        {
+            Assert.That(NativeSaveDialog.BuildCommand(osu.Framework.RuntimeInfo.Platform.Linux, null, "render.mp4", null), Is.Null, "a Linux desktop with neither zenity nor kdialog has no panel");
+            Assert.That(NativeSaveDialog.BuildCommand(osu.Framework.RuntimeInfo.Platform.Android, null, "render.mp4", null), Is.Null);
+        }
+
+        [Test]
+        public void AWindowsNameWithAQuoteIsEscapedForPowerShell()
+        {
+            string script = NativeSaveDialog.BuildCommand(osu.Framework.RuntimeInfo.Platform.Windows, null, "it's.mp4", null)!.Arguments.Last();
+            Assert.That(script, Does.Contain("it''s.mp4"));
         }
     }
 }

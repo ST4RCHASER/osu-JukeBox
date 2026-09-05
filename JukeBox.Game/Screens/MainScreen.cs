@@ -683,7 +683,12 @@ public partial class MainScreen : Screen
 
     /// <summary>The full list of keyboard shortcuts, shown by Help → Show all shortcut keys. Kept in
     /// step with <see cref="Input.PlaybackShortcuts"/> and this screen's own key handling.</summary>
-    private static IReadOnlyList<(string Keys, string Action)> shortcutList() => new (string, string)[]
+    private static IReadOnlyList<(string Keys, string Action)> shortcutList() => ShortcutList(osu.Framework.RuntimeInfo.IsApple);
+
+    /// <summary>The Help → Shortcuts rows for one platform's conventions — Cmd is a Mac key, so
+    /// elsewhere the zoom rows show only Alt (the binding accepts either everywhere) and Open shows
+    /// Ctrl (its actual binding there). Internal so the tests pin both platforms' labels.</summary>
+    internal static IReadOnlyList<(string Keys, string Action)> ShortcutList(bool isApple) => new (string, string)[]
     {
         ("Space", "Play / pause"),
         ("← / →", "Seek back / forward 5s"),
@@ -691,9 +696,9 @@ public partial class MainScreen : Screen
         ("Home", "Restart the song"),
         ("↑ / ↓", "Volume up / down"),
         ("Page Up / Page Down", "Playback speed up / down"),
-        ("Cmd/Alt + = / -", "Zoom in / out"),
-        ("Cmd/Alt + 0", "Reset zoom"),
-        ("Cmd/Ctrl + O", "Open files…"),
+        (isApple ? "Cmd/Alt + = / -" : "Alt + = / -", "Zoom in / out"),
+        (isApple ? "Cmd/Alt + 0" : "Alt + 0", "Reset zoom"),
+        (isApple ? "Cmd + O" : "Ctrl + O", "Open files…"),
         // Ctrl specifically (OnKeyDown checks ControlPressed and NOT Super): on a Mac ⌘Q is the
         // system's quit, which File → Quit shows, and the two must not be listed as one key.
         ("Ctrl + Q", "Focus the Playback tab"),
@@ -702,9 +707,9 @@ public partial class MainScreen : Screen
     };
 
     /// <summary>
-    /// File → Open…: the OS's own multi-select dialog where there is one (macOS), every chosen file
-    /// going through the drop importer as ONE batch — replays first, the same as dropping them
-    /// together. Elsewhere, the in-app single-file picker.
+    /// File → Open…: the OS's own multi-select dialog where there is one (macOS, Windows, a Linux
+    /// desktop with zenity/kdialog), every chosen file going through the drop importer as ONE batch
+    /// — replays first, the same as dropping them together. Elsewhere, the in-app picker.
     /// </summary>
     /// <summary>Whether File → Open… uses the OS dialog (where there is one). Tests turn it off to
     /// exercise the in-app picker path without a system panel popping over the test host.</summary>
@@ -734,7 +739,11 @@ public partial class MainScreen : Screen
     }
 
     private string renderDefaultDirectory()
-        => Environment.GetFolderPath(Environment.SpecialFolder.MyVideos) is { Length: > 0 } dir ? dir : Environment.CurrentDirectory;
+        => Environment.GetFolderPath(Environment.SpecialFolder.MyVideos) is { Length: > 0 } dir
+            ? dir
+            : Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) is { Length: > 0 } home
+                ? home
+                : Environment.CurrentDirectory;
 
     private string renderDefaultStem()
     {
@@ -1342,6 +1351,18 @@ public partial class MainScreen : Screen
         if (e.ControlPressed && e.Key == Key.Q && !e.AltPressed && !e.SuperPressed)
         {
             selectTab(RightPanelTab.Playback);
+            return true;
+        }
+
+        // File → Open…'s advertised shortcut, under each platform's own convention: ⌘O on a Mac
+        // (where Ctrl+letter belongs to the system), Ctrl+O everywhere else.
+        bool openModifier = osu.Framework.RuntimeInfo.IsApple
+            ? e.SuperPressed && !e.ControlPressed
+            : e.ControlPressed && !e.SuperPressed;
+
+        if (e.Key == Key.O && openModifier && !e.AltPressed && !e.ShiftPressed)
+        {
+            openFiles();
             return true;
         }
 
