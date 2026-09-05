@@ -2,6 +2,7 @@
 
 using System;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using JukeBox.Game.UI.Render;
@@ -190,6 +191,107 @@ namespace JukeBox.Game.Tests.Render
                     File.Delete(outputPath);
                 if (File.Exists(hitSoundPath))
                     File.Delete(hitSoundPath);
+            }
+        }
+
+        [Test]
+        public async Task TheMixNeverDucksTheMusicUnderHitSoundsAndNeverClips()
+        {
+            if (!FfmpegEncoder.IsFfmpegAvailable(out _))
+                Assert.Ignore("ffmpeg not installed on this machine");
+
+            // "Music": a steady near-full-scale 440Hz tone, like real mastered audio. "Hitsounds":
+            // two loud 200ms 1kHz bursts. A straight sum peaks at 1.89 — without the constant
+            // headroom the output overshoots full scale exactly at the hits and every player clamps
+            // it there, which is the audible "music ducks under hitsounds" bug; with any ADAPTIVE
+            // gain (amix normalisation / dropout ramps) the tone's level would wobble around them.
+            const int rate = HitSoundTrack.SAMPLE_RATE;
+            const float tone_amp = 0.9f;
+            const float burst_amp = 0.99f;
+            const double headroom = 0.5;
+
+            string tonePath = Path.Combine(Path.GetTempPath(), $"jukebox-mix-tone-{Guid.NewGuid():N}.wav");
+            string burstPath = Path.Combine(Path.GetTempPath(), $"jukebox-mix-hits-{Guid.NewGuid():N}.wav");
+            string outputPath = Path.Combine(Path.GetTempPath(), $"jukebox-mix-out-{Guid.NewGuid():N}.mp4");
+
+            static float[] sine(double frequency, double seconds, float amplitude)
+            {
+                var pcm = new float[(int)(rate * seconds) * 2];
+
+                for (int i = 0; i < pcm.Length / 2; i++)
+                {
+                    float v = amplitude * (float)Math.Sin(2 * Math.PI * frequency * i / rate);
+                    pcm[2 * i] = v;
+                    pcm[2 * i + 1] = v;
+                }
+
+                return pcm;
+            }
+
+            var anySample = new osu.Game.Audio.HitSampleInfo(osu.Game.Audio.HitSampleInfo.HIT_NORMAL);
+
+            // Author both inputs through the same WAV writer the app uses.
+            Assert.That(HitSoundTrack.MixToWavFile(
+                new[] { new HitSoundSchedule.Entry(0, new[] { anySample }) },
+                _ => sine(440, 3.0, tone_amp), 0, 3000, 1.0, tonePath), Is.True);
+
+            Assert.That(HitSoundTrack.MixToWavFile(
+                new[] { new HitSoundSchedule.Entry(1000, new[] { anySample }), new HitSoundSchedule.Entry(2000, new[] { anySample }) },
+                _ => sine(1000, 0.2, burst_amp), 0, 3000, 1.0, burstPath), Is.True);
+
+            var frame = new byte[16 * 16 * 4];
+
+            try
+            {
+                var result = await OfflineRenderer.EncodeAsync(
+                    new RenderRequest("mp4", 16, 16, 10, outputPath, 0, 3000, 128),
+                    audioPath: tonePath,
+                    hitSoundPath: burstPath,
+                    frameProvider: (_, _) => Task.FromResult<ReadOnlyMemory<byte>>(frame),
+                    onFrame: null,
+                    cancellationToken: CancellationToken.None);
+
+                Assert.That(result.Kind, Is.EqualTo(OfflineRenderer.ResultKind.Completed), result.Error);
+
+                float[]? mixed = HitSoundTrack.DecodePcm(outputPath);
+                Assert.That(mixed, Is.Not.Null);
+                Assert.That(mixed!.Length, Is.GreaterThanOrEqualTo((int)(2.9 * rate) * 2), "the decoded mix must cover the whole range");
+
+                static double rms(float[] pcm, double fromSeconds, double toSeconds)
+                {
+                    int from = (int)(fromSeconds * rate) * 2, to = (int)(toSeconds * rate) * 2;
+                    double sum = 0;
+                    for (int i = from; i < to; i++)
+                        sum += (double)pcm[i] * pcm[i];
+                    return Math.Sqrt(sum / (to - from));
+                }
+
+                // Never a sample above full scale — the overshoot IS what players clamp into a duck.
+                Assert.That(mixed!.Max(Math.Abs), Is.LessThanOrEqualTo(1f));
+
+                // The tone holds its absolute level (amp/√2, halved by the fixed headroom) and stays
+                // CONSTANT across windows before, between and after the hits — any adaptive gain
+                // shows up here as a wobble.
+                double expectedTone = tone_amp / Math.Sqrt(2) * headroom;
+                double[] quiet = { rms(mixed, 0.3, 0.9), rms(mixed, 1.4, 1.9), rms(mixed, 2.4, 2.9) };
+
+                foreach (double level in quiet)
+                    Assert.That(level, Is.EqualTo(expectedTone).Within(0.1 * expectedTone), "tone level must sit at the fixed-headroom sum level");
+
+                Assert.That(quiet.Max() - quiet.Min(), Is.LessThanOrEqualTo(0.05 * quiet[0]), "tone level must not wobble around the hits");
+
+                // While a hit sounds, energies ADD — the straight-sum signature. An adaptive mix
+                // (or a clamped overshoot) lands measurably below this.
+                double expectedDuringHit = Math.Sqrt(expectedTone * expectedTone + Math.Pow(burst_amp / Math.Sqrt(2) * headroom, 2));
+                Assert.That(rms(mixed, 1.05, 1.15), Is.EqualTo(expectedDuringHit).Within(0.15 * expectedDuringHit));
+            }
+            finally
+            {
+                foreach (string file in new[] { tonePath, burstPath, outputPath })
+                {
+                    if (File.Exists(file))
+                        File.Delete(file);
+                }
             }
         }
 

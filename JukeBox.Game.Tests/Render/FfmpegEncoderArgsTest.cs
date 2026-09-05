@@ -115,13 +115,17 @@ namespace JukeBox.Game.Tests.Render
             Assert.That(trackIndex, Is.GreaterThan(0));
             Assert.That(args[trackIndex - 1], Is.EqualTo("-i"));
 
-            // Both audio inputs feed one amix at absolute levels (the balance is baked into the
-            // WAV; amix's default normalisation would halve the music).
+            // Both audio inputs feed one amix pinned to a PLAIN SUM — no input normalisation, no
+            // dropout gain ramps (either reads as the music ducking under hitsounds) — followed by
+            // a constant half-scale headroom so a full-scale song plus a full-scale hitsound can
+            // never exceed full scale (the clamping of that overshoot was itself an audible duck).
             string filter = valueAfter(args, "-filter_complex");
             Assert.That(filter, Does.Contain("[1:a]"));
             Assert.That(filter, Does.Contain("[2:a]"));
             Assert.That(filter, Does.Contain("amix=inputs=2"));
             Assert.That(filter, Does.Contain("normalize=0"));
+            Assert.That(filter, Does.Contain("dropout_transition=0"));
+            Assert.That(filter, Does.Contain("volume=0.5"));
 
             // The mixed stream replaces the direct song mapping.
             Assert.That(args, Does.Contain("[mix]"));

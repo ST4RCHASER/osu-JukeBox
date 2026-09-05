@@ -166,15 +166,24 @@ public sealed class FfmpegEncoder : IDisposable
 
         if (hasHitSounds)
         {
-            // Sum the song and the hitsound track into the one output stream. Both are pinned to a
-            // single format first so amix never has to reconcile a mono song against the stereo
-            // track; normalize=0 keeps absolute levels — the music/effect balance was already baked
-            // into the hitsound WAV, and amix's default would halve the music. duration=longest so
-            // hitsounds past a short song's end still sound (-t bounds the range either way).
+            // Sum the song and the hitsound track into the one output stream — a STRAIGHT sum,
+            // exactly like live playback's float mixer. Both are pinned to a single format first so
+            // amix never has to reconcile a mono song against the stereo track; normalize=0 and
+            // dropout_transition=0 pin amix to plain summation with no adaptive gain of any kind
+            // (its defaults rescale as inputs come and go — audible as the music ducking under the
+            // hitsounds). duration=longest so hitsounds past a short song's end still sound
+            // (-t bounds the range either way).
+            //
+            // The constant volume=0.5 is HEADROOM, not balance: a full-scale song plus a full-scale
+            // hitsound sums to 2.0, and everything above 1.0 is clamped by whatever plays the file —
+            // which shaved the music at every loud hit (a real render measured +5.7 dBFS peaks).
+            // Halving the sum bounds the worst case at exactly full scale, keeps the music/effect
+            // balance untouched, and never varies — live playback has the same fixed headroom in the
+            // master volume sitting ahead of the DAC.
             args.Add("-filter_complex");
             args.Add("[1:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[mus];"
                      + "[2:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[hit];"
-                     + "[mus][hit]amix=inputs=2:duration=longest:normalize=0[mix]");
+                     + "[mus][hit]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0,volume=0.5[mix]");
             args.Add("-map");
             args.Add("[mix]");
         }
