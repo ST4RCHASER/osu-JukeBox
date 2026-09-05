@@ -67,14 +67,51 @@ public partial class OffscreenCapture : Container
         base.Update();
 
         // Counter the UI scale so ONE unit of this container is ONE pixel on screen — the frame
-        // buffer is sized in pixels and the children must be drawn 1:1 into it.
+        // buffer is sized in pixels and the children are drawn 1:1 into it — SHRUNK to fit inside
+        // the window when the buffer is bigger than it. The shrink matters: parts of a drawable
+        // that render through their own nested frame buffer (a slider body's path — its buffered
+        // draw node clips itself to the ROOT drawable's bounds) simply never draw outside the
+        // window's rectangle, so a subtree laid out past the window loses those parts (the broken
+        // giant slider-body blobs). Kept within the root, everything draws; the draw node's
+        // projection stretches the subtree's rectangle over the full buffer, and the path's
+        // distance-field body scales up cleanly.
         if (Parent != null)
         {
             var unit = Parent.ToScreenSpace(Vector2.One) - Parent.ToScreenSpace(Vector2.Zero);
 
             if (unit.X > 0 && unit.Y > 0)
-                Scale = new Vector2(1 / unit.X, 1 / unit.Y);
+                Scale = new Vector2(1 / unit.X, 1 / unit.Y) * rootFitScale();
         }
+    }
+
+    /// <summary>The factor (≤ 1) shrinking this subtree's on-screen footprint until it fits inside
+    /// the root drawable's bounds — 1 whenever the buffer already fits (the draw is then exactly
+    /// 1 unit : 1 pixel, as before).</summary>
+    private float rootFitScale()
+    {
+        IDrawable root = this;
+
+        while (root.Parent != null)
+            root = root.Parent;
+
+        return FitScale(root.ScreenSpaceDrawQuad.AABBFloat, ScreenSpaceDrawQuad.TopLeft, new Vector2(Width, Height));
+    }
+
+    /// <summary>
+    /// How much a buffer-sized rectangle at <paramref name="topLeft"/> must shrink to fit inside
+    /// <paramref name="rootBounds"/>: 1 when it already fits (never upscaled), the limiting axis
+    /// ratio otherwise. A degenerate position outside the bounds yields 1 — there is nothing
+    /// sensible to fit to. Pure and internal for the tests.
+    /// </summary>
+    internal static float FitScale(RectangleF rootBounds, Vector2 topLeft, Vector2 bufferSize)
+    {
+        float availableX = rootBounds.Right - topLeft.X;
+        float availableY = rootBounds.Bottom - topLeft.Y;
+
+        if (availableX <= 0 || availableY <= 0 || bufferSize.X <= 0 || bufferSize.Y <= 0)
+            return 1;
+
+        return Math.Min(1, Math.Min(availableX / bufferSize.X, availableY / bufferSize.Y));
     }
 
     /// <summary>
@@ -179,8 +216,10 @@ public partial class OffscreenCapture : Container
 
             // The children are drawn as if zero-based at the buffer's top-left: masking off (it is
             // re-applied by the children that mask), the viewport and scissor matched to the buffer,
-            // and the projection translated so the container's screen rectangle maps onto it.
-            var maskingRect = new RectangleI((int)Math.Floor(drawRect.X), (int)Math.Floor(drawRect.Y), width + 1, height + 1);
+            // and an orthographic projection mapping the container's screen rectangle onto it — the
+            // rectangle is the buffer's size 1:1 when it fits the window, or a shrunk-to-fit version
+            // of it otherwise (see Update), and the projection stretches either over the buffer.
+            var maskingRect = new RectangleI((int)Math.Floor(drawRect.X), (int)Math.Floor(drawRect.Y), (int)Math.Ceiling(drawRect.Width) + 1, (int)Math.Ceiling(drawRect.Height) + 1);
 
             renderer.PushMaskingInfo(new MaskingInfo
             {
@@ -196,7 +235,7 @@ public partial class OffscreenCapture : Container
             renderer.PushScissorOffset(maskingRect.Location);
 
             buffer.Bind();
-            renderer.PushProjectionMatrix(Matrix4.CreateTranslation(-drawRect.X, -drawRect.Y, 0) * renderer.ProjectionMatrix);
+            renderer.PushOrtho(drawRect);
             renderer.Clear(new ClearInfo(Color4.Black));
 
             // The children, into the bound buffer. Nothing is drawn to the back-buffer afterwards —

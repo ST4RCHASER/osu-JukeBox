@@ -214,12 +214,18 @@ public sealed class OfflineRenderer
     /// </summary>
     public sealed partial class RenderScene : CompositeDrawable
     {
+        /// <summary>The scene's fixed LOGICAL height: it always lays itself out as if drawn to a
+        /// 1080-tall frame and is scaled to the requested resolution, so a 4K render is a sharper
+        /// 1080p composition — not the same-pixel-size UI marooned in a frame twice the size.</summary>
+        public const float LOGICAL_HEIGHT = 1080;
+
         private readonly CachedBeatmapSet set;
         private readonly string? osuFile;
         private readonly ManualClock manual = new ManualClock();
         private readonly FramedClock framed;
         private readonly OffscreenCapture capture;
         private readonly AudioContainer muted;
+        private readonly Container logical;
 
         private BeatmapVisuals visuals = null!;
 
@@ -234,6 +240,20 @@ public sealed class OfflineRenderer
             // frames are exactly the requested resolution whatever the window is. AlwaysPresent so
             // the framework keeps updating it (an absent drawable never advances).
             capture = new OffscreenCapture(request.Width, request.Height);
+
+            // Fixed logical layout: the visuals fill a LOGICAL_HEIGHT-tall space (width follows the
+            // requested aspect) and the whole thing is scaled to the buffer, so composition is
+            // IDENTICAL at every output resolution — absolute-pixel UI (the rail, overlays) included
+            // — and higher resolutions only add sharpness.
+            float bufferScale = request.Height / LOGICAL_HEIGHT;
+
+            logical = new Container
+            {
+                Size = new osuTK.Vector2(request.Width / bufferScale, LOGICAL_HEIGHT),
+                Scale = new osuTK.Vector2(bufferScale),
+            };
+
+            capture.Child = logical;
 
             // The scene must be as silent as it is invisible: its BeatmapVisuals plays real gameplay
             // (chart hitsounds, storyboard keysounds) that would otherwise sound THROUGH THE
@@ -272,7 +292,7 @@ public sealed class OfflineRenderer
         [BackgroundDependencyLoader]
         private void load()
         {
-            capture.Child = visuals = new BeatmapVisuals(set, framed, osuFile)
+            logical.Child = visuals = new BeatmapVisuals(set, framed, osuFile)
             {
                 RelativeSizeAxes = Axes.Both,
             };
@@ -300,9 +320,12 @@ public sealed class OfflineRenderer
         internal BeatmapVisuals Visuals => visuals;
 
         /// <summary>Test seams (JukeBox.Game.Tests has InternalsVisibleTo): the zero-volume wrapper
-        /// that keeps the live scene off the speakers, and the capture that must live inside it.</summary>
+        /// that keeps the live scene off the speakers, the capture that must live inside it, and the
+        /// fixed-logical-layout container the visuals fill.</summary>
         internal AudioContainer LiveAudio => muted;
 
         internal OffscreenCapture Capture => capture;
+
+        internal Container LogicalLayout => logical;
     }
 }

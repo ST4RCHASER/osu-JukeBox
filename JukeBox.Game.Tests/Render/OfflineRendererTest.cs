@@ -203,5 +203,30 @@ namespace JukeBox.Game.Tests.Render
             Assert.That(scene.LiveAudio.Volume.Value, Is.Zero);
             Assert.That(scene.LiveAudio.Child, Is.SameAs(scene.Capture), "the capture must live inside the muted wrapper");
         }
+
+        [Test]
+        public void TheSceneLaysOutAtLogical1080pWhateverTheOutputResolution()
+        {
+            // 4K is a 2x-scaled 1080p layout: identical composition, only sharper — never the same
+            // pixel-sized UI marooned in a frame twice the size.
+            var at4K = new OfflineRenderer.RenderScene(new JukeBox.Game.Beatmaps.CachedBeatmapSet(), request("/tmp/x.mp4", w: 3840, h: 2160), null);
+
+            Assert.That(at4K.LogicalLayout.Scale, Is.EqualTo(new osuTK.Vector2(2)));
+            Assert.That(at4K.LogicalLayout.Size, Is.EqualTo(new osuTK.Vector2(1920, 1080)));
+            Assert.That(at4K.Capture.Child, Is.SameAs(at4K.LogicalLayout), "the logical layout must be what the capture draws");
+
+            // 1080p is the identity case — the layout IS the buffer.
+            var at1080 = new OfflineRenderer.RenderScene(new JukeBox.Game.Beatmaps.CachedBeatmapSet(), request("/tmp/x.mp4", w: 1920, h: 1080), null);
+
+            Assert.That(at1080.LogicalLayout.Scale, Is.EqualTo(new osuTK.Vector2(1)));
+            Assert.That(at1080.LogicalLayout.Size, Is.EqualTo(new osuTK.Vector2(1920, 1080)));
+
+            // A vertical render keeps the 1080 logical HEIGHT; the width follows the aspect.
+            var vertical = new OfflineRenderer.RenderScene(new JukeBox.Game.Beatmaps.CachedBeatmapSet(), request("/tmp/x.mp4", w: 1080, h: 1920), null);
+
+            Assert.That(vertical.LogicalLayout.Size.Y, Is.EqualTo(1080));
+            Assert.That(vertical.LogicalLayout.Scale.X, Is.EqualTo(1920f / 1080).Within(1e-5));
+            Assert.That(vertical.LogicalLayout.Size.X * vertical.LogicalLayout.Scale.X, Is.EqualTo(1080).Within(1e-2), "scaled width must land exactly on the buffer width");
+        }
     }
 }
