@@ -127,6 +127,15 @@ namespace JukeBox.Game.Tests.Visual
 
             AddStep("turn on remove-name-after-knockout", () => panel.RemoveNameCheckbox.Current.Value = true);
             AddAssert("config took remove-name", () => config.Get<bool>(JukeBoxSetting.RemoveNameAfterKnockout));
+
+            // The two round-9 options live here too, at their documented defaults (flip ON, result OFF).
+            AddAssert("flip-HR starts on", () => panel.FlipHrCheckbox.Current.Value && config.Get<bool>(JukeBoxSetting.FlipHrReplay));
+            AddStep("turn flip-HR off", () => panel.FlipHrCheckbox.Current.Value = false);
+            AddAssert("config took flip-HR", () => !config.Get<bool>(JukeBoxSetting.FlipHrReplay));
+
+            AddAssert("show-result starts off", () => !panel.ShowResultCheckbox.Current.Value && !config.Get<bool>(JukeBoxSetting.ShowPlayerResult));
+            AddStep("turn show-result on", () => panel.ShowResultCheckbox.Current.Value = true);
+            AddAssert("config took show-result", () => config.Get<bool>(JukeBoxSetting.ShowPlayerResult));
         }
 
         [Test]
@@ -338,10 +347,14 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("combine mode", () => panel.MultiReplayModeDropdown.Current.Value = MultiReplayMode.Combine);
             AddAssert("rail settings shown, per-player skin/mods hidden", () =>
                 panel.RailSettingsShown && !panel.PerPlayerSkinAndModsShown);
+            // Flip-HR acts on the shared combine chart, so it shows with the rail settings; the
+            // result-screen option applies to either mode and stays.
+            AddAssert("flip-HR and show-result shown in combine", () => panel.FlipHrShown && panel.ShowResultShown);
 
             AddStep("grid mode", () => panel.MultiReplayModeDropdown.Current.Value = MultiReplayMode.Grid);
             AddAssert("rail settings hidden, per-player skin/mods shown", () =>
                 !panel.RailSettingsShown && panel.PerPlayerSkinAndModsShown);
+            AddAssert("flip-HR hidden in grid, show-result still shown", () => !panel.FlipHrShown && panel.ShowResultShown);
         }
     }
 }

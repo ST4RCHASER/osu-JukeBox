@@ -62,7 +62,7 @@ internal partial class TransportRow : FillFlowContainer
         {
             Icon = FontAwesome.Solid.UndoAlt,
             Size = new Vector2(button_size),
-            Action = () => playback.Seek(0),
+            Action = () => playback.Restart(),
         });
         Add(new IconButton
         {

@@ -187,6 +187,26 @@ namespace JukeBox.Game.Tests.Visual
         /// Each cell is a whole gameplay renderer, so the cap is a budget rather than a preference.
         /// Replays past it keep their credit elsewhere but get no cell.
         /// </summary>
+        /// <summary>
+        /// A player past the cell cap has no cell, but still gets a result panel at the end — and its
+        /// total must be the simulated score on the same scale as the rendered players', not lazer's
+        /// decoded figure. So every replay has a recording in AllTimelines, in replay order, and they
+        /// all run to completion (the extras on the analytic path, which needs no renderer).
+        /// </summary>
+        [Test]
+        public void ReplaysBeyondTheCapAreStillRecordedForTheResultScreen()
+        {
+            int count = MultiReplayLayout.MAX_GRID_CELLS + 2;
+
+            AddStep("build more than the cap", () => buildGrid(count));
+            AddUntilStep("grid loaded", () => grid.IsLoaded);
+
+            AddAssert("one recording per replay, cap or not", () => grid.AllTimelines.Count == count);
+            AddUntilStep("every recording completes", () => grid.AllTimelines.All(t => t.Complete));
+            AddAssert("the extras recorded a real play (a score), not an empty stub", () =>
+                grid.AllTimelines.Skip(MultiReplayLayout.MAX_GRID_CELLS).All(t => t.Points.Count > 0 && t.Points[^1].Score > 0));
+        }
+
         [Test]
         public void ReplaysBeyondTheCapAreNotRendered()
         {

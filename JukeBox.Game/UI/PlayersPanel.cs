@@ -96,6 +96,8 @@ public partial class PlayersPanel : CompositeDrawable
     private SettingsEnumDropdown<KnockoutSort> knockoutSortDropdown = null!;
     private SettingsCheckbox knockoutLiveSortCheckbox = null!;
     private SettingsCheckbox removeNameCheckbox = null!;
+    private SettingsCheckbox flipHrCheckbox = null!;
+    private SettingsCheckbox showResultCheckbox = null!;
     private SettingsDropdown<string> targetDropdown = null!;
     private SettingsDropdown<string> skinDropdown = null!;
     private FillFlowContainer swatches = null!;
@@ -163,6 +165,12 @@ public partial class PlayersPanel : CompositeDrawable
         knockoutSortDropdown = new SettingsEnumDropdown<KnockoutSort> { LabelText = "Rank players by" };
         knockoutLiveSortCheckbox = new SettingsCheckbox { LabelText = "Re-order the board as they play" };
         removeNameCheckbox = new SettingsCheckbox { LabelText = "Remove row after knockout" };
+        // Combine-only: an HR play's cursor is mirrored back onto the shared chart so every cursor
+        // tracks the same notes (MultiReplayCombine reads the setting). Grid renders each play on its
+        // own chart, where there is nothing to flip against.
+        flipHrCheckbox = new SettingsCheckbox { LabelText = "Flip HR replay" };
+        // Both modes: at the end of the replay(s) the ranking screen holds instead of auto-advancing.
+        showResultCheckbox = new SettingsCheckbox { LabelText = "Show Player Result after replay end" };
         targetDropdown = new SettingsDropdown<string> { LabelText = "Per-player settings for" };
         skinDropdown = new SettingsDropdown<string> { LabelText = "Gameplay skin", Items = skinChoices.Select(c => c.Display) };
 
@@ -173,6 +181,8 @@ public partial class PlayersPanel : CompositeDrawable
             knockoutSortDropdown,
             knockoutLiveSortCheckbox,
             removeNameCheckbox,
+            flipHrCheckbox,
+            showResultCheckbox,
             targetDropdown,
             colourRow(),
             skinDropdown,
@@ -209,7 +219,7 @@ public partial class PlayersPanel : CompositeDrawable
     {
         bool combine = mode == MultiReplayMode.Combine;
 
-        foreach (var railSetting in new Drawable[] { knockoutModeDropdown, knockoutSortDropdown, knockoutLiveSortCheckbox, removeNameCheckbox })
+        foreach (var railSetting in new Drawable[] { knockoutModeDropdown, knockoutSortDropdown, knockoutLiveSortCheckbox, removeNameCheckbox, flipHrCheckbox })
             railSetting.Alpha = combine ? 1 : 0;
 
         skinDropdown.Alpha = combine ? 0 : 1;
@@ -309,6 +319,8 @@ public partial class PlayersPanel : CompositeDrawable
         knockoutSortDropdown.Current = config.GetBindable<KnockoutSort>(JukeBoxSetting.KnockoutSortBy);
         knockoutLiveSortCheckbox.Current = config.GetBindable<bool>(JukeBoxSetting.KnockoutLiveSort);
         removeNameCheckbox.Current = config.GetBindable<bool>(JukeBoxSetting.RemoveNameAfterKnockout);
+        flipHrCheckbox.Current = config.GetBindable<bool>(JukeBoxSetting.FlipHrReplay);
+        showResultCheckbox.Current = config.GetBindable<bool>(JukeBoxSetting.ShowPlayerResult);
 
         // The remembered picked colours, parsed from config and re-parsed (rebuilding the swatches)
         // whenever they change — including a pick made just now, which persists through here.
@@ -548,6 +560,17 @@ public partial class PlayersPanel : CompositeDrawable
     internal SettingsCheckbox KnockoutLiveSortCheckbox => knockoutLiveSortCheckbox;
 
     internal SettingsCheckbox RemoveNameCheckbox => removeNameCheckbox;
+
+    internal SettingsCheckbox FlipHrCheckbox => flipHrCheckbox;
+
+    internal SettingsCheckbox ShowResultCheckbox => showResultCheckbox;
+
+    /// <summary>Test hook: whether the "Flip HR replay" option is shown (combine only — it acts on
+    /// the shared chart).</summary>
+    internal bool FlipHrShown => flipHrCheckbox.Alpha > 0.5f;
+
+    /// <summary>Test hook: whether the result-screen option is shown (both modes).</summary>
+    internal bool ShowResultShown => showResultCheckbox.Alpha > 0.5f;
 
     internal IReadOnlyList<ReplayAttachment> CurrentPlayers => currentPlayers;
     internal bool IsShowing => Alpha > 0;

@@ -71,6 +71,14 @@ public partial class ReplaySimulator : CompositeDrawable
     internal bool UseAnalyticJudge { get; init; }
 
     /// <summary>
+    /// With <see cref="UseAnalyticJudge"/>: record ONLY if the analytic path is available (an osu
+    /// map), and otherwise record nothing — no timelines at all — rather than fall back to a hidden
+    /// drawable renderer per replay. For work that is nice-to-have (the result screen's totals for
+    /// grid players past the cell cap), a fallback that costs a full render each is not worth it.
+    /// </summary>
+    internal bool AnalyticOnly { get; init; }
+
+    /// <summary>
     /// Test seam: force the drawable simulation even for an osu map. The cross-validation tests set it
     /// to get lazer's real gameplay as the oracle the analytic judge is checked against.
     /// </summary>
@@ -188,6 +196,9 @@ public partial class ReplaySimulator : CompositeDrawable
 
             return;
         }
+
+        if (AnalyticOnly)
+            return;
 
         foreach (var replay in replays)
         {

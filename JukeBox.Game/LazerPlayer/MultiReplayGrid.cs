@@ -163,7 +163,26 @@ public partial class MultiReplayGrid : CompositeDrawable
         simulator = new ReplaySimulator(osuFile, replays.Take(rendered).ToList());
 
         InternalChildren = new Drawable[] { grid, simulator };
+
+        // The replays PAST the cap still have a result panel at the end, and its total must be on
+        // the same scale as everyone else's (the simulated ScoreV1, not lazer's decoded figure). They
+        // are recorded on the ANALYTIC path — a whole play in one step, no renderer — and only where
+        // that path exists (osu); elsewhere they record nothing and the result screen falls back.
+        if (replays.Count > rendered)
+            AddInternal(unrenderedSimulator = new ReplaySimulator(osuFile, replays.Skip(rendered).ToList()) { UseAnalyticJudge = true, AnalyticOnly = true });
     }
+
+    private ReplaySimulator? unrenderedSimulator;
+
+    /// <summary>
+    /// Every player's recording, indexed like the replays: the rendered cells' exact simulations
+    /// first, then the analytic recordings of the players past the cap (absent on a non-osu map, so
+    /// this can be shorter than the replay list). What the result screen reads its totals from.
+    /// </summary>
+    internal IReadOnlyList<ReplayTimeline> AllTimelines
+        => simulator == null
+            ? Array.Empty<ReplayTimeline>()
+            : simulator.Timelines.Concat(unrenderedSimulator?.Timelines ?? Array.Empty<ReplayTimeline>()).ToList();
 
     /// <summary>
     /// One cell: a whole gameplay render with the player's numbers over it, laid out the way the

@@ -242,7 +242,7 @@ public partial class PlaybackShortcuts : CompositeDrawable
         return false;
     }
 
-    private void restart() => playback.Seek(0);
+    private void restart() => playback.Restart();
 
     private void seekBy(double deltaMs)
     {

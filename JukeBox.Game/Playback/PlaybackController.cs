@@ -379,6 +379,40 @@ public partial class PlaybackController : Component
         decoupledClock.Seek(0);
     }
 
+    /// <summary>Pauses if playing; nothing otherwise. The result screen uses it to hold a finished
+    /// song in a state the transport reads truthfully (a completed track leaves the clock reporting
+    /// "running" while nothing plays).</summary>
+    public void Pause()
+    {
+        if (decoupledClock.IsRunning)
+            decoupledClock.Stop();
+    }
+
+    /// <summary>Starts playing if not already; nothing otherwise.</summary>
+    public void Play()
+    {
+        if (!decoupledClock.IsRunning)
+            decoupledClock.Start();
+    }
+
+    /// <summary>
+    /// Back to the top, keeping the play/pause state: a playing song restarts playing, a paused one
+    /// sits paused at 0:00. Not a bare <c>Seek(0)</c> for the playing case: once a track has run to
+    /// its end the clock still reports running while its source has stopped, and a seek alone then
+    /// rewinds a track that never starts again (the position sat on 0:00 forever). Stopping first
+    /// puts the clock in a state <see cref="DecouplingFramedClock.Start"/> actually acts on.
+    /// </summary>
+    public void Restart()
+    {
+        bool wasRunning = decoupledClock.IsRunning;
+
+        decoupledClock.Stop();
+        decoupledClock.Seek(0);
+
+        if (wasRunning)
+            decoupledClock.Start();
+    }
+
     public void Seek(double ms) => decoupledClock.Seek(ms);
 
     /// <summary>Test-only access to the live track (JukeBox.Game.Tests has InternalsVisibleTo).</summary>

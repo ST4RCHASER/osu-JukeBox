@@ -113,6 +113,58 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("not playing", () => !controller.IsPlaying);
         }
 
+        /// <summary>
+        /// Once a track has run to its end the clock still reports running while its source has
+        /// stopped, so a bare Seek(0) rewinds a track that never plays again (the position sat on
+        /// 0:00 with the transport showing "pause"). Restart must actually play from the top, and
+        /// Pause must put a finished track into the state the transport reads truthfully.
+        /// </summary>
+        [Test]
+        public void RestartAfterTheTrackRanToItsEndPlaysFromTheTop()
+        {
+            bool completed = false;
+
+            AddStep("play the 1s fixture to its end", () =>
+            {
+                completed = false;
+                controller.TrackCompleted += () => completed = true;
+                _ = controller.PlayAsync(fixtureSet);
+            });
+            AddUntilStep("track ran to its end", () => completed);
+
+            AddStep("pause the finished track", () => controller.Pause());
+            AddAssert("reads as not playing", () => !controller.IsPlaying);
+
+            // Restart keeps the pause: back at the top, still not playing.
+            AddStep("restart while paused", () => controller.Restart());
+            AddAssert("paused at the top", () => !controller.IsPlaying && controller.CurrentTimeMs < 1);
+
+            AddStep("play", () => controller.Play());
+            AddUntilStep("playing again, from the top", () => controller.IsPlaying && controller.CurrentTimeMs > 0 && controller.CurrentTimeMs < 800);
+        }
+
+        /// <summary>
+        /// The other half of the same bug: a track that ran to its end still reports PLAYING, and a
+        /// restart from that state must actually play from the top — the case Seek(0) alone got wrong.
+        /// </summary>
+        [Test]
+        public void RestartOfATrackThatRanToItsEndWhileStillReportingPlayingPlaysFromTheTop()
+        {
+            bool completed = false;
+
+            AddStep("play the 1s fixture to its end", () =>
+            {
+                completed = false;
+                controller.TrackCompleted += () => completed = true;
+                _ = controller.PlayAsync(fixtureSet);
+            });
+            AddUntilStep("track ran to its end", () => completed);
+            AddAssert("the clock still reads as playing", () => controller.IsPlaying);
+
+            AddStep("restart", () => controller.Restart());
+            AddUntilStep("playing again, from the top", () => controller.IsPlaying && controller.CurrentTimeMs > 0 && controller.CurrentTimeMs < 800);
+        }
+
         // Regression test for the PlayAsync overlap race: the most-recently-requested call must
         // win the swap even if its load happens to finish before (or after) the older call's.
         [Test]

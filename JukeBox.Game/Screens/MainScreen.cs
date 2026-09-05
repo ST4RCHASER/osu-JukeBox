@@ -485,6 +485,11 @@ public partial class MainScreen : Screen
                                     },
                                 },
                             },
+                            // The end-of-replay result screen, over the PLAYER AREA only — osu!'s
+                            // ranking sits over the playfield, and the columns beside it stay
+                            // readable and usable (a whole-window scrim put its header across the
+                            // sidebar's search box).
+                            resultScreen,
                         },
                     },
                 },
@@ -575,8 +580,6 @@ public partial class MainScreen : Screen
             renderDialog,
             shortcutsOverlay,
             spectateSetupOverlay,
-            // The result screen sits over the columns but under the modals and toasts.
-            resultScreen,
             // The auto-hiding top menu bar, above the columns and modals so its dropdowns are never
             // occluded, but below the toasts.
             menuBar,
@@ -621,8 +624,10 @@ public partial class MainScreen : Screen
         // Next/Restart advance past the held song / replay it from the top.
         renderDialog.RenderEnabled.BindTo(renderEnabled);
         renderDialog.RenderRequested += request => startRender(request);
-        resultScreen.NextRequested += () => { resultScreen.Hide(); jukebox.SkipCurrent(); };
-        resultScreen.RestartRequested += () => { resultScreen.Hide(); playback.Seek(0); };
+        resultScreen.NextRequested += () => { hideResult(); jukebox.SkipCurrent(); };
+        // The hold paused the finished track (see onTrackCompletedForResult), so a restart from the
+        // result screen must also PLAY — the user asked to watch it again, not to sit at 0:00.
+        resultScreen.RestartRequested += () => { hideResult(); playback.Restart(); playback.Play(); };
 
         // Hold auto-advance on a finished replay when the result screen is enabled, and show it.
         jukebox.HoldOnTrackCompleted = () => shouldShowResult();
@@ -651,7 +656,7 @@ public partial class MainScreen : Screen
     /// <summary>The menu bar's callbacks, wired to the overlays and controllers this screen owns.</summary>
     private UI.MenuBarActions buildMenuActions() => new UI.MenuBarActions
     {
-        OpenFiles = () => fileImportOverlay.Show(),
+        OpenFiles = openFiles,
         OpenRender = () => renderDialog.Open(playback.LengthMs, renderDefaultDirectory(), renderDefaultStem()),
         Quit = () => host.Exit(),
         // Play/Pause are the two sides of the one toggle, so each guards on the current state rather
@@ -659,7 +664,7 @@ public partial class MainScreen : Screen
         Play = () => { if (!playback.IsPlaying) playback.TogglePause(); },
         Pause = () => { if (playback.IsPlaying) playback.TogglePause(); },
         Next = () => jukebox.SkipCurrent(),
-        Restart = () => playback.Seek(0),
+        Restart = () => playback.Restart(),
         OpenBeatmapPage = openCurrentBeatmapPage,
         LookupById = () => mapIdOverlay.Show(),
         SearchBeatmaps = () => { if (uiLayout.Value == UiLayout.ThreeColumn) fullscreenListing.ShowSearch(); },
@@ -683,10 +688,36 @@ public partial class MainScreen : Screen
         ("Cmd/Alt + = / -", "Zoom in / out"),
         ("Cmd/Alt + 0", "Reset zoom"),
         ("Cmd/Ctrl + O", "Open files…"),
-        ("Cmd/Ctrl + Q", "Focus the Playback tab"),
+        // Ctrl specifically (OnKeyDown checks ControlPressed and NOT Super): on a Mac ⌘Q is the
+        // system's quit, which File → Quit shows, and the two must not be listed as one key.
+        ("Ctrl + Q", "Focus the Playback tab"),
         ("Tab", "Toggle focus (full-screen) mode"),
         ("Media keys", "Play/pause, next, previous"),
     };
+
+    /// <summary>
+    /// File → Open…: the OS's own multi-select dialog where there is one (macOS), every chosen file
+    /// going through the drop importer as ONE batch — replays first, the same as dropping them
+    /// together. Elsewhere, the in-app single-file picker.
+    /// </summary>
+    /// <summary>Whether File → Open… uses the OS dialog (where there is one). Tests turn it off to
+    /// exercise the in-app picker path without a system panel popping over the test host.</summary>
+    internal bool UseNativeOpenDialog { get; set; } = Import.NativeOpenDialog.IsAvailable;
+
+    private void openFiles()
+    {
+        if (!UseNativeOpenDialog)
+        {
+            fileImportOverlay.Show();
+            return;
+        }
+
+        _ = Import.NativeOpenDialog.PickFilesAsync(null).ContinueWith(t =>
+        {
+            if (t.Result.Count > 0)
+                _ = fileImporter.ImportMany(t.Result);
+        }, System.Threading.Tasks.TaskContinuationOptions.OnlyOnRanToCompletion);
+    }
 
     /// <summary>Opens the current beatmap's osu.ppy.sh page, when there is a submitted set playing.</summary>
     private void openCurrentBeatmapPage()
@@ -746,6 +777,10 @@ public partial class MainScreen : Screen
         var scene = new UI.Render.OfflineRenderer.RenderScene(set, request, playback.SelectedOsuFile.Value);
         var plan = new UI.Render.OfflineRenderer.FramePlan(request);
 
+        // The live freeze-frame thumbnail: one texture, re-uploaded from every few captured frames.
+        // Released once the progress dialog has faded out, which is the last thing that draws it.
+        var thumbnail = host.Renderer.CreateTexture(request.Width, request.Height);
+
         try
         {
             AddInternal(scene);
@@ -754,21 +789,29 @@ public partial class MainScreen : Screen
             while (!scene.Ready && !cancellation.IsCancellationRequested)
                 await System.Threading.Tasks.Task.Delay(16, cancellation.Token).ConfigureAwait(false);
 
+            const int thumbnail_every = 5;
+
             var result = await UI.Render.OfflineRenderer.EncodeAsync(
                 request,
                 set.AudioFile,
                 async (index, token) =>
                 {
-                    // Step the scene to this frame's time ON the update thread, then read the frame back.
-                    var stepped = new System.Threading.Tasks.TaskCompletionSource();
-                    Schedule(() =>
-                    {
-                        scene.StepTo(plan.TimeAt(index));
-                        stepped.SetResult();
-                    });
-                    await stepped.Task.ConfigureAwait(false);
+                    // Step the scene to this frame's time ON the update thread, let that update frame
+                    // finish (its draw nodes are generated at the end of it), then read the frame back
+                    // from the scene's off-screen buffer once the draw thread has drawn it.
+                    await onUpdateThread(() => scene.StepTo(plan.TimeAt(index))).ConfigureAwait(false);
+                    await onUpdateThread(() => { }).ConfigureAwait(false);
 
-                    return await UI.Render.OfflineRenderer.Capture.ByWindowScreenshot(host, request.Width, request.Height).ConfigureAwait(false);
+                    using var frame = await scene.CaptureAsync(host).ConfigureAwait(false);
+
+                    if (index % thumbnail_every == 0)
+                    {
+                        // TextureUpload takes ownership of the image it is given, so it gets a copy.
+                        thumbnail.SetData(new osu.Framework.Graphics.Textures.TextureUpload(frame.Clone()));
+                        Schedule(() => progress.UpdateThumbnail(thumbnail));
+                    }
+
+                    return UI.Render.OfflineRenderer.ExtractRgba(frame, request.Width, request.Height);
                 },
                 (done, total) => Schedule(() => progress.UpdateProgress(done, total)),
                 cancellation.Token).ConfigureAwait(false);
@@ -784,6 +827,33 @@ public partial class MainScreen : Screen
             osu.Framework.Logging.Logger.Error(e, "[render] failed");
             Schedule(() => finishRender(new UI.Render.OfflineRenderer.RenderResult(UI.Render.OfflineRenderer.ResultKind.Failed, e.Message), request, progress, scene, resumePlayback));
         }
+        finally
+        {
+            Scheduler.AddDelayed(() => thumbnail.Dispose(), 1000);
+        }
+    }
+
+    /// <summary>Runs <paramref name="action"/> on the update thread and completes when it has run —
+    /// at the start of the next update frame, which is also how the render loop waits for a frame it
+    /// stepped to finish (and generate its draw nodes) before capturing it.</summary>
+    private System.Threading.Tasks.Task onUpdateThread(Action action)
+    {
+        var completion = new System.Threading.Tasks.TaskCompletionSource();
+
+        Schedule(() =>
+        {
+            try
+            {
+                action();
+                completion.SetResult();
+            }
+            catch (Exception e)
+            {
+                completion.SetException(e);
+            }
+        });
+
+        return completion.Task;
     }
 
     private void finishRender(UI.Render.OfflineRenderer.RenderResult result, UI.Render.RenderRequest request, UI.Render.RenderProgressDialog progress, UI.Render.OfflineRenderer.RenderScene scene, bool resumePlayback)
@@ -821,16 +891,59 @@ public partial class MainScreen : Screen
         if (!shouldShowResult())
             return;
 
+        // Holding on the result screen: the finished track has stopped on its own, so put the clock
+        // in the same state — otherwise the transport shows "pause" over a song that is not playing.
+        playback.Pause();
+
+        showResult();
+    }
+
+    /// <summary>Re-populates the result screen while the plays are still being simulated; null once
+    /// every timeline is complete (or the screen has been dismissed).</summary>
+    private osu.Framework.Threading.ScheduledDelegate? resultRefresh;
+
+    /// <summary>
+    /// Populates and shows the result screen from the recordings as they stand. A song can end while
+    /// the preload is still catching up (the user seeked to the end), in which case the last recorded
+    /// point is only a partial score — so while any timeline is incomplete the screen re-populates
+    /// every second until the recording finishes, and the numbers settle on the real final scores.
+    /// </summary>
+    private void showResult()
+    {
         var replays = currentReplays();
+        var timelines = currentTimelines();
         var players = new System.Collections.Generic.List<UI.Result.PlayerResultData>(replays.Count);
 
         for (int i = 0; i < replays.Count; i++)
-            players.Add(resultDataFor(replays[i], i, replays.Count));
+            players.Add(resultDataFor(replays[i], i, replays.Count, timelines != null && i < timelines.Count ? timelines[i] : null));
 
         resultScreen.Show(resultHeader(replays), players);
+
+        resultRefresh?.Cancel();
+        resultRefresh = null;
+
+        if (timelines != null && timelines.Count > 0 && !System.Linq.Enumerable.All(timelines, t => t.Complete))
+            resultRefresh = Scheduler.AddDelayed(showResult, 1000);
     }
 
-    private UI.Result.PlayerResultData resultDataFor(Replays.ReplayAttachment replay, int index, int count)
+    private void hideResult()
+    {
+        resultRefresh?.Cancel();
+        resultRefresh = null;
+        resultScreen.Hide();
+    }
+
+    /// <summary>The recorded plays behind the rail's / grid's numbers, indexed like
+    /// <see cref="currentReplays"/> — null when nothing on screen simulates (a single replay).</summary>
+    private System.Collections.Generic.IReadOnlyList<Replays.ReplayTimeline>? currentTimelines()
+    {
+        var visuals = (visualsStack.CurrentScreen as NowPlayingScreen)?.CurrentVisuals;
+        // The grid simulates its rendered cells exactly and the players past the cap analytically —
+        // AllTimelines is both, in replay order; the combine records everyone.
+        return visuals?.MultiCombine?.Simulator.Timelines ?? visuals?.MultiGrid?.AllTimelines;
+    }
+
+    private UI.Result.PlayerResultData resultDataFor(Replays.ReplayAttachment replay, int index, int count, Replays.ReplayTimeline? timeline)
     {
         var info = replay.Score?.ScoreInfo;
 
@@ -838,7 +951,9 @@ public partial class MainScreen : Screen
 
         return new UI.Result.PlayerResultData(
             replay.PlayerName.Length > 0 ? replay.PlayerName : "unknown",
-            info?.TotalScore ?? 0,
+            // The score the rail was showing — simulated under the play's own version (ScoreV1 for a
+            // V1 play) — not lazer's decoded total, which reads ~50% higher for the same stable play.
+            UI.Result.ResultScore.FinalScore(timeline, info?.TotalScore ?? 0),
             stat(osu.Game.Rulesets.Scoring.HitResult.Great),
             stat(osu.Game.Rulesets.Scoring.HitResult.Ok),
             stat(osu.Game.Rulesets.Scoring.HitResult.Meh),
@@ -856,7 +971,9 @@ public partial class MainScreen : Screen
         string playedBy = replays.Count switch
         {
             0 => string.Empty,
-            1 => $"Played by {replays[0].PlayerName}",
+            1 => replays[0].PlayedAt == default
+                ? $"Played by {replays[0].PlayerName}"
+                : $"Played by {replays[0].PlayerName} on {replays[0].PlayedAt.ToLocalTime():g}",
             _ => $"Played by {replays.Count} players",
         };
 
