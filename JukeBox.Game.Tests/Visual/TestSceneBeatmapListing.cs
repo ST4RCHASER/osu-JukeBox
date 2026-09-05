@@ -88,29 +88,11 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("no text box in the sidebar", () => !overlay.ChildrenOfType<TextBox>().Any());
             AddAssert("no filter row labels or chips", () => !overlay.ChildrenOfType<ClickableContainer>()
                                                                     .Any(c => c.GetType().Name.Contains("Chip") || c.GetType().Name.Contains("Filter")));
-            AddAssert("exactly three buttons in the top row", () =>
-                overlay.ChildrenOfType<BeatmapListingOverlay.SearchButton>().Count() == 1
-                && overlay.ChildrenOfType<IconButton>().Count(b => b.Icon.Equals(FontAwesome.Solid.Hashtag)) == 1
-                && overlay.ChildrenOfType<IconButton>().Count(b => b.Icon.Equals(FontAwesome.Solid.FolderOpen)) == 1);
-        }
-
-        // The buttons tile the row rather than overlapping — the padded-cell layout exists because
-        // a Margin on a relatively-sized child offsets without shrinking it.
-        [Test]
-        public void TheThreeTopRowButtonsDoNotOverlap()
-        {
-            AddAssert("no two of them intersect", () =>
-            {
-                var quads = new[]
-                    {
-                        (Drawable)overlay.ChildrenOfType<BeatmapListingOverlay.SearchButton>().Single(),
-                        overlay.ChildrenOfType<IconButton>().Single(b => b.Icon.Equals(FontAwesome.Solid.Hashtag)),
-                        overlay.ChildrenOfType<IconButton>().Single(b => b.Icon.Equals(FontAwesome.Solid.FolderOpen)),
-                    }
-                    .Select(d => d.ScreenSpaceDrawQuad.AABBFloat).ToList();
-
-                return !quads[0].IntersectsWith(quads[1]) && !quads[1].IntersectsWith(quads[2]) && !quads[0].IntersectsWith(quads[2]);
-            });
+            // The top row is now just the Search button — the "#" and folder icon buttons moved to
+            // the menu bar (round 9), so none remain here.
+            AddAssert("exactly one button in the top row — Search", () =>
+                overlay.ChildrenOfType<BeatmapListingOverlay.SearchButton>().Count() == 1);
+            AddAssert("no icon buttons remain in the row", () => !overlay.ChildrenOfType<IconButton>().Any());
         }
 
         // The search button's ONLY job is to ask the host to open the fullscreen listing; it does
@@ -127,29 +109,10 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("no request was issued by the click itself", () => mirror.Requests.Count == 0);
         }
 
-        [Test]
-        public void FolderButtonRaisesFileImportRequested()
-        {
-            int requested = 0;
-            AddStep("listen for file-import requests", () => overlay.FileImportRequested += () => requested++);
-
-            AddStep("click the folder button", () => overlay.ChildrenOfType<IconButton>()
-                                                            .Single(b => b.Icon.Equals(FontAwesome.Solid.FolderOpen)).TriggerClick());
-
-            AddAssert("host was asked for the file picker exactly once", () => requested == 1);
-        }
-
-        [Test]
-        public void HashButtonRaisesMapIdRequested()
-        {
-            int requested = 0;
-            AddStep("listen for map-id requests", () => overlay.MapIdRequested += () => requested++);
-
-            AddStep("click the # button", () => overlay.ChildrenOfType<IconButton>()
-                                                       .Single(b => b.Icon.Equals(FontAwesome.Solid.Hashtag)).TriggerClick());
-
-            AddAssert("host was asked for the map-id dialog exactly once", () => requested == 1);
-        }
+        // The "#" (map-id) and folder (file-import) buttons that used to sit in this row were
+        // removed in round 9 — those actions now live on the top menu bar (Queue -> Lookup by id…,
+        // File -> Open…), covered by the MenuBar's own tests. The Search button is all that remains
+        // here (see HostIsAskedToOpenSearch above).
 
         // The sidebar renders whatever the shared engine last produced — which is what makes the
         // results survive the fullscreen listing being closed.

@@ -206,6 +206,7 @@ namespace JukeBox.Game
         private SkinSelection skinSelection = null!;
         private SkinLibrary skinLibrary = null!;
         private UI.JukeBoxDialogOverlay dialogOverlay = null!;
+        private UI.CursorColourPickerOverlay cursorColourPicker = null!;
         private ChartModSelection chartMods = null!;
         private PlayfieldElementVisibility playfieldElements = null!;
         private StoryboardLayerVisibility storyboardLayers = null!;
@@ -324,6 +325,15 @@ namespace JukeBox.Game
             // still overrides this within its own subtree via the interface's [Cached] attribute,
             // so in-chart pieces keep real beat sync.
             dependencies.CacheAs<osu.Game.Beatmaps.IBeatSyncProvider>(new SilentBeatSyncProvider());
+
+            // The modal cursor-colour picker, on base.Content so it floats centred over the whole
+            // window (like the dialog overlay). Added AFTER the IBeatSyncProvider cache above because
+            // its OsuColourPicker pulls in a BeatSyncedContainer that hard-resolves that provider —
+            // added earlier, it would load before the provider is registered and throw. The Players
+            // panel resolves and opens it from its rainbow swatch; cached game-wide so the panel needs
+            // no reference to it.
+            base.Content.Add(cursorColourPicker = new UI.CursorColourPickerOverlay());
+            dependencies.Cache(cursorColourPicker);
 
             // Session-lifetime statics OsuGameBase caches: lazer's hover/click sound components
             // (HoverSampleDebounceComponent, used by every lazer settings control) resolve this.

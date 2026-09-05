@@ -22,11 +22,10 @@ namespace JukeBox.Game.UI;
 /// <see cref="BeatmapSearchEngine"/>. There is exactly one search model in the app: searching and
 /// filtering happen in <see cref="FullscreenListingOverlay"/>, and this column shows whatever that
 /// engine last produced. It therefore carries no keyword box and no filter section at all; its top
-/// row is just three buttons — a wide <see cref="SearchButton"/> that asks the host to open the
-/// fullscreen listing (<see cref="SearchOpenRequested"/>), a narrow "#" button that opens the
-/// manual ID/link dialog (<see cref="MapIdRequested"/>), and a folder button that opens the file
-/// picker (<see cref="FileImportRequested"/>) — above a scrollable list of dense
-/// <see cref="BeatmapCard"/> rows.
+/// row is just a single wide <see cref="SearchButton"/> that asks the host to open the fullscreen
+/// listing (<see cref="SearchOpenRequested"/>) — above a scrollable list of dense
+/// <see cref="BeatmapCard"/> rows. The "#" (map-id) and folder (file-import) buttons that used to
+/// sit beside it have moved to the top menu bar (Queue -> Lookup by id…, File -> Open…).
 ///
 /// Because the engine is shared and outlives any one view, closing the fullscreen listing leaves
 /// this column still showing that search's results; nothing is re-fetched and nothing is cleared.
@@ -61,16 +60,12 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
     /// 1-col in narrow width" contract; a wider standalone host still gets two.</summary>
     private const float two_column_threshold = 560;
 
-    /// <summary>Height of the search/"#" button row.</summary>
+    /// <summary>Height of the search button row.</summary>
     private const float button_row_height = 44;
 
     /// <summary>Height the "load more" row reserves at the end of the results flow while a page
     /// is being fetched.</summary>
     private const float append_spinner_row_height = 44;
-
-    /// <summary>Share of the button row's width taken by EACH of the two icon buttons — the
-    /// search button gets the rest, giving the ~60/20/20 split the row is designed around.</summary>
-    private const float icon_button_width_ratio = 0.2f;
 
     /// <summary>Whether this instance is permanently embedded (three-column layout's left column)
     /// rather than a dismissable floating overlay. See the class summary.</summary>
@@ -114,24 +109,10 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
     public event Action<BeatmapSetInfo>? SetPicked;
 
     /// <summary>
-    /// Fired when the "#" button is clicked — the caller (<see cref="Screens.MainScreen"/>) opens
-    /// <see cref="MapIdOverlay"/> in response. Kept as an event (rather than this overlay owning a
-    /// <see cref="MapIdOverlay"/> itself) so there's still exactly one overlay instance shared
-    /// across the app.
-    /// </summary>
-    public event Action? MapIdRequested;
-
-    /// <summary>
-    /// Fired when the folder button is clicked — <see cref="Screens.MainScreen"/> opens
-    /// <see cref="FileImportOverlay"/> in response, the click-to-import counterpart to dropping a
-    /// file on the window. Kept as an event for the same reason <see cref="MapIdRequested"/> is:
-    /// one overlay instance, owned by the screen.
-    /// </summary>
-    public event Action? FileImportRequested;
-
-    /// <summary>
     /// Fired by the big search button — <see cref="Screens.MainScreen"/> responds by presenting
-    /// <see cref="FullscreenListingOverlay"/>, the one place search and filters live.
+    /// <see cref="FullscreenListingOverlay"/>, the one place search and filters live. Lookup-by-id and
+    /// file-open used to live beside it as icon buttons; they moved to the menu bar (Queue → Lookup by
+    /// id…, File → Open…), so this is the only request the header still raises.
     /// </summary>
     public event Action? SearchOpenRequested;
 
@@ -331,57 +312,13 @@ public partial class BeatmapListingOverlay : FocusedOverlayContainer
                 {
                     RelativeSizeAxes = Axes.X,
                     Height = button_row_height,
-                    // The search button takes whatever the two icon buttons leave. Each sits
-                    // inside its own padded cell rather than carrying a Margin: a Margin on a
-                    // relatively-sized child offsets it without shrinking it, which would leave
-                    // them overlapping by the gutter width.
-                    Child = new GridContainer
+                    // The search button now spans the whole row: the "#" (map-id) and folder
+                    // (file-import) buttons that used to share this row moved to the top menu bar
+                    // (Queue -> Lookup by id…, File -> Open…), so there is nothing to make room for.
+                    Child = new SearchButton
                     {
                         RelativeSizeAxes = Axes.Both,
-                        ColumnDimensions = new[]
-                        {
-                            new Dimension(),
-                            new Dimension(GridSizeMode.Relative, size: icon_button_width_ratio),
-                            new Dimension(GridSizeMode.Relative, size: icon_button_width_ratio),
-                        },
-                        Content = new[]
-                        {
-                            new Drawable[]
-                            {
-                                new Container
-                                {
-                                    RelativeSizeAxes = Axes.Both,
-                                    Padding = new MarginPadding { Right = Theme.RowSpacing / 2 },
-                                    Child = new SearchButton
-                                    {
-                                        RelativeSizeAxes = Axes.Both,
-                                        Action = () => SearchOpenRequested?.Invoke(),
-                                    },
-                                },
-                                new Container
-                                {
-                                    RelativeSizeAxes = Axes.Both,
-                                    Padding = new MarginPadding { Horizontal = Theme.RowSpacing / 2 },
-                                    Child = new IconButton
-                                    {
-                                        RelativeSizeAxes = Axes.Both,
-                                        Icon = FontAwesome.Solid.Hashtag,
-                                        Action = () => MapIdRequested?.Invoke(),
-                                    },
-                                },
-                                new Container
-                                {
-                                    RelativeSizeAxes = Axes.Both,
-                                    Padding = new MarginPadding { Left = Theme.RowSpacing / 2 },
-                                    Child = new IconButton
-                                    {
-                                        RelativeSizeAxes = Axes.Both,
-                                        Icon = FontAwesome.Solid.FolderOpen,
-                                        Action = () => FileImportRequested?.Invoke(),
-                                    },
-                                },
-                            },
-                        },
+                        Action = () => SearchOpenRequested?.Invoke(),
                     },
                 },
                 statusText = new SpriteText

@@ -50,9 +50,8 @@ public partial class KnockoutBoard : CompositeDrawable
     /// coloured name rather than folded into it — the reference colours the two separately.</param>
     /// <param name="Frames">Their replay's input frames, for the key-press indicator at the row's
     /// left. Null (as in the grid, or a test) simply draws no keys.</param>
-    /// <param name="Version">The scoring-version tag ("V1", "Classic", "Lazer", "V2"), drawn in a
-    /// muted accent AFTER the mods — a distinct marker, not folded into the white mod run. Empty
-    /// draws nothing.</param>
+    /// <param name="Version">The scoring-version tag ("V1", "Classic", "Lazer", "V2"), drawn as one
+    /// more mod acronym after the mods ("+V1") in the same style. Empty draws nothing.</param>
     public readonly record struct Entrant(string Name, Color4 Colour, ReplayTimeline Timeline, string Mods = "", IReadOnlyList<ReplayFrame>? Frames = null, string Version = "");
 
     private readonly IReadOnlyList<Entrant> entrants;
@@ -201,9 +200,9 @@ public partial class KnockoutBoard : CompositeDrawable
         maxNameChars = entrants.Count == 0 ? 4 : entrants.Max(e =>
             e.Name.Length
             + (e.Mods.Length == 0 ? 0 : e.Mods.Length + 1)
-            // Version renders parenthesised ("(V1)") and a bit smaller — count the parens plus a gap so
-            // the reserved name column still leaves room for it.
-            + (e.Version.Length == 0 ? 0 : e.Version.Length + 3));
+            // Version renders as a mod token ("+V1") — count its "+" plus a gap so the reserved name
+            // column still leaves room for it.
+            + (e.Version.Length == 0 ? 0 : e.Version.Length + 2));
 
         // Sized to its CONTAINER, not to its content. Sizing to content is what produced a board
         // over a thousand pixels tall for 47 players, running off the bottom of the player box and
@@ -693,17 +692,17 @@ public partial class KnockoutBoard : CompositeDrawable
                                 Colour = Color4.White,
                                 Shadow = true,
                             },
-                            // The scoring-version tag — smaller, lighter, dim grey and PARENTHESISED so
-                            // it reads as a quiet annotation ("stable rules"), never as another mod
-                            // acronym glued to the white mod run ("+HR V1" looked like a "+V1" mod).
+                            // The scoring-version tag, rendered as ANOTHER mod acronym in the stack —
+                            // "+V1" beside "+HDHR", identical font/size/weight/colour — which is how
+                            // the user asked to read the scoring lineage: as one more mod, not a
+                            // separate annotation. The flow's own spacing sets it off from the mods run.
                             version = new OsuSpriteText
                             {
                                 Anchor = Anchor.CentreLeft,
                                 Origin = Anchor.CentreLeft,
-                                Margin = new MarginPadding { Left = 3 },
-                                Text = entrant.Version.Length == 0 ? string.Empty : $"({entrant.Version})",
-                                Font = OsuFont.Torus.With(weight: FontWeight.Regular, size: 11),
-                                Colour = new Color4(0.62f, 0.62f, 0.68f, 1f),
+                                Text = entrant.Version.Length == 0 ? string.Empty : $"+{entrant.Version}",
+                                Font = OsuFont.Torus.With(weight: FontWeight.SemiBold),
+                                Colour = Color4.White,
                                 Shadow = true,
                             },
                         },
@@ -945,8 +944,14 @@ public partial class KnockoutBoard : CompositeDrawable
 
             if (Math.Abs(wantResting - RestingAlpha) > 0.001f)
             {
+                // Removing a row is a slow 3.5s fade-out — the user asked for the row to ease away
+                // rather than blink out — while every other alpha change (dimming an eliminated row,
+                // or a seek bringing a player back to full) stays snappy at the rail's usual 300ms.
+                bool removing = RemoveRowOnKnockout && wantResting == 0f;
+                double duration = removing ? 3500 : 300;
+
                 RestingAlpha = wantResting;
-                this.FadeTo(RestingAlpha, 300, Easing.OutQuint);
+                this.FadeTo(RestingAlpha, duration, Easing.OutQuint);
             }
         }
 

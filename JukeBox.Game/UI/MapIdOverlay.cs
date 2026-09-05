@@ -20,8 +20,8 @@ namespace JukeBox.Game.UI;
 
 /// <summary>
 /// The "add a beatmap by ID or link" dialog — a centred modal styled like
-/// <see cref="SettingsOverlay"/> (dim scrim + rounded panel-surface card), opened by the "#" button
-/// in the sidebar's search row (<see cref="BeatmapListingOverlay.MapIdRequested"/>).
+/// <see cref="SettingsOverlay"/> (dim scrim + rounded panel-surface card), opened from the menu bar
+/// (Queue → Lookup by id…).
 ///
 /// One input accepts EITHER a bare beatmapset ID or a pasted osu.ppy.sh link; see
 /// <see cref="BeatmapLink"/> for the exact set of supported shapes and why a link to a single

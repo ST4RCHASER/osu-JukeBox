@@ -1467,40 +1467,35 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("the queue itself is on that tab", () => playbackBody.ChildrenOfType<QueuePanel>().Any());
         }
 
-        // Regression coverage for the map-ID button: it sits beside the sidebar's search button
-        // rather than in a corner, and opens the one shared MapIdOverlay via
-        // BeatmapListingOverlay.MapIdRequested.
+        // The map-ID lookup moved from a sidebar "#" button to the menu bar (Queue > Lookup by id…);
+        // invoking that menu action opens the one shared MapIdOverlay.
         [Test]
-        public void HashtagButtonTogglesMapIdOverlay()
+        public void LookupByIdMenuActionOpensMapIdOverlay()
         {
             MapIdOverlay overlay = null!;
             AddStep("grab map-id overlay", () => overlay = screen.ChildrenOfType<MapIdOverlay>().Single());
 
             AddAssert("starts hidden", () => overlay.State.Value == Visibility.Hidden);
 
-            AddStep("click the hashtag button beside the search button",
-                () => screen.ChildrenOfType<IconButton>().Single(b => b.Icon.Equals(FontAwesome.Solid.Hashtag)).TriggerClick());
+            AddStep("invoke Queue > Lookup by id",
+                () => screen.ChildrenOfType<MenuBar>().Single().Actions.LookupById!());
             AddAssert("overlay visible", () => overlay.State.Value == Visibility.Visible);
-
-            AddStep("click the hashtag button again",
-                () => screen.ChildrenOfType<IconButton>().Single(b => b.Icon.Equals(FontAwesome.Solid.Hashtag)).TriggerClick());
-            AddAssert("overlay hidden again", () => overlay.State.Value == Visibility.Hidden);
         }
 
-        // The folder button is the click-to-import counterpart to dropping a file on the window,
-        // and it must land in the SAME importer — asserted end to end here: an unsupported path
-        // picked in the overlay comes back as the drop importer's own "can't import" toast, which
-        // only happens if MainScreen really routed it through DroppedFileImporter.
+        // File open moved from a sidebar folder button to the menu bar (File > Open…); it must still
+        // land in the SAME importer — asserted end to end: an unsupported path picked in the overlay
+        // comes back as the drop importer's own "can't import" toast, which only happens if MainScreen
+        // routed it through DroppedFileImporter.
         [Test]
-        public void FolderButtonOpensThePickerAndItsChoiceGoesThroughTheDropImporter()
+        public void OpenFilesMenuActionRoutesThroughTheDropImporter()
         {
             FileImportOverlay picker = null!;
             AddStep("grab the file-import overlay", () => picker = screen.ChildrenOfType<FileImportOverlay>().Single());
 
             AddAssert("starts hidden", () => picker.State.Value == Visibility.Hidden);
 
-            AddStep("click the folder button",
-                () => screen.ChildrenOfType<IconButton>().Single(b => b.Icon.Equals(FontAwesome.Solid.FolderOpen)).TriggerClick());
+            AddStep("invoke File > Open",
+                () => screen.ChildrenOfType<MenuBar>().Single().Actions.OpenFiles!());
             AddAssert("picker visible", () => picker.State.Value == Visibility.Visible);
 
             // Deliberately an extension the importer rejects: it reports the rejection without

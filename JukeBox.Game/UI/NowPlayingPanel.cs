@@ -80,6 +80,27 @@ public partial class NowPlayingPanel : CompositeDrawable
     [Resolved(canBeNull: true)]
     private BeatmapCache? cache { get; set; }
 
+    /// <summary>The multi-replay preload's progress, published by the combine layer. Null in a bare
+    /// test host, where the simulating status line simply never shows.</summary>
+    [Resolved(canBeNull: true)]
+    private Replays.PreloadProgressTracker? preloadTracker { get; set; }
+
+    private readonly Bindable<double> simProgress = new Bindable<double>(1);
+    private readonly BindableBool simActive = new BindableBool();
+
+    /// <summary>Test hook: the simulating-status text currently shown (empty while hidden).</summary>
+    internal string SimStatusText => simActive.Value ? simStatus.Text.ToString()! : string.Empty;
+
+    /// <summary>Runs a drawable mutation on the update thread — directly when already on it, scheduled
+    /// otherwise (the tracker's off-thread teardown Clear()).</summary>
+    private void onSimUpdateThread(Action mutate)
+    {
+        if (osu.Framework.Development.ThreadSafety.IsUpdateThread)
+            mutate();
+        else
+            Schedule(mutate);
+    }
+
     /// <summary>Test seam (JukeBox.Game.Tests has InternalsVisibleTo): replaces
     /// <see cref="osu.Framework.Platform.GameHost.OpenUrlExternally"/>, mirroring
     /// <see cref="FullscreenListingOverlay"/>'s own seam, so tests can assert the browsed URL
@@ -109,6 +130,7 @@ public partial class NowPlayingPanel : CompositeDrawable
     private ProgressSliderBar progressBar = null!;
     private SpriteText elapsedText = null!;
     private SpriteText totalText = null!;
+    private SpriteText simStatus = null!;
     private DifficultySwitcher difficultySwitcher = null!;
     private TransportRow transport = null!;
     private SpriteText statusText = null!;
@@ -404,6 +426,15 @@ public partial class NowPlayingPanel : CompositeDrawable
                         },
                     },
                 },
+                // The multi-replay preload status, shown only while the replays are still being
+                // recorded off-screen — the caption that used to float over the combine playfield,
+                // relocated here beside the progress it describes (which also carries the buffer fill).
+                simStatus = new SpriteText
+                {
+                    Font = FontUsage.Default.With(size: Theme.CaptionTextSize),
+                    Colour = Theme.TextTertiary,
+                    Alpha = 0,
+                },
                 difficultySwitcher = new DifficultySwitcher(),
             },
         };
@@ -416,6 +447,17 @@ public partial class NowPlayingPanel : CompositeDrawable
         jukebox.NowPlaying.BindValueChanged(onNowPlayingChanged, true);
         jukebox.Status.BindValueChanged(_ => refreshStatus(), true);
         jukebox.LastError.BindValueChanged(_ => refreshStatus(), true);
+
+        if (preloadTracker != null)
+        {
+            simProgress.BindTo(preloadTracker.Progress);
+            simActive.BindTo(preloadTracker.Active);
+        }
+
+        // The tracker is Reported from the update thread but Cleared during teardown off it; mutate
+        // the text directly on the update thread, marshal onto it otherwise (round-8 teardown pattern).
+        simProgress.BindValueChanged(e => onSimUpdateThread(() => simStatus.Text = $"Simulating replays… {(int)(System.Math.Clamp(e.NewValue, 0, 1) * 100)}%"), true);
+        simActive.BindValueChanged(e => onSimUpdateThread(() => simStatus.FadeTo(e.NewValue ? 1 : 0, 200, Easing.OutQuint)), true);
 
         progress.BindValueChanged(e =>
         {

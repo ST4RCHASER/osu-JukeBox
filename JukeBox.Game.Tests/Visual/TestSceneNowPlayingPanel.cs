@@ -37,6 +37,7 @@ namespace JukeBox.Game.Tests.Visual
         private MusicQueue queue = null!;
         private BeatmapCache cache = null!;
         private Jukebox jukebox = null!;
+        private JukeBox.Game.Replays.PreloadProgressTracker preloadTracker = null!;
 
         private NowPlayingPanel nowPlaying = null!;
         private QueuePanel queuePanel = null!;
@@ -86,11 +87,14 @@ namespace JukeBox.Game.Tests.Visual
 
             jukebox = new Jukebox(queue, new RadioService(emptyMirror), cache, playback);
 
+            preloadTracker = new JukeBox.Game.Replays.PreloadProgressTracker();
+
             var deps = new DependencyContainer(parent);
             deps.CacheAs(playback);
             deps.CacheAs(jukebox);
             deps.CacheAs(queue);
             deps.CacheAs(cache);
+            deps.CacheAs(preloadTracker);
             return deps;
         }
 
@@ -150,6 +154,27 @@ namespace JukeBox.Game.Tests.Visual
 
         // Volume is a Settings → Audio concern (master/effect/music), never a per-song one, so it
         // has no control in here — unlike the transport, which now sits in this panel.
+        /// <summary>
+        /// The multi-replay preload (items 2/3/10) surfaces in the now-playing area: a "Simulating
+        /// replays… N%" status line, and a YouTube-style buffer fill growing behind the pink played
+        /// portion of the progress bar. Both read the shared <see cref="JukeBox.Game.Replays.PreloadProgressTracker"/>
+        /// and clear once the preload is complete.
+        /// </summary>
+        [Test]
+        public void ThePreloadSurfacesAsBufferFillAndStatusText()
+        {
+            AddUntilStep("panel laid out", () => nowPlaying.DrawHeight > 0);
+
+            AddStep("report a half-recorded preload", () => preloadTracker.Report(0.5));
+            AddUntilStep("the status line shows the percent", () => nowPlaying.SimStatusText == "Simulating replays… 50%");
+            AddUntilStep("the buffer fill shows about halfway", () =>
+                nowPlaying.ProgressBar.BufferShowing && Math.Abs(nowPlaying.ProgressBar.BufferFraction - 0.5f) < 0.02f);
+
+            AddStep("report complete", () => preloadTracker.Report(1.0));
+            AddUntilStep("the status line clears", () => nowPlaying.SimStatusText.Length == 0);
+            AddUntilStep("the buffer fill hides", () => !nowPlaying.ProgressBar.BufferShowing);
+        }
+
         [Test]
         public void NoVolumeControlsInNowPlayingPanel()
         {

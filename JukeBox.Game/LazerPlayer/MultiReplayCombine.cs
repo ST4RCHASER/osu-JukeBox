@@ -132,9 +132,10 @@ public partial class MultiReplayCombine : CompositeDrawable
     [Resolved(canBeNull: true)]
     private Replays.PreloadProgressTracker? preloadTracker { get; set; }
 
-    /// <summary>The small "Simulating N%" indicator, low in the bottom-right corner so it says the
-    /// numbers are still settling without sitting over the rail or the play.</summary>
-    private OsuSpriteText progressNote = null!;
+    /// <summary>Read for the "Flip HR replay" option — whether an HR play's cursor is mirrored back
+    /// onto the shared chart so every cursor tracks the same notes. Null in a bare test host (no flip).</summary>
+    [Resolved(canBeNull: true)]
+    private Configuration.JukeBoxConfigManager? config { get; set; }
 
     [BackgroundDependencyLoader]
     private void load()
@@ -168,20 +169,6 @@ public partial class MultiReplayCombine : CompositeDrawable
         {
             chart,
             simulator,
-
-            // Unobtrusive, bottom-right: a small caption that the plays are still being recorded, so a
-            // fresh load reads as "working" rather than as a rail full of zeros. Hidden the moment the
-            // preload is done. The full buffered picture is the buffer bar over in the Playback tab.
-            progressNote = new OsuSpriteText
-            {
-                Anchor = Anchor.BottomRight,
-                Origin = Anchor.BottomRight,
-                Margin = new MarginPadding { Right = 8, Bottom = 8 },
-                Colour = Color4.White.Opacity(0.7f),
-                Font = OsuFont.Torus.With(size: 12, weight: FontWeight.SemiBold),
-                Shadow = true,
-                Alpha = 0,
-            },
         };
     }
 
@@ -241,17 +228,10 @@ public partial class MultiReplayCombine : CompositeDrawable
         attachCursors();
         updateCursors();
 
-        // The preload progress: a small bottom-right caption here, and the buffered-bar in the
-        // Playback tab through the shared tracker. Both say the same thing — the plays are still
-        // being recorded and the numbers are not final — until every timeline is complete.
-        double progress = simulator.Progress;
-        bool loading = progress < 0.999;
-
-        progressNote.Alpha = loading ? 1 : 0;
-        if (loading)
-            progressNote.Text = $"Simulating replays… {(int)(progress * 100)}%";
-
-        preloadTracker?.Report(progress);
+        // The preload progress goes out through the shared tracker only — the Playback tab shows it as
+        // a status line and as the buffered fill on the progress bar. No caption floats on the
+        // playfield any more (it sat over the play); the tracker is the single source both read.
+        preloadTracker?.Report(simulator.Progress);
 
         if (board != null)
         {
@@ -284,6 +264,15 @@ public partial class MultiReplayCombine : CompositeDrawable
         attached = true;
         chart.HidePlayfieldCursor();
 
+        // The rendered chart runs under the DRIVER's mods, so it is vertically flipped exactly when
+        // the driver played HR. A cursor lands on the same notes as that chart only when its own
+        // HR-ness matches the chart's; when they differ, its recorded Y is in the opposite orientation
+        // and must be mirrored (y -> 384 - y in playfield space). With "Flip HR replay" on (default),
+        // that is what syncs every cursor to the one shared chart — most often an HR play's cursor
+        // flipped back onto a non-HR chart. Off leaves the raw recorded positions.
+        bool flipEnabled = config?.Get<bool>(Configuration.JukeBoxSetting.FlipHrReplay) ?? false;
+        bool driverHr = flipEnabled && hasHardRock(replays.FirstOrDefault());
+
         for (int i = 0; i < replays.Count; i++)
         {
             var replay = replays[i].Score?.Replay;
@@ -297,7 +286,8 @@ public partial class MultiReplayCombine : CompositeDrawable
             // The bare player name, NOT the "+mods" display name — the break/death cue on the
             // playfield shows who, not what they played, and "name +CL" reads as clutter.
             string cursorName = replays[i].PlayerName.Length > 0 ? replays[i].PlayerName : "unknown";
-            var cursor = new PlayerCursor(cursorName, replay.Frames, effectiveColour(i));
+            bool flipY = flipEnabled && hasHardRock(replays[i]) != driverHr;
+            var cursor = new PlayerCursor(cursorName, replay.Frames, effectiveColour(i)) { FlipY = flipY };
 
             cursors.Add(chart.AddPlayerCursor(cursor) ? cursor : null);
 
@@ -476,6 +466,11 @@ public partial class MultiReplayCombine : CompositeDrawable
 
     /// <summary>This player's rail mod string ("+HDDT"), keeping CL/TD that the general mod display
     /// drops — worth seeing when comparing plays side by side. Empty for a no-mod play.</summary>
+    /// <summary>Whether this play carried Hard Rock — the mod that flips the playfield vertically, and
+    /// so the one whose recorded cursor needs mirroring to overlay a chart of the opposite orientation.</summary>
+    private static bool hasHardRock(ReplayAttachment? replay)
+        => replay?.Score?.ScoreInfo.Mods.Any(m => m.Acronym == "HR") ?? false;
+
     private static string railMods(ReplayAttachment replay)
     {
         var acronyms = Replays.ReplayMods.RailAcronyms(

@@ -11,6 +11,7 @@ using osu.Framework.Bindables;
 using osu.Framework.Development;
 using osu.Framework.Extensions.Color4Extensions;
 using osu.Framework.Graphics;
+using osu.Framework.Graphics.Colour;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Shapes;
 using osu.Framework.Graphics.Sprites;
@@ -50,11 +51,6 @@ public partial class PlayersPanel : CompositeDrawable
     [Resolved(canBeNull: true)]
     private PlayerOverrideStore? overrideStore { get; set; }
 
-    // The multi-replay preload's progress, published by the combine layer. Null in a bare test host
-    // (no combine to preload), in which case the buffer bar simply never shows.
-    [Resolved(canBeNull: true)]
-    private PreloadProgressTracker? preloadTracker { get; set; }
-
     // The user's imported-skin library, so a per-player skin override can offer imported skins, not
     // just the bundled ones. Null in a bare test host (no imports to offer).
     [Resolved(canBeNull: true)]
@@ -77,17 +73,22 @@ public partial class PlayersPanel : CompositeDrawable
         new Color4(0xff, 0x5c, 0xd0, 0xff), new Color4(0xff, 0xff, 0xff, 0xff),
     };
 
-    /// <summary>The mods a player can be re-rendered under here, with the small exclusivity groups
-    /// that keep the set valid (you cannot be under both DoubleTime and HalfTime).</summary>
+    /// <summary>The mods a player can be re-rendered under here, with the small exclusivity group that
+    /// keeps the set valid (you cannot be under both Easy and Hard Rock).
+    ///
+    /// <para>
+    /// The rate mods — Double Time, Nightcore, Half Time — are deliberately NOT here: they change the
+    /// PLAYBACK SPEED, which is one shared clock for every replay on screen, so a single player cannot
+    /// be sped up or slowed relative to the rest. Only the mods that change one player's rendered chart
+    /// on its own (Easy, Hard Rock, Hidden, Flashlight) can be a per-player override.
+    /// </para>
+    /// </summary>
     private static readonly (string Acronym, string Label, int Group)[] mod_choices =
     {
         ("EZ", "Easy", 1),
         ("HR", "Hard Rock", 1),
         ("HD", "Hidden", 0),
         ("FL", "Flashlight", 0),
-        ("DT", "Double Time", 2),
-        ("NC", "Nightcore", 2),
-        ("HT", "Half Time", 2),
     };
 
     private SettingsEnumDropdown<MultiReplayMode> multiReplayModeDropdown = null!;
@@ -98,7 +99,6 @@ public partial class PlayersPanel : CompositeDrawable
     private SettingsDropdown<string> targetDropdown = null!;
     private SettingsDropdown<string> skinDropdown = null!;
     private FillFlowContainer swatches = null!;
-    private BufferBar preloadBar = null!;
 
     /// <summary>The BUNDLED gameplay skins a player can be given, as (menu label, stored key). A null
     /// key is the reset — fall back to the global skin. The user's imported skins are appended to
@@ -128,7 +128,10 @@ public partial class PlayersPanel : CompositeDrawable
     /// <summary>How many picked colours are remembered before the oldest drops off.</summary>
     private const int max_remembered_colours = 10;
 
-    private osu.Game.Graphics.UserInterfaceV2.OsuColourPicker colourPicker = null!;
+    /// <summary>The modal HSV+hex picker the rainbow swatch opens; null in a bare test host (the
+    /// rainbow swatch is then inert). Cached game-wide so it floats centred over the whole app.</summary>
+    [Resolved(canBeNull: true)]
+    private CursorColourPickerOverlay? colourPickerOverlay { get; set; }
 
     /// <summary>A bound copy of the imported-skin library, so the skin dropdown re-lists the moment a
     /// .osk is imported. A bound copy (unbound on disposal) rather than a direct subscription, so a
@@ -165,7 +168,6 @@ public partial class PlayersPanel : CompositeDrawable
 
         var content = new List<Drawable>
         {
-            preloadRow(),
             multiReplayModeDropdown,
             knockoutModeDropdown,
             knockoutSortDropdown,
@@ -196,20 +198,23 @@ public partial class PlayersPanel : CompositeDrawable
     }
 
     /// <summary>
-    /// The preload row: a caption and a YouTube-style buffer bar showing how much of the replays'
-    /// timelines have been recorded. The whole row shows only while a preload is running (the combine
-    /// publishes progress through <see cref="PreloadProgressTracker"/>) and fades out once every
-    /// timeline is complete, so it does not sit empty during ordinary playback.
+    /// Shows only the settings that mean something in the current multi-replay mode. The knockout /
+    /// rail settings live in COMBINE (the rail is a combine feature); the per-player gameplay-skin and
+    /// visual-mod overrides only apply in GRID, where each player renders its OWN chart — in COMBINE
+    /// there is one shared chart, so a per-player skin or visual mod has nowhere to land. The cursor
+    /// colour and the "per-player settings for" target stay in both. Hidden rows go to Alpha 0, which
+    /// the section's flow collapses so no gap is left.
     /// </summary>
-    private Drawable preloadRow()
+    private void updateModeVisibility(MultiReplayMode mode)
     {
-        return new Container
-        {
-            RelativeSizeAxes = Axes.X,
-            AutoSizeAxes = Axes.Y,
-            Padding = new MarginPadding { Horizontal = SettingsPanel.CONTENT_MARGINS, Vertical = 6 },
-            Child = preloadBar = new BufferBar(),
-        };
+        bool combine = mode == MultiReplayMode.Combine;
+
+        foreach (var railSetting in new Drawable[] { knockoutModeDropdown, knockoutSortDropdown, knockoutLiveSortCheckbox, removeNameCheckbox })
+            railSetting.Alpha = combine ? 1 : 0;
+
+        skinDropdown.Alpha = combine ? 0 : 1;
+        foreach (var checkbox in modCheckboxes.Values)
+            checkbox.Alpha = combine ? 0 : 1;
     }
 
     private Drawable colourRow()
@@ -228,7 +233,10 @@ public partial class PlayersPanel : CompositeDrawable
                 Children = new Drawable[]
                 {
                     new SpriteText { Text = "Cursor colour", Font = FontUsage.Default.With(size: Theme.RowSecondaryTextSize) },
-                    // The palette, the reset chip, and every colour the user has picked so far.
+                    // The palette, the reset chip, every colour the user has picked so far, and — last —
+                    // a rainbow swatch that opens the full HSV+hex picker in a MODAL (see
+                    // CursorColourPickerOverlay). The picker used to sit inline here, but its saturation
+                    // square crowded the narrow sidebar, so it moved to a centred popup.
                     swatches = new FillFlowContainer
                     {
                         RelativeSizeAxes = Axes.X,
@@ -236,36 +244,23 @@ public partial class PlayersPanel : CompositeDrawable
                         Direction = FillDirection.Full,
                         Spacing = new Vector2(6, 6),
                     },
-                    // A real colour picker (HSV + hex) for any colour beyond the palette. Applying a
-                    // picked colour also REMEMBERS it as a new swatch, so the user builds up their own
-                    // reusable set — see applyPickedColour. A FIXED width (it auto-sizes its height):
-                    // RelativeSizeAxes.X let the saturation/value square grow to the full panel width
-                    // and render as a giant block, so it is bounded to a small, tidy picker instead.
-                    colourPicker = new osu.Game.Graphics.UserInterfaceV2.OsuColourPicker
-                    {
-                        Width = 200,
-                    },
-                    new osu.Game.Graphics.UserInterfaceV2.RoundedButton
-                    {
-                        RelativeSizeAxes = Axes.X,
-                        Height = 32,
-                        Text = "Apply picked colour",
-                        Action = applyPickedColour,
-                    },
                 },
             },
         };
     }
 
-    /// <summary>Applies the colour picker's current colour to the target and REMEMBERS it as a new
-    /// swatch, so picked colours accumulate as a reusable set.</summary>
-    private void applyPickedColour()
+    /// <summary>Opens the modal picker (seeded at the target's current colour, or the first palette
+    /// colour). Applying a picked colour REMEMBERS it as a new swatch and applies it to the target, so
+    /// picked colours accumulate as a reusable set.</summary>
+    private void openColourPicker()
     {
-        var picked = colourPicker.Current.Value;
-        var colour = new Color4(picked.R, picked.G, picked.B, 1f);
+        Color4 start = (target == target_all ? null : overrideStore?.Peek(currentPlayers[target])?.CursorColour) ?? palette[0];
 
-        rememberColour(colour);
-        applyColour(colour);
+        colourPickerOverlay?.Open(start, colour =>
+        {
+            rememberColour(colour);
+            applyColour(colour);
+        });
     }
 
     /// <summary>Adds a picked colour to the remembered set (newest last, de-duplicated, capped) and
@@ -307,6 +302,9 @@ public partial class PlayersPanel : CompositeDrawable
         base.LoadComplete();
 
         multiReplayModeDropdown.Current = config.GetBindable<MultiReplayMode>(JukeBoxSetting.MultiReplayMode);
+        // Show only the settings that apply to the chosen mode (rail settings in combine, per-player
+        // skin/mods in grid), re-run whenever the mode changes.
+        multiReplayModeDropdown.Current.BindValueChanged(e => updateModeVisibility(e.NewValue), true);
         knockoutModeDropdown.Current = config.GetBindable<KnockoutMode>(JukeBoxSetting.KnockoutMode);
         knockoutSortDropdown.Current = config.GetBindable<KnockoutSort>(JukeBoxSetting.KnockoutSortBy);
         knockoutLiveSortCheckbox.Current = config.GetBindable<bool>(JukeBoxSetting.KnockoutLiveSort);
@@ -470,6 +468,10 @@ public partial class PlayersPanel : CompositeDrawable
         // The reset chip: hands the player back their hue-spread default.
         swatches.Add(new ColourSwatch(null, () => applyColour(null)));
 
+        // The rainbow chip, LAST: a hue-blended swatch that opens the full HSV+hex picker in a modal
+        // for any colour beyond the palette.
+        swatches.Add(ColourSwatch.Rainbow(openColourPicker));
+
         highlightSwatch();
     }
 
@@ -572,12 +574,27 @@ public partial class PlayersPanel : CompositeDrawable
     /// (a null entry is the "default/global" reset).</summary>
     internal IEnumerable<string?> SkinChoiceKeys => skinChoices.Select(c => c.Key);
 
-    /// <summary>Test hooks for the cursor colour picker and its remembered swatches.</summary>
-    internal osu.Game.Graphics.UserInterfaceV2.OsuColourPicker ColourPicker => colourPicker;
+    /// <summary>Test hook: opens the modal picker as the rainbow swatch would.</summary>
+    internal void OpenColourPicker() => openColourPicker();
 
-    internal void ApplyPickedColour() => applyPickedColour();
+    /// <summary>Test hook: applies a colour exactly as the modal picker's Apply does — sets it on the
+    /// target AND remembers it as a swatch.</summary>
+    internal void ApplyPickedColour(Color4 colour)
+    {
+        rememberColour(colour);
+        applyColour(colour);
+    }
 
     internal int SwatchCount => swatches.Count;
+
+    /// <summary>Test hook: the per-player mod acronyms offered (rate mods are excluded — see mod_choices).</summary>
+    internal IEnumerable<string> OfferedModAcronyms => mod_choices.Select(m => m.Acronym);
+
+    /// <summary>Test hook: whether the knockout / rail settings are shown (only in combine).</summary>
+    internal bool RailSettingsShown => knockoutModeDropdown.Alpha > 0.5f;
+
+    /// <summary>Test hook: whether the per-player gameplay-skin + visual-mod controls are shown (only in grid).</summary>
+    internal bool PerPlayerSkinAndModsShown => skinDropdown.Alpha > 0.5f && modCheckboxes.Values.All(c => c.Alpha > 0.5f);
 
     /// <summary>One clickable colour chip. A null colour is the reset chip, drawn as an outlined
     /// ring rather than a filled dot.</summary>
@@ -589,12 +606,26 @@ public partial class PlayersPanel : CompositeDrawable
         private readonly Circle fill;
         private readonly Container ring;
 
-        public ColourSwatch(Color4? colour, Action onClick)
+        /// <summary>The rainbow "pick a custom colour" chip: a hue-blended dot that is not itself a
+        /// selectable stored colour (<see cref="Colour"/> stays null) but opens the modal picker.</summary>
+        public static ColourSwatch Rainbow(Action onClick) => new ColourSwatch(null, onClick, rainbow: true);
+
+        public ColourSwatch(Color4? colour, Action onClick, bool rainbow = false)
         {
             Colour = colour;
             this.onClick = onClick;
 
             Size = new Vector2(24);
+
+            // A four-corner hue blend so the chip reads as "any colour" without needing a real
+            // conic gradient the framework's Box does not provide.
+            var rainbowFill = new ColourInfo
+            {
+                TopLeft = new Color4(1f, 0.2f, 0.2f, 1f),
+                TopRight = new Color4(0.2f, 1f, 0.3f, 1f),
+                BottomLeft = new Color4(0.3f, 0.4f, 1f, 1f),
+                BottomRight = new Color4(1f, 0.9f, 0.2f, 1f),
+            };
 
             InternalChildren = new Drawable[]
             {
@@ -611,8 +642,8 @@ public partial class PlayersPanel : CompositeDrawable
                 fill = new Circle
                 {
                     RelativeSizeAxes = Axes.Both,
-                    Colour = colour ?? new Color4(0.2f, 0.2f, 0.2f, 1f),
-                    BorderThickness = colour == null ? 2 : 0,
+                    Colour = rainbow ? rainbowFill : (ColourInfo)(colour ?? new Color4(0.2f, 0.2f, 0.2f, 1f)),
+                    BorderThickness = colour == null && !rainbow ? 2 : 0,
                     BorderColour = Color4.White.Opacity(0.6f),
                     Masking = true,
                 },
@@ -637,114 +668,4 @@ public partial class PlayersPanel : CompositeDrawable
             => fill.ScaleTo(1f, Theme.HoverFadeDuration, Easing.OutQuint);
     }
 
-    /// <summary>
-    /// A YouTube-style buffer bar: a caption over a thin track whose grey fill grows to show how much
-    /// of the replays' timelines have been preloaded. It reads its fraction from the shared
-    /// <see cref="PreloadProgressTracker"/> and shows only while a preload is running — the combine
-    /// marks the tracker inactive once every timeline is recorded, and the whole row fades away.
-    /// </summary>
-    internal partial class BufferBar : CompositeDrawable
-    {
-        [Resolved(canBeNull: true)]
-        private PreloadProgressTracker? tracker { get; set; }
-
-        private readonly Bindable<double> progress = new Bindable<double>(1);
-        private readonly BindableBool active = new BindableBool();
-
-        private readonly Box fill;
-        private readonly SpriteText caption;
-
-        private static readonly Color4 track_colour = new Color4(0.22f, 0.22f, 0.26f, 1f);
-        private static readonly Color4 buffer_colour = new Color4(0.72f, 0.72f, 0.78f, 1f);
-
-        public BufferBar()
-        {
-            RelativeSizeAxes = Axes.X;
-            AutoSizeAxes = Axes.Y;
-            Alpha = 0;
-
-            InternalChild = new FillFlowContainer
-            {
-                RelativeSizeAxes = Axes.X,
-                AutoSizeAxes = Axes.Y,
-                Direction = FillDirection.Vertical,
-                Spacing = new Vector2(0, 6),
-                Children = new Drawable[]
-                {
-                    caption = new SpriteText
-                    {
-                        Text = "Preloading replays",
-                        Font = FontUsage.Default.With(size: Theme.RowSecondaryTextSize),
-                    },
-                    new Container
-                    {
-                        RelativeSizeAxes = Axes.X,
-                        Height = 6,
-                        Masking = true,
-                        CornerRadius = 3,
-                        Children = new Drawable[]
-                        {
-                            // The whole track — the not-yet-buffered ground, always drawn.
-                            new Box { RelativeSizeAxes = Axes.Both, Colour = track_colour },
-                            // The buffered fill, its width the fraction preloaded.
-                            fill = new Box
-                            {
-                                RelativeSizeAxes = Axes.Both,
-                                Width = 0,
-                                Colour = buffer_colour,
-                            },
-                        },
-                    },
-                },
-            };
-        }
-
-        [BackgroundDependencyLoader]
-        private void load()
-        {
-            if (tracker != null)
-            {
-                progress.BindTo(tracker.Progress);
-                active.BindTo(tracker.Active);
-            }
-
-            // Both handlers mutate drawables (Width, Text, a fade transform), and the tracker they are
-            // bound to is written from more than one thread: the combine Reports from the update thread,
-            // but Clear() runs during teardown (MultiReplayCombine.Dispose) on the disposal thread — and
-            // mutating a loaded drawable off the update thread throws InvalidThreadForMutationException,
-            // which aborted the app on close. On the update thread we mutate directly (the normal live
-            // path); off it — only at teardown — we marshal onto the update thread, where a mutation
-            // scheduled after this bar is itself disposed is simply dropped.
-            progress.BindValueChanged(e =>
-            {
-                float f = (float)Math.Clamp(e.NewValue, 0, 1);
-                onUpdateThread(() =>
-                {
-                    fill.Width = f;
-                    caption.Text = $"Preloading replays… {(int)(f * 100)}%";
-                });
-            }, true);
-
-            active.BindValueChanged(e => onUpdateThread(() => this.FadeTo(e.NewValue ? 1 : 0, 200, Easing.OutQuint)), true);
-        }
-
-        /// <summary>Runs a drawable mutation on the update thread: straight through when we are already
-        /// on it (the live path), scheduled when we are not (teardown's off-thread <c>Clear()</c>).</summary>
-        private void onUpdateThread(Action mutate)
-        {
-            if (ThreadSafety.IsUpdateThread)
-                mutate();
-            else
-                Schedule(mutate);
-        }
-
-        /// <summary>Test hook: the buffered fraction the fill currently shows, 0 to 1.</summary>
-        internal float FillFraction => fill.Width;
-
-        /// <summary>Test hook: whether the bar is currently shown (a preload is running).</summary>
-        internal bool Showing => Alpha > 0.5f;
-    }
-
-    /// <summary>Test hook: the preload buffer bar.</summary>
-    internal BufferBar PreloadBar => preloadBar;
 }

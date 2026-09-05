@@ -1,6 +1,7 @@
 #nullable enable
 
 using System;
+using System.Collections.Generic;
 using JukeBox.Game.Configuration;
 using JukeBox.Game.Import;
 using JukeBox.Game.Input;
@@ -62,8 +63,7 @@ namespace JukeBox.Game.Screens;
 /// being independently hideable, as a quick "jump to the queue/transport" shortcut). There is no separate
 /// settings shortcut/corner button any more — the Settings tab header in the right column is
 /// always reachable directly (see <see cref="createTabHeader"/>). The map-ID lookup
-/// (<see cref="MapIdOverlay"/>) is opened from the "#" button beside the sidebar's search button
-/// (see <see cref="BeatmapListingOverlay.MapIdRequested"/>) rather than a corner button.
+/// (<see cref="MapIdOverlay"/>) is opened from the top menu bar (Queue → Lookup by id…).
 /// </para>
 ///
 /// <para>
@@ -111,6 +111,12 @@ public partial class MainScreen : Screen
     private DroppedFileImporter fileImporter { get; set; } = null!;
 
     [Resolved]
+    private Playback.PlaybackController playback { get; set; } = null!;
+
+    [Resolved]
+    private osu.Framework.Platform.GameHost host { get; set; } = null!;
+
+    [Resolved]
     private LaunchArgumentImporter launchArguments { get; set; } = null!;
 
     /// <summary>
@@ -120,6 +126,9 @@ public partial class MainScreen : Screen
     /// </summary>
     [Resolved(CanBeNull = true)]
     private Online.SpectateController? spectate { get; set; }
+
+    [Resolved(CanBeNull = true)]
+    private Replays.ReplayStore? replayStore { get; set; }
 
     /// <summary>
     /// A bound COPY of <see cref="Jukebox.LastError"/> rather than a subscription straight onto
@@ -238,6 +247,15 @@ public partial class MainScreen : Screen
     private MapIdOverlay mapIdOverlay = null!;
     private FileImportOverlay fileImportOverlay = null!;
 
+    // The top menu bar and the modals it opens (render dialog, shortcuts list, spectate setup) and
+    // the end-of-replay result screen. All top-level, above the columns.
+    private UI.MenuBar menuBar = null!;
+    private UI.Render.RenderDialog renderDialog = null!;
+    private UI.ShortcutsOverlay shortcutsOverlay = null!;
+    private UI.SpectateSetupOverlay spectateSetupOverlay = null!;
+    private UI.Result.ResultScreen resultScreen = null!;
+    private readonly Bindable<bool> renderEnabled = new Bindable<bool>(true);
+
     /// <summary>
     /// The one search engine both listing presentations render — hosted HERE (not inside the
     /// docked listing, its default owner) so it keeps ticking (debounce, scheduled result applies)
@@ -355,6 +373,11 @@ public partial class MainScreen : Screen
         settingsBody = new SettingsOverlay(docked: true, searchEngine: searchEngine) { RelativeSizeAxes = Axes.Both };
         mapIdOverlay = new MapIdOverlay();
         fileImportOverlay = new FileImportOverlay();
+        renderDialog = new UI.Render.RenderDialog();
+        shortcutsOverlay = new UI.ShortcutsOverlay(shortcutList());
+        spectateSetupOverlay = new UI.SpectateSetupOverlay();
+        resultScreen = new UI.Result.ResultScreen();
+        menuBar = new UI.MenuBar { Actions = buildMenuActions(), Depth = hud_depth, RelativeSizeAxes = Axes.Both };
 
         InternalChildren = new Drawable[]
         {
@@ -549,6 +572,14 @@ public partial class MainScreen : Screen
             fullscreenListing,
             mapIdOverlay,
             fileImportOverlay,
+            renderDialog,
+            shortcutsOverlay,
+            spectateSetupOverlay,
+            // The result screen sits over the columns but under the modals and toasts.
+            resultScreen,
+            // The auto-hiding top menu bar, above the columns and modals so its dropdowns are never
+            // occluded, but below the toasts.
+            menuBar,
             // Lazer's REAL volume overlay, hosted as-is rather than reimplemented: it needs only an
             // AudioManager and an OsuColour (both already cached), it caches itself for its own
             // MasterVolumeMeter, and it binds straight to the framework's master/effect/music
@@ -579,17 +610,28 @@ public partial class MainScreen : Screen
         fullscreenListing.SetPicked += set => _ = jukebox.EnqueueAndMaybePlayAsync(set);
         mapIdOverlay.SetResolved += set => _ = jukebox.EnqueueAndMaybePlayAsync(set);
 
-        // The map-ID button sits beside the sidebar's search button (see
-        // BeatmapListingOverlay.MapIdRequested) rather than in a corner.
-        listing.MapIdRequested += () => mapIdOverlay.ToggleVisibility();
-
-        // The folder button opens the in-app picker, and whatever it yields goes through the
-        // importer the window's drag-and-drop handler already uses — so a picked file and a
-        // dropped one are the same import, with the same toasts (bound in LoadComplete) and the
-        // same failure reporting. Fire-and-forget like the drop path: Import reports its own
-        // outcomes through fileImporter.Notification rather than through the returned Task.
-        listing.FileImportRequested += () => fileImportOverlay.ToggleVisibility();
+        // Lookup-by-id and file-open used to be two icon buttons beside the sidebar search box; they
+        // moved to the menu bar (Queue > Lookup by id…, File > Open…), so only the wiring for the
+        // overlays themselves stays here — the menu opens them (see buildMenuActions). A picked file
+        // goes through the same importer the window's drag-and-drop handler uses, so a picked file and
+        // a dropped one are the same import, with the same toasts and failure reporting.
         fileImportOverlay.FileSelected += path => _ = fileImporter.Import(path);
+
+        // The render dialog's validated request drives an offline render (item 17); the result screen's
+        // Next/Restart advance past the held song / replay it from the top.
+        renderDialog.RenderEnabled.BindTo(renderEnabled);
+        renderDialog.RenderRequested += request => startRender(request);
+        resultScreen.NextRequested += () => { resultScreen.Hide(); jukebox.SkipCurrent(); };
+        resultScreen.RestartRequested += () => { resultScreen.Hide(); playback.Seek(0); };
+
+        // Hold auto-advance on a finished replay when the result screen is enabled, and show it.
+        jukebox.HoldOnTrackCompleted = () => shouldShowResult();
+        playback.TrackCompleted += onTrackCompletedForResult;
+
+        // The Render menu item is greyed while spectating (a render captures the local playback, not a
+        // live spectate). Kept in sync with the spectate controller's active state.
+        if (spectate != null)
+            spectate.Active.BindValueChanged(e => renderEnabled.Value = !e.NewValue, true);
 
         // The sidebar's search button is the mouse-driven way into the one search surface. Gated
         // on the layout for the same reason type-anywhere is: focus mode has no sidebar on screen
@@ -604,6 +646,225 @@ public partial class MainScreen : Screen
         // rather than this screen's Update() — it's what keeps the scale reading playerBox's
         // current-frame (not previous-frame) size during the focus-mode transition.
         playerBox.OnUpdate += _ => updateSceneScale();
+    }
+
+    /// <summary>The menu bar's callbacks, wired to the overlays and controllers this screen owns.</summary>
+    private UI.MenuBarActions buildMenuActions() => new UI.MenuBarActions
+    {
+        OpenFiles = () => fileImportOverlay.Show(),
+        OpenRender = () => renderDialog.Open(playback.LengthMs, renderDefaultDirectory(), renderDefaultStem()),
+        Quit = () => host.Exit(),
+        // Play/Pause are the two sides of the one toggle, so each guards on the current state rather
+        // than blindly toggling — a "Play" chosen while already playing must not pause.
+        Play = () => { if (!playback.IsPlaying) playback.TogglePause(); },
+        Pause = () => { if (playback.IsPlaying) playback.TogglePause(); },
+        Next = () => jukebox.SkipCurrent(),
+        Restart = () => playback.Seek(0),
+        OpenBeatmapPage = openCurrentBeatmapPage,
+        LookupById = () => mapIdOverlay.Show(),
+        SearchBeatmaps = () => { if (uiLayout.Value == UiLayout.ThreeColumn) fullscreenListing.ShowSearch(); },
+        ToggleSpectate = () => { if (spectate != null) spectate.Active.Value = !spectate.Active.Value; },
+        SetupPlayers = () => spectateSetupOverlay.Show(),
+        ShowShortcuts = () => shortcutsOverlay.Show(),
+        RenderEnabled = renderEnabled,
+        Spectating = spectate?.Active ?? (IBindable<bool>)new BindableBool(),
+    };
+
+    /// <summary>The full list of keyboard shortcuts, shown by Help → Show all shortcut keys. Kept in
+    /// step with <see cref="Input.PlaybackShortcuts"/> and this screen's own key handling.</summary>
+    private static IReadOnlyList<(string Keys, string Action)> shortcutList() => new (string, string)[]
+    {
+        ("Space", "Play / pause"),
+        ("← / →", "Seek back / forward 5s"),
+        ("Ctrl + ← / →", "Seek back / forward 30s"),
+        ("Home", "Restart the song"),
+        ("↑ / ↓", "Volume up / down"),
+        ("Page Up / Page Down", "Playback speed up / down"),
+        ("Cmd/Alt + = / -", "Zoom in / out"),
+        ("Cmd/Alt + 0", "Reset zoom"),
+        ("Cmd/Ctrl + O", "Open files…"),
+        ("Cmd/Ctrl + Q", "Focus the Playback tab"),
+        ("Tab", "Toggle focus (full-screen) mode"),
+        ("Media keys", "Play/pause, next, previous"),
+    };
+
+    /// <summary>Opens the current beatmap's osu.ppy.sh page, when there is a submitted set playing.</summary>
+    private void openCurrentBeatmapPage()
+    {
+        int? id = jukebox.NowPlaying.Value?.Id;
+        if (id is > 0)
+            host.OpenUrlExternally($"https://osu.ppy.sh/beatmapsets/{id}");
+    }
+
+    private string renderDefaultDirectory()
+        => Environment.GetFolderPath(Environment.SpecialFolder.MyVideos) is { Length: > 0 } dir ? dir : Environment.CurrentDirectory;
+
+    private string renderDefaultStem()
+    {
+        var set = jukebox.NowPlaying.Value;
+        string stem = set == null ? "render" : $"{set.Artist} - {set.Title}";
+        foreach (char c in System.IO.Path.GetInvalidFileNameChars())
+            stem = stem.Replace(c, '_');
+        return stem;
+    }
+
+    private void startRender(UI.Render.RenderRequest request)
+    {
+        // The offline renderer needs ffmpeg and a supported capture path; if either is missing, say so
+        // plainly rather than starting a render that cannot finish.
+        if (!UI.Render.OfflineRenderer.IsSupported(out string reason))
+        {
+            toastOverlay.Push($"Can't render: {reason}", Theme.Error);
+            return;
+        }
+
+        var set = playback.Current.Value;
+        if (set == null)
+        {
+            toastOverlay.Push("Nothing is playing to render.", Theme.Error);
+            return;
+        }
+
+        var progress = new UI.Render.RenderProgressDialog();
+        AddInternal(progress);
+
+        var cancellation = new System.Threading.CancellationTokenSource();
+        progress.CancelConfirmed = () => cancellation.Cancel();
+        progress.Show();
+
+        // Isolate the on-screen player: pausing it stops it fighting the offscreen render for the
+        // shared clock. Resumed when the render ends, if it was playing.
+        bool wasPlaying = playback.IsPlaying;
+        if (wasPlaying)
+            playback.TogglePause();
+
+        _ = runRenderAsync(set, request, progress, cancellation, wasPlaying);
+    }
+
+    private async System.Threading.Tasks.Task runRenderAsync(Beatmaps.CachedBeatmapSet set, UI.Render.RenderRequest request, UI.Render.RenderProgressDialog progress, System.Threading.CancellationTokenSource cancellation, bool resumePlayback)
+    {
+        var scene = new UI.Render.OfflineRenderer.RenderScene(set, request, playback.SelectedOsuFile.Value);
+        var plan = new UI.Render.OfflineRenderer.FramePlan(request);
+
+        try
+        {
+            AddInternal(scene);
+
+            // Let the offscreen visual stack finish loading before stepping it.
+            while (!scene.Ready && !cancellation.IsCancellationRequested)
+                await System.Threading.Tasks.Task.Delay(16, cancellation.Token).ConfigureAwait(false);
+
+            var result = await UI.Render.OfflineRenderer.EncodeAsync(
+                request,
+                set.AudioFile,
+                async (index, token) =>
+                {
+                    // Step the scene to this frame's time ON the update thread, then read the frame back.
+                    var stepped = new System.Threading.Tasks.TaskCompletionSource();
+                    Schedule(() =>
+                    {
+                        scene.StepTo(plan.TimeAt(index));
+                        stepped.SetResult();
+                    });
+                    await stepped.Task.ConfigureAwait(false);
+
+                    return await UI.Render.OfflineRenderer.Capture.ByWindowScreenshot(host, request.Width, request.Height).ConfigureAwait(false);
+                },
+                (done, total) => Schedule(() => progress.UpdateProgress(done, total)),
+                cancellation.Token).ConfigureAwait(false);
+
+            Schedule(() => finishRender(result, request, progress, scene, resumePlayback));
+        }
+        catch (OperationCanceledException)
+        {
+            Schedule(() => finishRender(new UI.Render.OfflineRenderer.RenderResult(UI.Render.OfflineRenderer.ResultKind.Cancelled), request, progress, scene, resumePlayback));
+        }
+        catch (Exception e)
+        {
+            osu.Framework.Logging.Logger.Error(e, "[render] failed");
+            Schedule(() => finishRender(new UI.Render.OfflineRenderer.RenderResult(UI.Render.OfflineRenderer.ResultKind.Failed, e.Message), request, progress, scene, resumePlayback));
+        }
+    }
+
+    private void finishRender(UI.Render.OfflineRenderer.RenderResult result, UI.Render.RenderRequest request, UI.Render.RenderProgressDialog progress, UI.Render.OfflineRenderer.RenderScene scene, bool resumePlayback)
+    {
+        progress.Hide();
+        scene.Expire();
+
+        if (resumePlayback && !playback.IsPlaying)
+            playback.TogglePause();
+
+        switch (result.Kind)
+        {
+            case UI.Render.OfflineRenderer.ResultKind.Completed:
+                var done = new UI.Render.RenderDoneDialog();
+                AddInternal(done);
+                done.Open(request.Path);
+                break;
+
+            case UI.Render.OfflineRenderer.ResultKind.Failed:
+                toastOverlay.Push($"Render failed: {result.Error}", Theme.Error);
+                break;
+        }
+    }
+
+    /// <summary>Whether a finished song should stop on the result screen rather than auto-advance —
+    /// the option is on and the play that just ended was a replay.</summary>
+    private bool shouldShowResult()
+        => config.Get<bool>(JukeBoxSetting.ShowPlayerResult) && currentReplays().Count > 0;
+
+    private System.Collections.Generic.IReadOnlyList<Replays.ReplayAttachment> currentReplays()
+        => replayStore?.AllForOsuFile(playback.SelectedOsuFile.Value) ?? System.Array.Empty<Replays.ReplayAttachment>();
+
+    private void onTrackCompletedForResult()
+    {
+        if (!shouldShowResult())
+            return;
+
+        var replays = currentReplays();
+        var players = new System.Collections.Generic.List<UI.Result.PlayerResultData>(replays.Count);
+
+        for (int i = 0; i < replays.Count; i++)
+            players.Add(resultDataFor(replays[i], i, replays.Count));
+
+        resultScreen.Show(resultHeader(replays), players);
+    }
+
+    private UI.Result.PlayerResultData resultDataFor(Replays.ReplayAttachment replay, int index, int count)
+    {
+        var info = replay.Score?.ScoreInfo;
+
+        int stat(osu.Game.Rulesets.Scoring.HitResult r) => info != null && info.Statistics.TryGetValue(r, out int v) ? v : 0;
+
+        return new UI.Result.PlayerResultData(
+            replay.PlayerName.Length > 0 ? replay.PlayerName : "unknown",
+            info?.TotalScore ?? 0,
+            stat(osu.Game.Rulesets.Scoring.HitResult.Great),
+            stat(osu.Game.Rulesets.Scoring.HitResult.Ok),
+            stat(osu.Game.Rulesets.Scoring.HitResult.Meh),
+            stat(osu.Game.Rulesets.Scoring.HitResult.Miss),
+            info?.MaxCombo ?? 0,
+            info?.Accuracy ?? 0,
+            info?.Rank.ToString() ?? "D",
+            replay.ModAcronyms,
+            LazerPlayer.MultiReplayCombine.ColourFor(index, count));
+    }
+
+    private UI.Result.ResultBeatmapHeader resultHeader(System.Collections.Generic.IReadOnlyList<Replays.ReplayAttachment> replays)
+    {
+        var set = jukebox.NowPlaying.Value;
+        string playedBy = replays.Count switch
+        {
+            0 => string.Empty,
+            1 => $"Played by {replays[0].PlayerName}",
+            _ => $"Played by {replays.Count} players",
+        };
+
+        return new UI.Result.ResultBeatmapHeader(
+            set?.Title ?? string.Empty,
+            set?.Artist ?? string.Empty,
+            set?.Creator ?? string.Empty,
+            playedBy);
     }
 
     protected override void LoadComplete()

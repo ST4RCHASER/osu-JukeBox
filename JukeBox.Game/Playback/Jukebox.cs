@@ -428,7 +428,22 @@ public partial class Jukebox : Component
         return true;
     }
 
-    private void onTrackCompleted() => AdvanceAsync();
+    /// <summary>
+    /// A veto on auto-advancing when the track finishes. Set by the screen when the result screen is
+    /// enabled and the finished song was a replay: the result screen shows and playback HOLDS on it
+    /// until the user advances (their Next click goes through <see cref="SkipCurrent"/>, which advances
+    /// past this veto). Null — the default — always advances, the jukebox's normal roll-on behaviour.
+    /// </summary>
+    public Func<bool>? HoldOnTrackCompleted { get; set; }
+
+    private void onTrackCompleted()
+    {
+        // The user asked to stop on a result screen for this play — don't roll on to the next song.
+        if (HoldOnTrackCompleted?.Invoke() == true)
+            return;
+
+        AdvanceAsync();
+    }
 
     /// <summary>
     /// Pops the next set to play (queue first, radio fallback), caches it and hands it to the

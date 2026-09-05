@@ -371,6 +371,24 @@ public enum JukeBoxSetting
     StoryboardVideoSplitMigrated,
 
     /// <summary>
+    /// Whether an HR (Hard Rock) replay's cursor is mirrored back onto the shared combine chart. HR
+    /// flips the playfield vertically, so an HR play's recorded cursor lands on the mirrored note
+    /// positions; on the ONE shared chart of combine mode that reads as a cursor chasing the wrong
+    /// notes. On by default: with several plays over one chart, every cursor tracking the same notes
+    /// is what makes the comparison legible. Off leaves the raw recorded positions. Display only — the
+    /// judge already scores HR geometry correctly; this mirrors only the drawn cursor.
+    /// </summary>
+    FlipHrReplay,
+
+    /// <summary>
+    /// Whether reaching the end of the replay(s) shows an osu!-ranking-style RESULT screen — one panel
+    /// per player with score, hit counts, combo, accuracy, grade and mods — and holds there until the
+    /// user advances, instead of auto-advancing to the next song. Off by default: the jukebox's normal
+    /// behaviour is to roll straight on, and stopping on a result screen is something to opt into.
+    /// </summary>
+    ShowPlayerResult,
+
+    /// <summary>
     /// Which storyboard layers the user has switched OFF, as a comma-separated list of
     /// <see cref="LazerPlayer.StoryboardLayerKind"/> names — same list-shaped, "persist the hidden
     /// ones" scheme as <see cref="HiddenPlayfieldElements"/>, and for the same reasons. Defaults to
@@ -589,6 +607,13 @@ public class JukeBoxConfigManager : IniConfigManager<JukeBoxSetting>
         SetDefault(JukeBoxSetting.KnockoutSortBy, Replays.KnockoutSort.Score);
         SetDefault(JukeBoxSetting.KnockoutLiveSort, true);
         SetDefault(JukeBoxSetting.RemoveNameAfterKnockout, false);
+
+        // On: over one shared chart, every cursor tracking the same notes is what makes a combine
+        // legible, so an HR play's flipped cursor is mirrored back by default.
+        SetDefault(JukeBoxSetting.FlipHrReplay, true);
+
+        // Off: the jukebox rolls straight on to the next song, and stopping on a result screen is opt-in.
+        SetDefault(JukeBoxSetting.ShowPlayerResult, false);
 
         // Both on, because both describe what the app ALREADY does: it fills an empty queue from
         // the radio, and — since MainScreen starts the jukebox unconditionally and the queue is

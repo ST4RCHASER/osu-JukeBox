@@ -103,64 +103,9 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("now showing", () => panel.IsShowing && panel.CurrentPlayers.Count == 3);
         }
 
-        /// <summary>
-        /// The preload buffer bar (YouTube-style): it shows while the replays are being recorded, its
-        /// grey fill tracking the fraction preloaded, and hides once every timeline is complete. Driven
-        /// by the shared <see cref="PreloadProgressTracker"/> the combine publishes to.
-        /// </summary>
-        [Test]
-        public void ThePreloadBufferBarFillsWithProgressThenHides()
-        {
-            AddStep("build three", () => build(3));
-            AddUntilStep("panel loaded", () => panel.IsLoaded);
-
-            AddStep("report a half-recorded preload", () => preloadTracker.Report(0.5));
-            AddUntilStep("the bar shows, filled about halfway", () =>
-                panel.PreloadBar.Showing && System.Math.Abs(panel.PreloadBar.FillFraction - 0.5f) < 0.02f);
-
-            AddStep("report nearly done", () => preloadTracker.Report(0.9));
-            AddUntilStep("the fill grows and it is still shown", () =>
-                panel.PreloadBar.Showing && panel.PreloadBar.FillFraction > 0.85f);
-
-            AddStep("report complete", () => preloadTracker.Report(1.0));
-            AddUntilStep("the bar hides once fully buffered", () => !panel.PreloadBar.Showing);
-        }
-
-        /// <summary>
-        /// The tracker is cleared during teardown (MultiReplayCombine.Dispose) on the DISPOSAL thread,
-        /// not the update thread — and the buffer bar's handler mutates drawables (a fade transform).
-        /// Mutating a loaded drawable off the update thread throws InvalidThreadForMutationException,
-        /// which aborted the app on close (exit 134). This drives that exact off-thread mutation and
-        /// asserts the bar absorbs it rather than throwing.
-        /// </summary>
-        [Test]
-        public void TheBufferBarSurvivesTrackerMutationOffTheUpdateThread()
-        {
-            AddStep("build three", () => build(3));
-            AddUntilStep("panel loaded", () => panel.IsLoaded);
-
-            AddStep("show the bar so it is a loaded, transformable drawable", () => preloadTracker.Report(0.5));
-            AddUntilStep("the bar is showing", () => panel.PreloadBar.Showing);
-
-            Exception? caught = null;
-            AddStep("clear the tracker from a background thread, as Dispose does", () =>
-            {
-                caught = null;
-                Task.Run(() =>
-                {
-                    try
-                    {
-                        preloadTracker.Clear();
-                    }
-                    catch (Exception e)
-                    {
-                        caught = e;
-                    }
-                }).Wait();
-            });
-
-            AddAssert("no thread-mutation exception escaped", () => caught == null);
-        }
+        // The preload buffer bar moved off the Players panel onto the playback progress bar (item 2/10)
+        // and its status line onto the now-playing panel (item 3); those are covered by
+        // TestSceneProgressSliderBar and TestSceneNowPlayingPanel respectively.
 
         [Test]
         public void TheMovedMultiReplaySettingsWriteThroughToConfig()
@@ -225,8 +170,7 @@ namespace JukeBox.Game.Tests.Visual
             AddStep("target player 0, pick a custom colour", () =>
             {
                 panel.SelectTarget(0);
-                panel.ColourPicker.Current.Value = new osu.Framework.Graphics.Colour4(0.1f, 0.7f, 0.3f, 1f);
-                panel.ApplyPickedColour();
+                panel.ApplyPickedColour(new Color4(0.1f, 0.7f, 0.3f, 1f));
             });
 
             AddAssert("player 0 got the picked colour", () =>
@@ -243,38 +187,11 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("it was remembered, as one new swatch", () =>
                 config.Get<string>(JukeBoxSetting.RememberedCursorColours).Length > 0 && panel.SwatchCount == baseSwatches + 1);
 
-            AddStep("pick the very same colour again", () =>
-            {
-                panel.ColourPicker.Current.Value = new osu.Framework.Graphics.Colour4(0.1f, 0.7f, 0.3f, 1f);
-                panel.ApplyPickedColour();
-            });
+            AddStep("pick the very same colour again", () => panel.ApplyPickedColour(new Color4(0.1f, 0.7f, 0.3f, 1f)));
             AddAssert("no duplicate swatch is added", () => panel.SwatchCount == baseSwatches + 1);
 
-            AddStep("pick a different colour", () =>
-            {
-                panel.ColourPicker.Current.Value = new osu.Framework.Graphics.Colour4(0.9f, 0.2f, 0.5f, 1f);
-                panel.ApplyPickedColour();
-            });
+            AddStep("pick a different colour", () => panel.ApplyPickedColour(new Color4(0.9f, 0.2f, 0.5f, 1f)));
             AddAssert("that one adds another swatch", () => panel.SwatchCount == baseSwatches + 2);
-        }
-
-        /// <summary>
-        /// The colour picker is a small bounded control, not a giant block filling the panel. It used
-        /// to stretch to the full panel width, which made its saturation/value square render as a huge
-        /// white rectangle. Asserted on its drawn width staying compact — far under the panel width.
-        /// </summary>
-        [Test]
-        public void TheColourPickerIsBoundedNotAFullPanelBlock()
-        {
-            AddStep("build three", () => build(3));
-            AddUntilStep("panel loaded", () => panel.IsLoaded);
-            AddUntilStep("picker laid out", () => panel.ColourPicker.DrawWidth > 0);
-
-            AddAssert("the picker is a small bounded control, not the full panel width", () =>
-                panel.ColourPicker.DrawWidth <= 260 && panel.ColourPicker.DrawWidth < host.DrawWidth * 0.9f);
-
-            AddAssert("and its height is bounded too (no runaway square)", () =>
-                panel.ColourPicker.DrawHeight > 0 && panel.ColourPicker.DrawHeight <= 420);
         }
 
         [Test]
@@ -373,20 +290,58 @@ namespace JukeBox.Game.Tests.Visual
         }
 
         [Test]
-        public void TheRateModsAreMutuallyExclusive()
+        public void TheDifficultyModsAreMutuallyExclusive()
         {
             AddStep("build two", () => build(2));
             AddUntilStep("panel loaded", () => panel.IsLoaded);
 
             AddStep("target player 0", () => panel.SelectTarget(0));
-            AddStep("add Double Time", () => panel.SetMod("DT", true));
-            AddStep("then add Half Time", () => panel.SetMod("HT", true));
+            AddStep("add Easy", () => panel.SetMod("EZ", true));
+            AddStep("then add Hard Rock", () => panel.SetMod("HR", true));
 
-            AddAssert("only Half Time remains — Double Time was turned off", () =>
+            AddAssert("only Hard Rock remains — Easy was turned off", () =>
             {
                 var acronyms = overrides.Peek(players[0])?.Mods?.Select(m => m.Acronym).ToArray() ?? System.Array.Empty<string>();
-                return acronyms.Contains("HT") && !acronyms.Contains("DT");
+                return acronyms.Contains("HR") && !acronyms.Contains("EZ");
             });
+        }
+
+        /// <summary>
+        /// The rate mods — Double Time, Nightcore, Half Time — are NOT offered per player: they change
+        /// the shared playback speed, which cannot differ between replays on one clock. Only Easy, Hard
+        /// Rock, Hidden and Flashlight (the per-player-renderable mods) are shown.
+        /// </summary>
+        [Test]
+        public void TheRateModsAreNotOfferedPerPlayer()
+        {
+            AddStep("build two", () => build(2));
+            AddUntilStep("panel loaded", () => panel.IsLoaded);
+
+            AddAssert("the per-player mod list is exactly EZ / HR / HD / FL", () =>
+            {
+                var offered = panel.OfferedModAcronyms.OrderBy(a => a).ToArray();
+                return offered.SequenceEqual(new[] { "EZ", "FL", "HD", "HR" });
+            });
+        }
+
+        /// <summary>
+        /// The settings follow the multi-replay mode: the knockout/rail settings show in COMBINE and
+        /// hide in GRID (there is no rail in grid); the per-player gameplay-skin and visual-mod controls
+        /// show in GRID and hide in COMBINE (one shared chart can't take a per-player skin/mod).
+        /// </summary>
+        [Test]
+        public void SettingsFollowTheMultiReplayMode()
+        {
+            AddStep("build three", () => build(3));
+            AddUntilStep("panel loaded", () => panel.IsLoaded);
+
+            AddStep("combine mode", () => panel.MultiReplayModeDropdown.Current.Value = MultiReplayMode.Combine);
+            AddAssert("rail settings shown, per-player skin/mods hidden", () =>
+                panel.RailSettingsShown && !panel.PerPlayerSkinAndModsShown);
+
+            AddStep("grid mode", () => panel.MultiReplayModeDropdown.Current.Value = MultiReplayMode.Grid);
+            AddAssert("rail settings hidden, per-player skin/mods shown", () =>
+                !panel.RailSettingsShown && panel.PerPlayerSkinAndModsShown);
         }
     }
 }

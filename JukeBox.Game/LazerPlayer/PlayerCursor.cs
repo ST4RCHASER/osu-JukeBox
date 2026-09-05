@@ -145,17 +145,34 @@ public partial class PlayerCursor : CompositeDrawable
     private readonly string playerName;
     private readonly PlayerCursorTrail trail;
 
+    /// <summary>
+    /// Mirror this cursor vertically in playfield space (y → 384 − y). Set for an HR play whose
+    /// recorded cursor is in the flipped orientation while the shared chart is not (or the reverse) —
+    /// see MultiReplayCombine.attachCursors and the "Flip HR replay" option. Applies only to the
+    /// replay-frame cursor path; a death name placed at a chart hit object is already in chart space.
+    /// </summary>
+    internal bool FlipY { get; init; }
+
+    /// <summary>The recorded position, mirrored vertically when <see cref="FlipY"/> is set.</summary>
+    private Vector2 oriented(Vector2 position)
+        => FlipY ? new Vector2(position.X, PlayfieldSize.Y - position.Y) : position;
+
+    /// <summary>Test hook: the flip applied to a playfield position (identity unless <see cref="FlipY"/>).</summary>
+    internal Vector2 OrientForTest(Vector2 position) => oriented(position);
+
     protected override void Update()
     {
         base.Update();
 
-        if (ReplayCursorPath.PositionAt(frames, Clock.CurrentTime) is not { } position)
+        if (ReplayCursorPath.PositionAt(frames, Clock.CurrentTime) is not { } raw)
         {
             HasPosition = false;
             body.Alpha = 0;
             trail.Clear();
             return;
         }
+
+        var position = oriented(raw);
 
         HasPosition = true;
         body.Alpha = 1;
@@ -174,9 +191,10 @@ public partial class PlayerCursor : CompositeDrawable
     /// than wherever the (now vanished) cursor is live. Null when the replay had no frame there.</summary>
     internal Vector2? ScreenPositionAt(double time)
     {
-        if (ReplayCursorPath.PositionAt(frames, time) is not { } position)
+        if (ReplayCursorPath.PositionAt(frames, time) is not { } raw)
             return null;
 
+        var position = oriented(raw);
         return PositionSpace is { } space ? space.ToScreenSpace(position) : ToScreenSpace(position);
     }
 

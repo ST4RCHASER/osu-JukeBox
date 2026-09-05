@@ -1,6 +1,10 @@
 #nullable enable
 
+using System;
+using JukeBox.Game.Replays;
 using osu.Framework.Allocation;
+using osu.Framework.Bindables;
+using osu.Framework.Development;
 using osu.Framework.Extensions.Color4Extensions;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
@@ -9,6 +13,7 @@ using osu.Framework.Graphics.Shapes;
 using osu.Framework.Graphics.UserInterface;
 using osu.Framework.Input.Events;
 using osuTK;
+using osuTK.Graphics;
 
 namespace JukeBox.Game.UI;
 
@@ -36,6 +41,25 @@ internal partial class ProgressSliderBar : SliderBar<double>
     private Container barContainer = null!;
     private Container fillContainer = null!;
     private Circle handle = null!;
+
+    // The YouTube-style BUFFER fill: a lighter/greyer segment behind the pink played portion, its
+    // width the fraction of the replays' timelines recorded so far. Shown only while a preload runs.
+    private Box buffer = null!;
+    private static readonly Color4 buffer_colour = new Color4(0.72f, 0.72f, 0.78f, 0.45f);
+
+    /// <summary>The multi-replay preload's progress, published by the combine layer. Null in a bare
+    /// test host (no combine), in which case the buffer segment simply never shows.</summary>
+    [Resolved(canBeNull: true)]
+    private PreloadProgressTracker? preloadTracker { get; set; }
+
+    private readonly Bindable<double> bufferProgress = new Bindable<double>(1);
+    private readonly BindableBool bufferActive = new BindableBool();
+
+    /// <summary>Test hook: the buffered fraction the grey segment currently shows, 0 to 1.</summary>
+    internal float BufferFraction => buffer.Width;
+
+    /// <summary>Test hook: whether the buffer segment is currently visible (a preload is running).</summary>
+    internal bool BufferShowing => buffer.Alpha > 0.5f;
 
     // Transforms (ResizeHeightTo/FadeTo) must only run after LoadComplete — see IconButton's
     // `ready` field for the same guard and reasoning.
@@ -68,6 +92,14 @@ internal partial class ProgressSliderBar : SliderBar<double>
                     {
                         RelativeSizeAxes = Axes.Both,
                         Colour = Theme.ElevatedSurface,
+                    },
+                    // Behind the pink played portion, above the track: the buffered region.
+                    buffer = new Box
+                    {
+                        RelativeSizeAxes = Axes.Both,
+                        Width = 0,
+                        Alpha = 0,
+                        Colour = buffer_colour,
                     },
                     fillContainer = new Container
                     {
@@ -105,6 +137,28 @@ internal partial class ProgressSliderBar : SliderBar<double>
     {
         base.LoadComplete();
         ready = true;
+
+        if (preloadTracker != null)
+        {
+            bufferProgress.BindTo(preloadTracker.Progress);
+            bufferActive.BindTo(preloadTracker.Active);
+        }
+
+        // The tracker is written from the update thread (Report) but also cleared during teardown on
+        // the disposal thread; mutate the drawable directly on the update thread, marshal onto it
+        // otherwise — the buffer-bar teardown crash pattern from round 8.
+        bufferProgress.BindValueChanged(e => onUpdateThread(() => buffer.Width = (float)Math.Clamp(e.NewValue, 0, 1)), true);
+        bufferActive.BindValueChanged(e => onUpdateThread(() => buffer.FadeTo(e.NewValue ? 1 : 0, 200, Easing.OutQuint)), true);
+    }
+
+    /// <summary>Runs a drawable mutation on the update thread: straight through when already on it
+    /// (the live path), scheduled when not (the tracker's off-thread teardown Clear()).</summary>
+    private void onUpdateThread(Action mutate)
+    {
+        if (ThreadSafety.IsUpdateThread)
+            mutate();
+        else
+            Schedule(mutate);
     }
 
     protected override bool OnHover(HoverEvent e)
