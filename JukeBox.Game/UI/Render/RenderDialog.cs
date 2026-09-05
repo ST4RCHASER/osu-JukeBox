@@ -58,9 +58,6 @@ public partial class RenderDialog : FocusedOverlayContainer
     /// fall within it; 0 means "unknown" and skips that bound (a bare test host).</summary>
     public double SongLengthMs { get; private set; }
 
-    [Resolved]
-    private GameHost host { get; set; } = null!;
-
     private Container panelCard = null!;
 
     private BasicDropdown<RenderPreset> presetDropdown = null!;
@@ -81,7 +78,7 @@ public partial class RenderDialog : FocusedOverlayContainer
     // the preset→field fill from re-entering each other.
     private bool updating;
 
-    private ISystemFileSelector? fileSelector;
+    private SaveLocationOverlay saveOverlay = null!;
 
     public RenderDialog()
     {
@@ -149,7 +146,12 @@ public partial class RenderDialog : FocusedOverlayContainer
                     },
                 },
             },
+            // The in-app save-location browser, over the panel: Browse… opens it, its choice lands
+            // through ApplyBrowsedPath (the same validation as typing), Cancel/Escape land nothing.
+            saveOverlay = new SaveLocationOverlay(),
         };
+
+        saveOverlay.PathChosen += path => ApplyBrowsedPath(path);
 
         wireField(resolutionBox);
         wireField(fpsBox);
@@ -282,53 +284,17 @@ public partial class RenderDialog : FocusedOverlayContainer
 
     private void browse()
     {
-        // A real SAVE panel wherever the platform has one (see NativeSaveDialog — macOS osascript,
-        // Windows the stock dialog via PowerShell, Linux zenity/kdialog): the framework's system
-        // file selector never presents on any desktop OS, which is what left this button dead.
-        // Seeded with the current field's folder and file name so the panel opens where the user
-        // already is.
-        if (Import.NativeSaveDialog.IsAvailable)
-        {
-            string current = (pathBox.Text ?? string.Empty).Trim();
-            string? directory = safeDirectoryName(current);
-            string? fileName = current.Length == 0 ? null : Path.GetFileName(current);
-
-            _ = browseNativeAsync(directory, fileName);
-            return;
-        }
-
-        // Elsewhere the framework's open-file dialog stands in for a save picker: the user
-        // names/points at the location, and its full path becomes the save path. Where the platform
-        // has no native selector either, the text field is the way to set it.
-        if (fileSelector == null)
-        {
-            fileSelector = host.CreateSystemFileSelector(new[] { ".mp4", ".webm", ".mov" });
-
-            // Subscribed once, on creation — a handler added per click would apply a pick as many
-            // times as Browse… had ever been pressed.
-            if (fileSelector != null)
-                fileSelector.Selected += file => Schedule(() => ApplyBrowsedPath(file.FullName));
-        }
-
-        if (fileSelector == null)
-        {
-            Logger.Log("No native file selector on this platform — type the save path instead.");
-            return;
-        }
-
-        fileSelector.Present();
-    }
-
-    private async System.Threading.Tasks.Task browseNativeAsync(string? directory, string? fileName)
-    {
-        string? chosen = await Import.NativeSaveDialog.PickSaveAsync(directory, fileName).ConfigureAwait(false);
-        Schedule(() => ApplyBrowsedPath(chosen));
+        // The IN-APP save browser (see SaveLocationOverlay) — one Browse… behaviour in the app's
+        // own look on every platform, seeded with the current field's folder and file name so it
+        // opens where the user already is. A choice lands through ApplyBrowsedPath, the same
+        // validation path typing takes; a cancel changes nothing.
+        saveOverlay.Open(pathBox.Text);
     }
 
     /// <summary>
     /// Lands a browsed path in the save-location field and revalidates, exactly as typing it would
-    /// have. A null/blank path (the user cancelled the panel) changes nothing. Internal for the
-    /// tests (JukeBox.Game.Tests has InternalsVisibleTo).
+    /// have. A null/blank path (a cancelled browse) changes nothing. Internal for the tests
+    /// (JukeBox.Game.Tests has InternalsVisibleTo).
     /// </summary>
     internal void ApplyBrowsedPath(string? path)
     {
@@ -337,24 +303,6 @@ public partial class RenderDialog : FocusedOverlayContainer
 
         pathBox.Text = path.Trim();
         onUserEdit();
-    }
-
-    /// <summary>The directory portion of the field's current text, or null when it has none (or is
-    /// not a well-formed path at all — half-typed text must not break the Browse button).</summary>
-    private static string? safeDirectoryName(string path)
-    {
-        if (string.IsNullOrWhiteSpace(path))
-            return null;
-
-        try
-        {
-            string? directory = Path.GetDirectoryName(path);
-            return string.IsNullOrEmpty(directory) ? null : directory;
-        }
-        catch (ArgumentException)
-        {
-            return null;
-        }
     }
 
     // ---- field plumbing -------------------------------------------------------------------------
@@ -560,6 +508,10 @@ public partial class RenderDialog : FocusedOverlayContainer
 
     protected override void PopOut()
     {
+        // The save browser must not survive the dialog closing around it — reopening the dialog
+        // later would find it already showing.
+        saveOverlay.Hide();
+
         this.FadeOut(Theme.DurationFast, Theme.EaseExit);
         panelCard.ScaleTo(Theme.PopScale, Theme.DurationFast, Theme.EaseExit);
     }
@@ -588,5 +540,7 @@ public partial class RenderDialog : FocusedOverlayContainer
     internal AccentTextBox AudioBox => audioBox;
     internal TextButton RenderButton => renderButton;
     internal TextButton CancelButton => cancelButton;
+    internal TextButton BrowseButton => browseButton;
+    internal SaveLocationOverlay SaveOverlay => saveOverlay;
     internal IReadOnlyDictionary<RenderField, SpriteText> ErrorTexts => errorTexts;
 }

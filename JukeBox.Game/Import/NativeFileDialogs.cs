@@ -10,12 +10,12 @@ using osu.Framework.Logging;
 namespace JukeBox.Game.Import;
 
 /// <summary>
-/// The shared plumbing under <see cref="NativeOpenDialog"/> and <see cref="NativeSaveDialog"/>: one
-/// process runner for whichever tool a platform's dialog is driven through (macOS <c>osascript</c>,
-/// Windows PowerShell's WinForms dialogs, Linux <c>zenity</c>/<c>kdialog</c>), plus the PATH probe
-/// that decides whether a Linux desktop has a dialog tool at all. Every tool speaks the same simple
-/// protocol — chosen paths on stdout, one per line, a cancel being a non-zero exit or no output —
-/// so the dialogs only differ in the argv they build (pure, per-platform, unit-tested).
+/// The shared plumbing under <see cref="NativeOpenDialog"/>: one process runner for whichever tool
+/// a platform's dialog is driven through (macOS <c>osascript</c>, Windows PowerShell's WinForms
+/// dialogs, Linux <c>zenity</c>/<c>kdialog</c>), plus the PATH probe that decides whether a Linux
+/// desktop has a dialog tool at all. Every tool speaks the same simple protocol — chosen paths on
+/// stdout, one per line, a cancel being a non-zero exit or no output — so the dialogs only differ
+/// in the argv they build (pure, per-platform, unit-tested).
 /// </summary>
 internal static class NativeFileDialogs
 {
