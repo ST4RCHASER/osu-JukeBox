@@ -282,10 +282,32 @@ public partial class RenderDialog : FocusedOverlayContainer
 
     private void browse()
     {
-        // The system open-file dialog stands in for a save picker (osu!framework exposes no native
-        // save dialog): the user names/points at the location, and its full path becomes the save
-        // path. Where the platform has no native selector, the text field is the way to set it.
-        fileSelector ??= host.CreateSystemFileSelector(new[] { ".mp4", ".webm", ".mov" });
+        // A real SAVE panel on macOS, driven through osascript exactly like File → Open…'s picker
+        // (see NativeSaveDialog): the framework's system file selector never presents a panel on
+        // macOS, which is what left this button dead. Seeded with the current field's folder and
+        // file name so the panel opens where the user already is.
+        if (Import.NativeSaveDialog.IsAvailable)
+        {
+            string current = (pathBox.Text ?? string.Empty).Trim();
+            string? directory = safeDirectoryName(current);
+            string? fileName = current.Length == 0 ? null : Path.GetFileName(current);
+
+            _ = browseNativeAsync(directory, fileName);
+            return;
+        }
+
+        // Elsewhere the framework's open-file dialog stands in for a save picker: the user
+        // names/points at the location, and its full path becomes the save path. Where the platform
+        // has no native selector either, the text field is the way to set it.
+        if (fileSelector == null)
+        {
+            fileSelector = host.CreateSystemFileSelector(new[] { ".mp4", ".webm", ".mov" });
+
+            // Subscribed once, on creation — a handler added per click would apply a pick as many
+            // times as Browse… had ever been pressed.
+            if (fileSelector != null)
+                fileSelector.Selected += file => Schedule(() => ApplyBrowsedPath(file.FullName));
+        }
 
         if (fileSelector == null)
         {
@@ -293,13 +315,45 @@ public partial class RenderDialog : FocusedOverlayContainer
             return;
         }
 
-        fileSelector.Selected += file => Schedule(() =>
-        {
-            pathBox.Text = file.FullName;
-            onUserEdit();
-        });
-
         fileSelector.Present();
+    }
+
+    private async System.Threading.Tasks.Task browseNativeAsync(string? directory, string? fileName)
+    {
+        string? chosen = await Import.NativeSaveDialog.PickSaveAsync(directory, fileName).ConfigureAwait(false);
+        Schedule(() => ApplyBrowsedPath(chosen));
+    }
+
+    /// <summary>
+    /// Lands a browsed path in the save-location field and revalidates, exactly as typing it would
+    /// have. A null/blank path (the user cancelled the panel) changes nothing. Internal for the
+    /// tests (JukeBox.Game.Tests has InternalsVisibleTo).
+    /// </summary>
+    internal void ApplyBrowsedPath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return;
+
+        pathBox.Text = path.Trim();
+        onUserEdit();
+    }
+
+    /// <summary>The directory portion of the field's current text, or null when it has none (or is
+    /// not a well-formed path at all — half-typed text must not break the Browse button).</summary>
+    private static string? safeDirectoryName(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return null;
+
+        try
+        {
+            string? directory = Path.GetDirectoryName(path);
+            return string.IsNullOrEmpty(directory) ? null : directory;
+        }
+        catch (ArgumentException)
+        {
+            return null;
+        }
     }
 
     // ---- field plumbing -------------------------------------------------------------------------
