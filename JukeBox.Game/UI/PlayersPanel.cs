@@ -92,6 +92,7 @@ public partial class PlayersPanel : CompositeDrawable
     };
 
     private SettingsEnumDropdown<MultiReplayMode> multiReplayModeDropdown = null!;
+    private SettingsCheckbox fastSimulationCheckbox = null!;
     private SettingsEnumDropdown<KnockoutMode> knockoutModeDropdown = null!;
     private SettingsEnumDropdown<KnockoutSort> knockoutSortDropdown = null!;
     private SettingsCheckbox knockoutLiveSortCheckbox = null!;
@@ -161,6 +162,13 @@ public partial class PlayersPanel : CompositeDrawable
         modsByAcronym = new OsuRuleset().CreateAllMods().ToDictionary(m => m.Acronym, m => m, StringComparer.Ordinal);
 
         multiReplayModeDropdown = new SettingsEnumDropdown<MultiReplayMode> { LabelText = "Multiple replays" };
+        // Both modes: replay preloads recorded by the fast parallel judge instead of the exact
+        // drawable simulation (see JukeBoxSetting.FastSimulation for why exact is the default).
+        fastSimulationCheckbox = new SettingsCheckbox
+        {
+            LabelText = "Fast simulation",
+            TooltipText = "Record replays on every CPU core with the fast judge — scores may differ slightly from exact gameplay on extreme plays",
+        };
         knockoutModeDropdown = new SettingsEnumDropdown<KnockoutMode> { LabelText = "Knockout" };
         knockoutSortDropdown = new SettingsEnumDropdown<KnockoutSort> { LabelText = "Rank players by" };
         knockoutLiveSortCheckbox = new SettingsCheckbox { LabelText = "Re-order the board as they play" };
@@ -177,6 +185,7 @@ public partial class PlayersPanel : CompositeDrawable
         var content = new List<Drawable>
         {
             multiReplayModeDropdown,
+            fastSimulationCheckbox,
             knockoutModeDropdown,
             knockoutSortDropdown,
             knockoutLiveSortCheckbox,
@@ -315,6 +324,7 @@ public partial class PlayersPanel : CompositeDrawable
         // Show only the settings that apply to the chosen mode (rail settings in combine, per-player
         // skin/mods in grid), re-run whenever the mode changes.
         multiReplayModeDropdown.Current.BindValueChanged(e => updateModeVisibility(e.NewValue), true);
+        fastSimulationCheckbox.Current = config.GetBindable<bool>(JukeBoxSetting.FastSimulation);
         knockoutModeDropdown.Current = config.GetBindable<KnockoutMode>(JukeBoxSetting.KnockoutMode);
         knockoutSortDropdown.Current = config.GetBindable<KnockoutSort>(JukeBoxSetting.KnockoutSortBy);
         knockoutLiveSortCheckbox.Current = config.GetBindable<bool>(JukeBoxSetting.KnockoutLiveSort);
@@ -553,6 +563,8 @@ public partial class PlayersPanel : CompositeDrawable
         => target == target_all ? currentPlayers : new[] { currentPlayers[target] };
 
     // ---- test hooks (JukeBox.Game.Tests has InternalsVisibleTo) ----
+
+    internal SettingsCheckbox FastSimulationCheckbox => fastSimulationCheckbox;
 
     internal SettingsEnumDropdown<MultiReplayMode> MultiReplayModeDropdown => multiReplayModeDropdown;
     internal SettingsEnumDropdown<KnockoutMode> KnockoutModeDropdown => knockoutModeDropdown;

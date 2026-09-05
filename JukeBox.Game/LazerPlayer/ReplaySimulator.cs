@@ -4,9 +4,11 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Threading.Tasks;
 using JukeBox.Game.Replays;
 using osu.Framework.Allocation;
 using osu.Framework.Graphics;
+using osu.Framework.Logging;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Timing;
 using osu.Game.Beatmaps;
@@ -55,18 +57,19 @@ public partial class ReplaySimulator : CompositeDrawable
     private readonly Dictionary<string, DifficultyAttributes> attributeCache = new Dictionary<string, DifficultyAttributes>(StringComparer.Ordinal);
 
     private IWorkingBeatmap working = null!;
-    private Ruleset ruleset = null!;
 
     /// <summary>Whether this map is judged analytically (osu) rather than by the drawable renderer.</summary>
     private bool analytic;
 
     /// <summary>
-    /// Opt-in: use the fast analytic judge for osu maps. OFF by default — the DRAWABLE renderer is the
-    /// shipping path because its numbers are exactly lazer's. The analytic judge now matches the
-    /// drawable oracle on the real beatmap to the point that grades and combos agree and accuracy is
-    /// within ~1%, but that last ~1% on hard plays is not yet bit-exact, so it stays behind this flag
-    /// until it fully matches (then the default can flip). Kept in-tree and validated against the
-    /// oracle so the remaining gap (circle timing-grade + slider-tick edges) can be closed later.
+    /// Opt-in: use the fast analytic judge for osu maps (also reachable for the user as the "Fast
+    /// simulation" setting). OFF by default — the DRAWABLE renderer is the shipping path because
+    /// its numbers are exactly lazer's. Re-validated against the drawable oracle on the real map
+    /// under StableScoreV1 scoring (beatmap 2809623, five historically-diffed top plays): grades
+    /// all match, NM/HD plays land within ~0.5% score and ≤21 combo, but hard HR plays still drift
+    /// (up to ~9% score / 88 combo on one HR play — the judge over-credits slider tracking under
+    /// HR), so exact stays the default and the setting carries a "may differ" warning. Kept
+    /// in-tree and validated against the oracle so the HR slider-tracking gap can be closed later.
     /// </summary>
     internal bool UseAnalyticJudge { get; init; }
 
@@ -158,6 +161,12 @@ public partial class ReplaySimulator : CompositeDrawable
     [Resolved(canBeNull: true)]
     private Replays.PlayerOverrideStore? overrideStore { get; set; }
 
+    /// <summary>The user's "Fast simulation" preference reads as <see cref="UseAnalyticJudge"/> — a
+    /// caller can still force the analytic path regardless (the grid's past-the-cap recordings).
+    /// Null in a bare test host, where only the explicit flag applies.</summary>
+    [Resolved(canBeNull: true)]
+    private Configuration.JukeBoxConfigManager? config { get; set; }
+
     public ReplaySimulator(string osuFile, IReadOnlyList<ReplayAttachment> replays)
     {
         this.osuFile = osuFile;
@@ -175,23 +184,35 @@ public partial class ReplaySimulator : CompositeDrawable
     {
         base.LoadComplete();
 
+        preloadElapsed.Start();
+
         working = new FlatWorkingBeatmap(osuFile);
 
         // A replay is never converted (its frames belong to the ruleset it was played on), so an osu
         // beatmap means osu replays — and osu is the only ruleset with an analytic judge here. The
         // other three fall back to the drawable simulation, as does the forced-oracle test seam.
         bool osu = working.BeatmapInfo.Ruleset.OnlineID == 0;
-        analytic = osu && UseAnalyticJudge && !ForceDrawableSimulation;
+        bool wantAnalytic = UseAnalyticJudge || config?.Get<bool>(Configuration.JukeBoxSetting.FastSimulation) == true;
+        analytic = osu && wantAnalytic && !ForceDrawableSimulation;
 
         if (analytic)
         {
-            ruleset = new OsuRuleset();
-
             foreach (var replay in replays)
             {
                 var job = new AnalyticJob(replay);
                 analyticJobs.Add(job);
                 timelines.Add(job.Timeline);
+            }
+
+            // Every job fans out to the thread pool AT ONCE — each play's judge + record is pure
+            // compute over private state, so 46 replays saturate every core instead of trickling
+            // through one. Only the override lookup happens here (the store is update-thread
+            // state); results land back on the update thread (see recordOnWorker).
+            foreach (var job in analyticJobs)
+            {
+                var overrideMods = overrideStore?.Peek(job.Replay)?.Mods;
+                var scheduled = job;
+                Task.Run(() => recordOnWorker(scheduled, overrideMods));
             }
 
             return;
@@ -221,18 +242,29 @@ public partial class ReplaySimulator : CompositeDrawable
         }
     }
 
+    /// <summary>Wall time from load to every play recorded, logged once — the number the user's
+    /// "Simulating replays…" wait actually is.</summary>
+    private readonly Stopwatch preloadElapsed = new Stopwatch();
+    private bool completionLogged;
+
     protected override void Update()
     {
         base.Update();
 
         if (AllComplete)
-            return;
-
-        if (analytic)
         {
-            runAnalyticBudget();
+            if (!completionLogged)
+            {
+                completionLogged = true;
+                Logger.Log($"[simulate] {timelines.Count} play(s) recorded in {preloadElapsed.ElapsedMilliseconds:N0}ms ({(analytic ? "parallel analytic" : "drawable")})");
+            }
+
             return;
         }
+
+        // The analytic path records on the thread pool (see LoadComplete); nothing to drive here.
+        if (analytic)
+            return;
 
         // Drawable path: flat out to completion, spending a big slice every frame on whichever play is
         // furthest behind until every timeline is recorded.
@@ -253,48 +285,60 @@ public partial class ReplaySimulator : CompositeDrawable
         }
     }
 
-    /// <summary>Records analytic jobs within this frame's budget — at least one per frame so progress
-    /// is always made, then as many more as fit, since each job is a whole play recorded in one go.</summary>
-    private void runAnalyticBudget()
+    /// <summary>
+    /// One play's recording, on a THREAD-POOL worker: everything it touches is its own — a private
+    /// working beatmap (decoding is not safe to share), a private ruleset, and a SCRATCH timeline —
+    /// except the difficulty-attribute cache, whose access <see cref="ReplayPerformance.Create"/>
+    /// synchronises. The finished points are handed back to the update thread and copied into the
+    /// job's PUBLIC timeline there, so the boards (which read timelines every frame on the update
+    /// thread) never see a timeline mid-write from another thread.
+    /// </summary>
+    private void recordOnWorker(AnalyticJob job, IReadOnlyList<Mod>? overrideMods)
     {
-        var spent = Stopwatch.StartNew();
-        bool first = true;
-
-        foreach (var job in analyticJobs)
+        try
         {
-            if (job.Recorded)
-                continue;
+            var score = job.Replay.Score;
 
-            if (!first && spent.Elapsed.TotalMilliseconds >= PreloadBudgetMs)
-                break;
+            // A replay that never decoded has no frames to judge; record it as an instantly-complete
+            // empty play rather than leaving it pending forever.
+            if (score == null)
+            {
+                Schedule(() =>
+                {
+                    job.Timeline.MarkComplete(0);
+                    job.Recorded = true;
+                });
+                return;
+            }
 
-            first = false;
-            record(job);
+            // The replay's own recorded mods, unless the user set a per-player override for this one
+            // — the same rule the drawable layer follows under UseRecordedReplayModsOnly.
+            var mods = overrideMods ?? Replays.ReplayMods.ForGameplay(score);
+
+            var scratch = new ReplayTimeline();
+            var recorded = AnalyticReplayRecorder.Record(new FlatWorkingBeatmap(osuFile), new OsuRuleset(), mods, score, attributeCache, scratch);
+
+            Schedule(() =>
+            {
+                foreach (var point in scratch.Points)
+                    job.Timeline.Record(point);
+
+                job.Timeline.MarkComplete(scratch.SimulatedTo);
+                job.Mods = recorded.Mods;
+                job.ScoringMode = recorded.ScoringMode;
+                job.Recorded = true;
+            });
         }
-    }
-
-    private void record(AnalyticJob job)
-    {
-        var score = job.Replay.Score;
-
-        // A replay that never decoded has no frames to judge; record it as an instantly-complete empty
-        // play rather than leaving it pending forever.
-        if (score == null)
+        catch (Exception e)
         {
-            job.Timeline.MarkComplete(0);
-            job.Recorded = true;
-            return;
+            // One failed play must not hang the whole preload at N-1 of N forever.
+            Logger.Error(e, "[simulate] analytic recording failed for one play");
+            Schedule(() =>
+            {
+                job.Timeline.MarkComplete(0);
+                job.Recorded = true;
+            });
         }
-
-        // The replay's own recorded mods, unless the user set a per-player override for this one — the
-        // same rule the drawable layer follows under UseRecordedReplayModsOnly.
-        var mods = overrideStore?.Peek(job.Replay)?.Mods ?? Replays.ReplayMods.ForGameplay(score);
-
-        var recorded = AnalyticReplayRecorder.Record(working, ruleset, mods, score, attributeCache, job.Timeline);
-
-        job.Mods = recorded.Mods;
-        job.ScoringMode = recorded.ScoringMode;
-        job.Recorded = true;
     }
 
     /// <summary>The incomplete drawable play whose recording has got the least far, or null when all

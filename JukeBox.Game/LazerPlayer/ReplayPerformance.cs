@@ -47,7 +47,13 @@ public sealed class ReplayPerformance
         template.Accuracy = score.Accuracy.Value;
         template.MaxCombo = score.HighestCombo.Value;
         template.TotalScore = score.TotalScore.Value;
-        template.Statistics = new Dictionary<HitResult, int>(score.Statistics);
+
+        // Refilled in place rather than reallocated: this runs once per JUDGEMENT per play, and the
+        // preload records dozens of plays — a fresh dictionary each call is real GC pressure there.
+        template.Statistics.Clear();
+
+        foreach (var (result, count) in score.Statistics)
+            template.Statistics[result] = count;
 
         try
         {
@@ -79,10 +85,21 @@ public sealed class ReplayPerformance
             // same mods in a different order are recognised as the same work.
             string key = string.Join("|", mods.Select(m => m.Acronym).OrderBy(a => a, StringComparer.Ordinal));
 
-            if (!cache.TryGetValue(key, out var attributes))
+            // The cache is shared across plays, and the analytic preload records plays on the THREAD
+            // POOL — so the dictionary is only ever touched under its own lock. The compute itself
+            // runs unlocked: workers racing on the same brand-new key each compute it (the cores are
+            // otherwise idle at that moment, and wall time is one compute) and the first store wins.
+            DifficultyAttributes? attributes;
+
+            lock (cache)
+                cache.TryGetValue(key, out attributes);
+
+            if (attributes == null)
             {
                 attributes = ruleset.CreateDifficultyCalculator(beatmap).Calculate(mods);
-                cache[key] = attributes;
+
+                lock (cache)
+                    cache.TryAdd(key, attributes);
             }
 
             var template = new ScoreInfo

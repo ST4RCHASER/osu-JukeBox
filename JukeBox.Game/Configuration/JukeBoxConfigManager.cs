@@ -236,6 +236,16 @@ public enum JukeBoxSetting
     MultiReplayMode,
 
     /// <summary>
+    /// Record replay preloads with the fast geometric judge (every play judged in parallel across
+    /// CPU cores, no hidden gameplay renderers) instead of the exact drawable simulation.
+    /// OFF by default: the fast judge matches grades and near-matches everything else, but on
+    /// extreme plays its score can still drift by a few percent from real gameplay's (validated
+    /// against the drawable oracle on real top plays — see ReplaySimulator's remarks), and exact
+    /// numbers win by default.
+    /// </summary>
+    FastSimulation,
+
+    /// <summary>
     /// When a player stops being in the running in combine mode
     /// (<see cref="Game.Replays.KnockoutMode"/>). Defaults to nobody ever being eliminated: the
     /// user dropped those replays in to watch them, and a mode that stops showing most of them
@@ -599,6 +609,9 @@ public class JukeBoxConfigManager : IniConfigManager<JukeBoxSetting>
         // "how did these plays differ" at a glance, where the grid answers "what did each look
         // like". Grid is one dropdown away.
         SetDefault(JukeBoxSetting.MultiReplayMode, Replays.MultiReplayMode.Combine);
+
+        // Exact numbers over speed by default — see the FastSimulation doc remarks.
+        SetDefault(JukeBoxSetting.FastSimulation, false);
 
         // Elimination OFF by default. The user dropped those replays in to watch them, and a rule
         // that removes most of them in the first chorus has to be asked for. Live sorting IS on,

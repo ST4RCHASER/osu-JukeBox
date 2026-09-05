@@ -8,6 +8,7 @@ using System.Text;
 using JukeBox.Game.LazerPlayer;
 using JukeBox.Game.Replays;
 using JukeBox.Game.Tests.Import;
+using osu.Framework.Allocation;
 using osu.Framework.Timing;
 using osu.Game.Beatmaps;
 using osu.Game.Rulesets.Difficulty;
@@ -518,6 +519,29 @@ namespace JukeBox.Game.Tests.Visual
             AddAssert("and every play is a real recording", () =>
                 simulator.Timelines.Count == 3 && simulator.Timelines.All(t => t.Points.Count > 0));
         }
+
+        /// <summary>
+        /// The user-facing "Fast simulation" setting IS the analytic opt-in: with it on, a plain
+        /// simulator (no explicit flag) records analytically — no renderer, no steps — and with it
+        /// off the exact drawable path runs, exactly as before the setting existed.
+        /// </summary>
+        [Test]
+        public void TheFastSimulationSettingDrivesTheAnalyticPath()
+        {
+            AddStep("turn Fast simulation on", () => config.SetValue(JukeBox.Game.Configuration.JukeBoxSetting.FastSimulation, true));
+            AddStep("simulate with no explicit flag", () => simulate(replay("fast")));
+            AddUntilStep("recorded", () => simulator.AllComplete);
+            AddAssert("analytically — no renderer, no steps", () => simulator.LiveRenderers == 0 && simulator.StepsRun == 0);
+            AddAssert("and it is a real recording", () => simulator.Timelines[0].Points.Count > 0);
+
+            AddStep("turn Fast simulation off", () => config.SetValue(JukeBox.Game.Configuration.JukeBoxSetting.FastSimulation, false));
+            AddStep("simulate again", () => simulate(replay("exact")));
+            AddUntilStep("recorded", () => simulator.AllComplete);
+            AddAssert("through the drawable renderer", () => simulator.StepsRun > 0);
+        }
+
+        [Resolved]
+        private JukeBox.Game.Configuration.JukeBoxConfigManager config { get; set; } = null!;
 
         /// <summary>
         /// Each recorded judgement carries the playfield position of the object it landed on, so the
