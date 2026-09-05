@@ -1490,7 +1490,13 @@ namespace JukeBox.Game.Tests.Visual
         public void OpenFilesMenuActionRoutesThroughTheDropImporter()
         {
             FileImportOverlay picker = null!;
-            AddStep("grab the file-import overlay", () => picker = screen.ChildrenOfType<FileImportOverlay>().Single());
+            AddStep("grab the file-import overlay", () =>
+            {
+                // The in-app picker path (every platform without a native dialog): a real OS panel
+                // cannot be driven from here and would sit over the test host.
+                screen.UseNativeOpenDialog = false;
+                picker = screen.ChildrenOfType<FileImportOverlay>().Single();
+            });
 
             AddAssert("starts hidden", () => picker.State.Value == Visibility.Hidden);
 
@@ -1500,9 +1506,12 @@ namespace JukeBox.Game.Tests.Visual
 
             // Deliberately an extension the importer rejects: it reports the rejection without
             // touching storage, the mirror or the queue, so this asserts the wiring and nothing else.
-            string unimportable = Path.Combine(tmp, "not-a-beatmap.txt");
+            // Resolved inside the step: `tmp` is created with the scene's dependencies, which have
+            // not been built yet when this method merely REGISTERS its steps (run in isolation).
+            string unimportable = null!;
             AddStep("pick a file the importer can't take", () =>
             {
+                unimportable = Path.Combine(tmp, "not-a-beatmap.txt");
                 File.WriteAllText(unimportable, "hello");
                 picker.Selector.CurrentFile.Value = new FileInfo(unimportable);
             });

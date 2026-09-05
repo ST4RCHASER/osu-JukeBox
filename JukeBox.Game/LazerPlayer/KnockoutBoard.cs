@@ -542,6 +542,14 @@ public partial class KnockoutBoard : CompositeDrawable
         /// the entrant carried none.</summary>
         internal string VersionText => version.Text.ToString()!;
 
+        internal float NameFontSize => playerName.Font.Size;
+
+        internal float ModsFontSize => mods.Font.Size;
+
+        /// <summary>Test hook: the size the version tag is drawn at — the MODS' size (one more mod
+        /// acronym), never the name's.</summary>
+        internal float VersionFontSize => version.Font.Size;
+
         internal string NameText => playerName.Text.ToString()!;
 
         /// <summary>Test hook: whether this row is currently drawn at all (its resting alpha) — a
@@ -804,6 +812,8 @@ public partial class KnockoutBoard : CompositeDrawable
 
             playerName.Font = playerName.Font.With(size: fs);
             mods.Font = mods.Font.With(size: fs * 0.8f);
+            // The version tag is one more mod acronym, so it takes the mods' size — not the name's.
+            version.Font = version.Font.With(size: fs * 0.8f);
             judgement.Font = judgement.Font.With(size: fs * 0.85f);
             nameFlow.Spacing = new Vector2(fs * 0.28f, 0);
 

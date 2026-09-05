@@ -194,6 +194,10 @@ namespace JukeBox.Game.Tests.Visual
                 rowFor(0).VersionText == "+V1" && rowFor(1).VersionText == "+Classic");
             AddAssert("the name column still ends before the combo column", () =>
                 board.Rows.All(r => r.NameRightEdge <= r.ComboLeftEdge + 0.5f));
+            // "Same font/size/weight as the other mod acronyms": the tag takes the mods' size, which is
+            // smaller than the name's — a tag at name size reads as a heading, not a mod.
+            AddAssert("the version tag is drawn at the mods' size, not the name's", () =>
+                board.Rows.All(r => r.VersionFontSize == r.ModsFontSize && r.VersionFontSize < r.NameFontSize));
         }
 
         /// <summary>

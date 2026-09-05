@@ -145,7 +145,9 @@ public partial class MenuBar : CompositeDrawable
             new Item { Label = "Open…", Shortcut = cmd + "O", Action = () => Actions.OpenFiles?.Invoke() },
             new Item { Label = "Render…", Action = () => Actions.OpenRender?.Invoke(), Enabled = Actions.RenderEnabled },
             Item.Separator,
-            new Item { Label = "Quit", Shortcut = cmd + "Q", Action = () => Actions.Quit?.Invoke() },
+            // ⌘Q is macOS's own quit and reaches the host as a close; nothing binds Ctrl+Q to quit
+            // elsewhere (Ctrl+Q focuses the Playback tab), so only the Mac shows a chip.
+            new Item { Label = "Quit", Shortcut = RuntimeInfo.IsApple ? "⌘Q" : null, Action = () => Actions.Quit?.Invoke() },
         });
 
         addMenu("Playback", new[]

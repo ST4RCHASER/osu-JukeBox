@@ -355,6 +355,34 @@ namespace JukeBox.Game.Tests.Visual
         }
 
         /// <summary>
+        /// "Flip HR replay" (item 6) is LIVE: with it on, an HR play's cursor is mirrored onto the
+        /// NM driver's chart; turning it off un-mirrors that same mounted cursor in place — no rebuild,
+        /// no re-simulation (the cursor count is unchanged). It used to be read once at attach, so the
+        /// toggle did nothing until the next reload.
+        /// </summary>
+        [Test]
+        public void TogglingFlipHrReplayReMirrorsTheMountedCursorsInPlace()
+        {
+            AddStep("option on; build NM driver + HR player", () =>
+            {
+                config.SetValue(JukeBox.Game.Configuration.JukeBoxSetting.FlipHrReplay, true);
+                buildWithMods();
+            });
+            AddUntilStep("cursors attached", () => combine.CursorsAttached == 2);
+            AddAssert("the HR player's cursor is mirrored, the driver's is not", () =>
+                combine.IsCursorFlipped(1) && !combine.IsCursorFlipped(0));
+
+            AddStep("turn the option off", () => config.SetValue(JukeBox.Game.Configuration.JukeBoxSetting.FlipHrReplay, false));
+            AddAssert("that same cursor is no longer mirrored, and nothing was rebuilt", () =>
+                !combine.IsCursorFlipped(1) && combine.CursorsAttached == 2);
+
+            AddStep("restore the default", () => config.SetValue(JukeBox.Game.Configuration.JukeBoxSetting.FlipHrReplay, true));
+        }
+
+        [Resolved]
+        private JukeBox.Game.Configuration.JukeBoxConfigManager config { get; set; } = null!;
+
+        /// <summary>
         /// The rendered chart runs under the DRIVING player's own recorded mods, matching how their
         /// score is computed. Letting the shared Chart-tab selection edit it would put the play on
         /// screen and the numbers beside it under different mods.

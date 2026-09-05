@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Linq;
 using JukeBox.Game.Replays;
 using osu.Framework.Allocation;
+using osu.Framework.Bindables;
 using osu.Framework.Extensions.Color4Extensions;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
@@ -270,9 +271,6 @@ public partial class MultiReplayCombine : CompositeDrawable
         // and must be mirrored (y -> 384 - y in playfield space). With "Flip HR replay" on (default),
         // that is what syncs every cursor to the one shared chart — most often an HR play's cursor
         // flipped back onto a non-HR chart. Off leaves the raw recorded positions.
-        bool flipEnabled = config?.Get<bool>(Configuration.JukeBoxSetting.FlipHrReplay) ?? false;
-        bool driverHr = flipEnabled && hasHardRock(replays.FirstOrDefault());
-
         for (int i = 0; i < replays.Count; i++)
         {
             var replay = replays[i].Score?.Replay;
@@ -286,8 +284,7 @@ public partial class MultiReplayCombine : CompositeDrawable
             // The bare player name, NOT the "+mods" display name — the break/death cue on the
             // playfield shows who, not what they played, and "name +CL" reads as clutter.
             string cursorName = replays[i].PlayerName.Length > 0 ? replays[i].PlayerName : "unknown";
-            bool flipY = flipEnabled && hasHardRock(replays[i]) != driverHr;
-            var cursor = new PlayerCursor(cursorName, replay.Frames, effectiveColour(i)) { FlipY = flipY };
+            var cursor = new PlayerCursor(cursorName, replay.Frames, effectiveColour(i)) { FlipY = flipFor(i) };
 
             cursors.Add(chart.AddPlayerCursor(cursor) ? cursor : null);
 
@@ -295,6 +292,29 @@ public partial class MultiReplayCombine : CompositeDrawable
                 CursorsAttached++;
         }
     }
+
+    /// <summary>Whether player <paramref name="index"/>'s cursor is mirrored onto the chart right now —
+    /// the option on, and their HR-ness differing from the driver's (see <see cref="attachCursors"/>).</summary>
+    private bool flipFor(int index)
+    {
+        bool flipEnabled = flipHrReplay.Value;
+        bool driverHr = flipEnabled && hasHardRock(replays.FirstOrDefault());
+        return flipEnabled && hasHardRock(replays[index]) != driverHr;
+    }
+
+    /// <summary>Re-applies the flip to the cursors already on the chart, so toggling the option
+    /// takes effect where the user is looking rather than on the next rebuild.</summary>
+    private void applyFlip()
+    {
+        for (int i = 0; i < cursors.Count; i++)
+        {
+            if (cursors[i] is { } cursor)
+                cursor.FlipY = flipFor(i);
+        }
+    }
+
+    /// <summary>Test hook: whether player <paramref name="index"/>'s cursor is currently mirrored.</summary>
+    internal bool IsCursorFlipped(int index) => cursors.Count > index && cursors[index]?.FlipY == true;
 
     /// <summary>
     /// Grows the surviving cursors as the field thins and fades out the eliminated. In showcase
@@ -487,9 +507,17 @@ public partial class MultiReplayCombine : CompositeDrawable
         return overrideStore?.EffectiveCursorColour(replays[index], fallback) ?? fallback;
     }
 
+    /// <summary>The "Flip HR replay" option, bound live: a toggle re-mirrors the mounted cursors in
+    /// place (<see cref="applyFlip"/>) — no rebuild, no re-simulation. True by default so a bare test
+    /// host (no config) behaves like the shipped default.</summary>
+    private readonly Bindable<bool> flipHrReplay = new Bindable<bool>(true);
+
     protected override void LoadComplete()
     {
         base.LoadComplete();
+
+        config?.BindWith(Configuration.JukeBoxSetting.FlipHrReplay, flipHrReplay);
+        flipHrReplay.BindValueChanged(_ => applyFlip());
 
         if (overrideStore != null)
             overrideStore.Changed += onOverrideChanged;

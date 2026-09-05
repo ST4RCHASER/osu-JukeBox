@@ -151,7 +151,7 @@ public partial class PlayerCursor : CompositeDrawable
     /// see MultiReplayCombine.attachCursors and the "Flip HR replay" option. Applies only to the
     /// replay-frame cursor path; a death name placed at a chart hit object is already in chart space.
     /// </summary>
-    internal bool FlipY { get; init; }
+    internal bool FlipY { get; set; }
 
     /// <summary>The recorded position, mirrored vertically when <see cref="FlipY"/> is set.</summary>
     private Vector2 oriented(Vector2 position)
