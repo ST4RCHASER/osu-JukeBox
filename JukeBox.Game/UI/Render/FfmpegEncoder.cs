@@ -102,10 +102,12 @@ public sealed class FfmpegEncoder : IDisposable
     /// Builds the full ffmpeg argument vector (as an argv array, so no value is ever shell-quoted or
     /// re-split) for one render. Video is a raw RGBA frame stream on stdin at the request's exact
     /// size and fps; audio is <paramref name="audioPath"/> seeked to the render's start, or a
-    /// generated silent track when there is no audio file. The output is limited to the render's
-    /// duration so a longer song is cut to the chosen range.
+    /// generated silent track when there is no audio file. When <paramref name="hitSoundPath"/> is
+    /// given (a WAV already covering exactly the render range — see <see cref="HitSoundTrack"/>),
+    /// it is mixed over the song into the one output audio stream. The output is limited to the
+    /// render's duration so a longer song is cut to the chosen range.
     /// </summary>
-    public static string[] BuildArgs(RenderRequest request, string? audioPath)
+    public static string[] BuildArgs(RenderRequest request, string? audioPath, string? hitSoundPath = null)
     {
         var (videoCodec, audioCodec, _) = codecsFor(request.Format);
 
@@ -147,12 +149,40 @@ public sealed class FfmpegEncoder : IDisposable
             args.Add("anullsrc=channel_layout=stereo:sample_rate=44100");
         }
 
-        // Take video from the frame stream and audio from the second input explicitly, so ffmpeg's
-        // automatic stream selection can't pick a stray stream.
+        bool hasHitSounds = !string.IsNullOrEmpty(hitSoundPath);
+
+        if (hasHitSounds)
+        {
+            // Input 2: the pre-mixed hitsound track. It covers exactly the render range (built that
+            // way — see HitSoundTrack), so unlike the song it is not seeked.
+            args.Add("-i");
+            args.Add(hitSoundPath!);
+        }
+
+        // Take video from the frame stream and audio explicitly, so ffmpeg's automatic stream
+        // selection can't pick a stray stream.
         args.Add("-map");
         args.Add("0:v:0");
-        args.Add("-map");
-        args.Add("1:a:0");
+
+        if (hasHitSounds)
+        {
+            // Sum the song and the hitsound track into the one output stream. Both are pinned to a
+            // single format first so amix never has to reconcile a mono song against the stereo
+            // track; normalize=0 keeps absolute levels — the music/effect balance was already baked
+            // into the hitsound WAV, and amix's default would halve the music. duration=longest so
+            // hitsounds past a short song's end still sound (-t bounds the range either way).
+            args.Add("-filter_complex");
+            args.Add("[1:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[mus];"
+                     + "[2:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[hit];"
+                     + "[mus][hit]amix=inputs=2:duration=longest:normalize=0[mix]");
+            args.Add("-map");
+            args.Add("[mix]");
+        }
+        else
+        {
+            args.Add("-map");
+            args.Add("1:a:0");
+        }
 
         // Video: chosen codec, 4:2:0 for player compatibility, a fixed visually-lossless-ish quality.
         args.Add("-c:v");
@@ -203,7 +233,7 @@ public sealed class FfmpegEncoder : IDisposable
     /// accepts one RGBA frame at a time. Throws with a clear message when no ffmpeg binary is found
     /// — never silently produces nothing.
     /// </summary>
-    public static FfmpegEncoder Start(RenderRequest request, string? audioPath)
+    public static FfmpegEncoder Start(RenderRequest request, string? audioPath, string? hitSoundPath = null)
     {
         if (!IsFfmpegAvailable(out string ffmpegPath))
             throw new InvalidOperationException("ffmpeg was not found. Install it (e.g. `brew install ffmpeg`) and try again.");
@@ -218,7 +248,7 @@ public sealed class FfmpegEncoder : IDisposable
             CreateNoWindow = true,
         };
 
-        foreach (string arg in BuildArgs(request, audioPath))
+        foreach (string arg in BuildArgs(request, audioPath, hitSoundPath))
             info.ArgumentList.Add(arg);
 
         var process = new Process { StartInfo = info };

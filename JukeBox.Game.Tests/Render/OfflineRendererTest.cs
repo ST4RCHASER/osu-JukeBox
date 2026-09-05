@@ -105,6 +105,7 @@ namespace JukeBox.Game.Tests.Render
                 var result = await OfflineRenderer.EncodeAsync(
                     req,
                     audioPath: null,
+                    hitSoundPath: null,
                     frameProvider: (_, _) => Task.FromResult<ReadOnlyMemory<byte>>(frame),
                     onFrame: (done, total) => { lastDone = done; lastTotal = total; },
                     cancellationToken: CancellationToken.None);
@@ -137,6 +138,7 @@ namespace JukeBox.Game.Tests.Render
             var result = await OfflineRenderer.EncodeAsync(
                 req,
                 audioPath: null,
+                hitSoundPath: null,
                 frameProvider: (index, _) =>
                 {
                     if (index >= 3)
@@ -148,6 +150,58 @@ namespace JukeBox.Game.Tests.Render
 
             Assert.That(result.Kind, Is.EqualTo(OfflineRenderer.ResultKind.Cancelled));
             Assert.That(File.Exists(outputPath), Is.False, "the partial file should have been deleted");
+        }
+
+        [Test]
+        public async Task EncodeAsyncMixesAHitSoundTrackIntoTheOutput()
+        {
+            if (!FfmpegEncoder.IsFfmpegAvailable(out _))
+                Assert.Ignore("ffmpeg not installed on this machine");
+
+            string outputPath = Path.Combine(Path.GetTempPath(), $"jukebox-render-hs-{Guid.NewGuid():N}.mp4");
+            string hitSoundPath = Path.Combine(Path.GetTempPath(), $"jukebox-render-hs-{Guid.NewGuid():N}.wav");
+            var req = request(outputPath);
+
+            // A real (tiny) hitsound WAV through the same mixer the app uses, so the amix filter
+            // graph the args build is proven against a real ffmpeg, not just string-asserted.
+            var sample = new osu.Game.Audio.HitSampleInfo(osu.Game.Audio.HitSampleInfo.HIT_NORMAL);
+            var schedule = new[] { new HitSoundSchedule.Entry(200, new[] { sample }) };
+            Assert.That(HitSoundTrack.MixToWavFile(schedule, _ => new float[] { 0.5f, 0.5f, 0.5f, 0.5f }, req.StartMs, req.EndMs, 1, hitSoundPath), Is.True);
+
+            var frame = new byte[req.Width * req.Height * 4];
+
+            try
+            {
+                var result = await OfflineRenderer.EncodeAsync(
+                    req,
+                    audioPath: null,
+                    hitSoundPath: hitSoundPath,
+                    frameProvider: (_, _) => Task.FromResult<ReadOnlyMemory<byte>>(frame),
+                    onFrame: null,
+                    cancellationToken: CancellationToken.None);
+
+                Assert.That(result.Kind, Is.EqualTo(OfflineRenderer.ResultKind.Completed), result.Error);
+                Assert.That(File.Exists(outputPath), Is.True);
+                Assert.That(new FileInfo(outputPath).Length, Is.GreaterThan(0));
+            }
+            finally
+            {
+                if (File.Exists(outputPath))
+                    File.Delete(outputPath);
+                if (File.Exists(hitSoundPath))
+                    File.Delete(hitSoundPath);
+            }
+        }
+
+        [Test]
+        public void TheRenderSceneIsMutedToTheSpeakers()
+        {
+            // While a render runs the scene's real gameplay lives in the game tree; its whole
+            // subtree hangs inside a zero-volume audio wrapper so none of it reaches the speakers.
+            var scene = new OfflineRenderer.RenderScene(new JukeBox.Game.Beatmaps.CachedBeatmapSet(), request("/tmp/x.mp4"), null);
+
+            Assert.That(scene.LiveAudio.Volume.Value, Is.Zero);
+            Assert.That(scene.LiveAudio.Child, Is.SameAs(scene.Capture), "the capture must live inside the muted wrapper");
         }
     }
 }

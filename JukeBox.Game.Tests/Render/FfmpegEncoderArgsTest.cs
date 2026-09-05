@@ -106,6 +106,55 @@ namespace JukeBox.Game.Tests.Render
         }
 
         [Test]
+        public void WithAHitSoundTrackTheSongAndTrackAreMixedIntoOneStream()
+        {
+            var args = FfmpegEncoder.BuildArgs(request("mp4"), "/music/song.mp3", "/tmp/hits.wav");
+
+            // The track is a third input, not seeked (it already covers exactly the render range).
+            int trackIndex = Array.IndexOf(args, "/tmp/hits.wav");
+            Assert.That(trackIndex, Is.GreaterThan(0));
+            Assert.That(args[trackIndex - 1], Is.EqualTo("-i"));
+
+            // Both audio inputs feed one amix at absolute levels (the balance is baked into the
+            // WAV; amix's default normalisation would halve the music).
+            string filter = valueAfter(args, "-filter_complex");
+            Assert.That(filter, Does.Contain("[1:a]"));
+            Assert.That(filter, Does.Contain("[2:a]"));
+            Assert.That(filter, Does.Contain("amix=inputs=2"));
+            Assert.That(filter, Does.Contain("normalize=0"));
+
+            // The mixed stream replaces the direct song mapping.
+            Assert.That(args, Does.Contain("[mix]"));
+            Assert.That(args.Contains("1:a:0"), Is.False);
+
+            // Everything else is untouched: seek, range bound, codec, bitrate.
+            Assert.That(valueAfter(args, "-ss"), Is.EqualTo("10"));
+            Assert.That(valueAfter(args, "-t"), Is.EqualTo("30"));
+            Assert.That(valueAfter(args, "-c:a"), Is.EqualTo("aac"));
+            Assert.That(valueAfter(args, "-b:a"), Is.EqualTo("192k"));
+        }
+
+        [Test]
+        public void WithoutAHitSoundTrackTheArgsAreExactlyTheLegacyOnes()
+        {
+            var req = request("mp4");
+
+            Assert.That(FfmpegEncoder.BuildArgs(req, "/music/song.mp3", null), Is.EqualTo(FfmpegEncoder.BuildArgs(req, "/music/song.mp3")));
+            Assert.That(FfmpegEncoder.BuildArgs(req, "/music/song.mp3"), Does.Not.Contain("-filter_complex"));
+        }
+
+        [Test]
+        public void AHitSoundTrackStillMixesOverTheSynthesisedSilenceWhenThereIsNoSong()
+        {
+            var args = FfmpegEncoder.BuildArgs(request("mp4"), audioPath: null, hitSoundPath: "/tmp/hits.wav");
+
+            Assert.That(args.Any(a => a.StartsWith("anullsrc")), Is.True);
+            Assert.That(args, Does.Contain("/tmp/hits.wav"));
+            Assert.That(valueAfter(args, "-filter_complex"), Does.Contain("amix=inputs=2"));
+            Assert.That(args, Does.Contain("[mix]"));
+        }
+
+        [Test]
         public void ExtensionMatchesTheContainer()
         {
             Assert.That(FfmpegEncoder.ExtensionFor("mp4"), Is.EqualTo("mp4"));

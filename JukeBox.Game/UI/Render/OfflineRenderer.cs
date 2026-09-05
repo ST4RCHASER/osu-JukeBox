@@ -9,6 +9,7 @@ using JukeBox.Game.Beatmaps;
 using JukeBox.Game.Screens;
 using osu.Framework.Allocation;
 using osu.Framework.Graphics;
+using osu.Framework.Graphics.Audio;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Platform;
 using osu.Framework.Timing;
@@ -125,16 +126,19 @@ public sealed class OfflineRenderer
     /// <paramref name="frameProvider"/> (which returns the raw RGBA bytes for a given frame index),
     /// push it in, report <paramref name="onFrame"/> after each, then finalise. On cancellation it
     /// aborts ffmpeg and DELETES the partial output; on an ffmpeg failure it returns the stderr. No
-    /// path here silently produces nothing.
+    /// path here silently produces nothing. <paramref name="hitSoundPath"/> is the play's pre-mixed
+    /// hitsound WAV (see <see cref="HitSoundTrack"/>) to mix over the song, or null for music only.
     ///
     /// <para>
     /// This is the reusable heart of the driver, deliberately decoupled from where frames come from:
-    /// tests drive it with a synthetic provider, the live render drives it from <see cref="Capture"/>.
+    /// tests drive it with a synthetic provider, the live render drives it from
+    /// <see cref="RenderScene.CaptureAsync"/>.
     /// </para>
     /// </summary>
     public static async Task<RenderResult> EncodeAsync(
         RenderRequest request,
         string? audioPath,
+        string? hitSoundPath,
         Func<int, CancellationToken, Task<ReadOnlyMemory<byte>>> frameProvider,
         Action<int, int>? onFrame,
         CancellationToken cancellationToken)
@@ -147,7 +151,7 @@ public sealed class OfflineRenderer
 
         try
         {
-            encoder = FfmpegEncoder.Start(request, audioPath);
+            encoder = FfmpegEncoder.Start(request, audioPath, hitSoundPath);
 
             for (int i = 0; i < plan.TotalFrames; i++)
             {
@@ -215,6 +219,7 @@ public sealed class OfflineRenderer
         private readonly ManualClock manual = new ManualClock();
         private readonly FramedClock framed;
         private readonly OffscreenCapture capture;
+        private readonly AudioContainer muted;
 
         private BeatmapVisuals visuals = null!;
 
@@ -229,6 +234,19 @@ public sealed class OfflineRenderer
             // frames are exactly the requested resolution whatever the window is. AlwaysPresent so
             // the framework keeps updating it (an absent drawable never advances).
             capture = new OffscreenCapture(request.Width, request.Height);
+
+            // The scene must be as silent as it is invisible: its BeatmapVisuals plays real gameplay
+            // (chart hitsounds, storyboard keysounds) that would otherwise sound THROUGH THE
+            // SPEAKERS for the whole render. Every lazer audio component under here binds up to the
+            // nearest audio container, so one zero-volume wrapper mutes the lot — the OUTPUT file's
+            // hitsounds are mixed separately (see HitSoundTrack) and unaffected.
+            muted = new AudioContainer
+            {
+                AutoSizeAxes = Axes.Both,
+                Volume = { Value = 0 },
+                Child = capture,
+            };
+
             AutoSizeAxes = Axes.Both;
             AlwaysPresent = true;
 
@@ -259,7 +277,7 @@ public sealed class OfflineRenderer
                 RelativeSizeAxes = Axes.Both,
             };
 
-            AddInternal(capture);
+            AddInternal(muted);
         }
 
         /// <summary>Reads back the frame for the most recent <see cref="StepTo"/> — call after the
@@ -280,5 +298,11 @@ public sealed class OfflineRenderer
         public bool Ready => visuals.IsLoaded;
 
         internal BeatmapVisuals Visuals => visuals;
+
+        /// <summary>Test seams (JukeBox.Game.Tests has InternalsVisibleTo): the zero-volume wrapper
+        /// that keeps the live scene off the speakers, and the capture that must live inside it.</summary>
+        internal AudioContainer LiveAudio => muted;
+
+        internal OffscreenCapture Capture => capture;
     }
 }

@@ -119,6 +119,12 @@ public partial class MainScreen : Screen
     [Resolved]
     private LaunchArgumentImporter launchArguments { get; set; } = null!;
 
+    [Resolved]
+    private osu.Framework.Configuration.FrameworkConfigManager frameworkConfig { get; set; } = null!;
+
+    [Resolved(CanBeNull = true)]
+    private LazerPlayer.SkinSelection? skinSelection { get; set; }
+
     /// <summary>
     /// Nullable because a test host that assembles this screen without the game's own dependency
     /// graph has no spectate controller to give it, and the wall is an optional part of the box
@@ -781,9 +787,23 @@ public partial class MainScreen : Screen
         // Released once the progress dialog has faded out, which is the last thing that draws it.
         var thumbnail = host.Renderer.CreateTexture(request.Width, request.Height);
 
+        // The output's hitsound track: the same judgements the scene renders, mixed to a temp WAV
+        // that ffmpeg lays over the song (only when live playback would sound hitsounds too). A
+        // track that can't be built must degrade to the music-only render, never fail the render.
+        string? hitSoundTrack = null;
+
         try
         {
             AddInternal(scene);
+
+            try
+            {
+                hitSoundTrack = await buildHitSoundTrackAsync(set, request).ConfigureAwait(false);
+            }
+            catch (Exception e)
+            {
+                osu.Framework.Logging.Logger.Error(e, "[render] hitsound track failed — rendering with music only");
+            }
 
             // Let the offscreen visual stack finish loading before stepping it.
             while (!scene.Ready && !cancellation.IsCancellationRequested)
@@ -794,6 +814,7 @@ public partial class MainScreen : Screen
             var result = await UI.Render.OfflineRenderer.EncodeAsync(
                 request,
                 set.AudioFile,
+                hitSoundTrack,
                 async (index, token) =>
                 {
                     // Step the scene to this frame's time ON the update thread, let that update frame
@@ -830,7 +851,50 @@ public partial class MainScreen : Screen
         finally
         {
             Scheduler.AddDelayed(() => thumbnail.Dispose(), 1000);
+
+            if (hitSoundTrack != null)
+            {
+                try
+                {
+                    System.IO.File.Delete(hitSoundTrack);
+                }
+                catch
+                {
+                    // A temp file we can't remove is not worth surfacing at the end of a render.
+                }
+            }
         }
+    }
+
+    /// <summary>
+    /// The render's hitsound WAV (see <see cref="UI.Render.HitSoundTrack"/>), or null when live
+    /// playback wouldn't sound hitsounds either (the setting is off and the set isn't keysound-only)
+    /// — the output should carry hitsounds exactly when the speakers would. Sounds what the SAME
+    /// replay the live layer drives would sound (the first registered for this difficulty; autoplay
+    /// without one), resolved under the active skin at the app's effect volume, off the update
+    /// thread — an hour-long range writes hundreds of megabytes of PCM.
+    /// </summary>
+    private async System.Threading.Tasks.Task<string?> buildHitSoundTrackAsync(Beatmaps.CachedBeatmapSet set, UI.Render.RenderRequest request)
+    {
+        bool hitSounds = config.Get<bool>(JukeBoxSetting.PlayHitSounds) || set.HasVirtualAudio;
+        string? osuFile = playback.SelectedOsuFile.Value;
+
+        if (!hitSounds || osuFile == null)
+            return null;
+
+        var forThisDifficulty = replayStore?.AllForOsuFile(osuFile);
+        var replay = forThisDifficulty is { Count: > 0 } ? forThisDifficulty[0] : null;
+        var score = replay?.Score;
+
+        string? skinDirectory = skinSelection?.CustomSkinDirectory;
+        var prefixes = UI.Render.HitSoundTrack.DefaultPrefixesFor(skinSelection?.Effective.Value ?? JukeBoxSkin.Argon);
+        double effectVolume = frameworkConfig.Get<double>(osu.Framework.Configuration.FrameworkSetting.VolumeEffect);
+
+        var resources = new osu.Framework.IO.Stores.DllResourceStore(osu.Game.Resources.OsuResources.ResourceAssembly);
+        var sources = new UI.Render.HitSoundTrack.Sources(set.Directory, skinDirectory, prefixes, resources.Get);
+
+        return await System.Threading.Tasks.Task.Run(
+            () => UI.Render.HitSoundTrack.BuildTrackFile(osuFile, score, request, sources, effectVolume)).ConfigureAwait(false);
     }
 
     /// <summary>Runs <paramref name="action"/> on the update thread and completes when it has run —
